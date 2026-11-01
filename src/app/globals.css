@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* Design tokens: one place to change the look of the whole app. */
+@theme {
+  --color-bg: #07060d;
+  --color-bg-raised: #100e1a;
+  --color-ink: #f5f3ff;
+  --color-muted: #a8a3c0;
+  --color-faint: #6f6a88;
+  --color-line: rgb(255 255 255 / 0.09);
+
+  --color-violet: #b07cff;
+  --color-violet-deep: #7c3aed;
+  --color-lime: #d4f57a;
+  --color-teal: #5ee6d0;
+  --color-amber: #fbbf4a;
+  --color-rose: #ff7a93;
+  --color-sky: #7cc4ff;
+
+  /* System fonts: looks native on iPhone and needs no download. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui,
+    sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter,
+    system-ui, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+  background: var(--color-bg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Soft glow behind everything, like the reference designs. */
+.app-glow {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 40% at 50% -5%, rgb(124 58 237 / 0.45), transparent 70%),
+    radial-gradient(40% 30% at 100% 30%, rgb(94 230 208 / 0.1), transparent 70%),
+    radial-gradient(50% 35% at 0% 75%, rgb(176 124 255 / 0.12), transparent 70%);
+}
+
+/* Glass surface: translucent card with a soft top highlight. */
+@utility glass {
+  position: relative;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.03));
+  border: 1px solid var(--color-line);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 10px 30px -12px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+/* A light sweep across a card when it is pressed or hovered. */
+@utility shimmer {
+  overflow: hidden;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      105deg,
+      transparent 35%,
+      rgb(255 255 255 / 0.1) 50%,
+      transparent 65%
+    );
+    transform: translateX(-100%);
+    pointer-events: none;
+  }
+  &:hover::after,
+  &:active::after {
+    animation: shimmer-sweep 0.9s ease-out;
+  }
+}
+
+/* Gentle press feedback on anything tappable. */
+@utility pressable {
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+@keyframes shimmer-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes check-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-check-pop {
+  animation: check-pop 280ms ease-out;
+}
+
+.animate-rise-in {
+  animation: rise-in 380ms ease-out both;
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--color-violet);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+
+/* Respect the phone's "Reduce Motion" setting: no animations at all. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

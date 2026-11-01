@@ -1,0 +1,26 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+
+# Secrets — never commit. Only the placeholder file is allowed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# Personal Claude Code settings (shared safety rules live in .claude/settings.json)
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
