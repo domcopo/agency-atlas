@@ -11,7 +11,9 @@ export default function DexPage() {
     <>
       <PageHeader
         title="Business Dex"
-        subtitle="A field guide to how businesses grow. Every number shows how much to trust it."
+        subtitle="Sample case-study profiles. Every number shows how much to trust it."
+        backHref="/growth"
+        backLabel="Growth"
       />
       <DexBrowser businesses={businesses} patterns={getPatterns()} />
     </>

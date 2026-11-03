@@ -1,20 +1,26 @@
 # Agency Atlas
 
-An internal, phone-friendly command center for the agency: KPIs, client health, a research "Business Dex", insights, and a Data Safety center.
+An internal, phone-friendly command center for a small marketing agency (SEO, ads, website builds): client roster and revenue tiers, sales follow-ups, work oversight, case studies, and a Data Safety center.
 
-> **Status: Phase 1 — DEMO / MOCK DATA.** Everything you see is fake. The app has no database, no sign-in, no GoHighLevel connection, and makes no network calls.
+> **Status: Phase 1 prototype.** The app has no database, no sign-in, no GoHighLevel connection, and makes no network calls.
+> - **Your real client list and team roles** are loaded from a private file on this Mac (`private-data/`, never committed to Git). The banner then reads **"REAL CLIENT LIST · THIS MAC ONLY"**.
+> - **Everything else is sample data**, clearly labeled, and never attached to a real client or team member.
+> - If `private-data/` is missing (tests, another computer), the app shows a fictional demo roster instead.
 
 ## Screens
 
-| Path | Screen | What it shows |
+Bottom tabs: **Home · Clients · Sales · Work · Growth**. The shield icon on Home opens Data Safety.
+
+| Path | What it shows | Data |
 |---|---|---|
-| `/` | Mission Control | KPI tiles, alerts, follow-up priorities, recent activity |
-| `/clients` | Clients | Client list with health scores |
-| `/clients/[id]` | Client profile | Metrics, goals, blockers, notes, "what changed" |
-| `/dex` | Business Dex | Searchable trading-card index of businesses + shared patterns |
-| `/dex/[id]` | Dex record | Revenue (with label + source), signals, hypotheses, sources |
-| `/insights` | Insights | Mock "AI" observations — hand-written, clearly labeled |
-| `/safety` | Data Safety | Data mode, connections, retention plan, safety checklist |
+| `/` | Home: 2×2 tiles (client results, case studies, follow-ups, conversations); top follow-ups (red = overdue, gold = hot, A–D grades with reasons); alerts; recent activity | Real roster summary + sample |
+| `/clients`, `/clients/[id]` | Client roster by tier ($500+ high, $150–499 mid, under $150 low, paused, canceled/expired), search, "needs check" filter, client detail | **Real** |
+| `/sales`, `/sales/[id]` | Clients signed per month (from real start dates), agency sales KPIs, prospect pipeline, conversations | Real sign-ups + sample |
+| `/work`, `/work/[id]` | Oversight view (GoHighLevel stays the actual work queue): work orders, developer load and bonus progress, team roles, escalation path, daily order, priorities | Sample orders + real rules and roles |
+| `/growth` | Trends, insights, and how case studies become real | Sample |
+| `/growth/dex`, `/growth/dex/[id]` | Business Dex as case studies: 12-month history (revenue as an index, not dollars), survey answers | Sample |
+| `/growth/surveys` | Your 20-question survey bank with copy buttons; consent question first. The app never sends surveys. | Real questions |
+| `/safety` | Data mode, connections, retention plan, safety checklist | Real status |
 
 ## Prerequisites
 
@@ -36,21 +42,17 @@ Open http://127.0.0.1:3200 (or http://localhost:3200). This only works on this c
 
 ### Viewing on your phone
 
-```bash
-npm run dev:phone
-```
-
-This makes the app visible to devices on the same Wi-Fi. Open the "Network" address it prints on your phone. Only do this with mock data and on a network you trust. Stop it when you're done.
+`npm run dev:phone` makes the app visible to devices on the same Wi-Fi. **It refuses to start while `private-data/` holds your real client list**, because the app has no sign-in yet and anyone on the network could see it. Phone access returns once sign-in exists (Phase 2). Until then, use `npm run dev` on this Mac.
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Start the app on this computer only |
-| `npm run dev:phone` | Start the app on your local network |
+| `npm run dev` | Start the app on this computer only (port 3200) |
+| `npm run dev:phone` | Start on your local network (blocked while real data exists) |
 | `npm run lint` | Check code style and common mistakes |
 | `npm run typecheck` | Check TypeScript types |
-| `npm test` | Run the fixture and guardrail tests |
+| `npm test` | Run the fixture and guardrail tests (including the real-name leak test) |
 | `npm run build` | Production build (catches build-time errors) |
 | `npm run check` | All of the above |
 
@@ -63,5 +65,5 @@ This makes the app visible to devices on the same Wi-Fi. Open the "Network" addr
 | [SECURITY.md](SECURITY.md) | Hard boundaries, current controls, known gaps |
 | [DATA_DICTIONARY.md](DATA_DICTIONARY.md) | Record shapes today + proposed database tables |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What could go wrong and how we prevent it |
-| [docs/PRIVACY_CHECKLIST.md](docs/PRIVACY_CHECKLIST.md) | Must-do list before any real client data |
+| [docs/PRIVACY_CHECKLIST.md](docs/PRIVACY_CHECKLIST.md) | Privacy items for human review |
 | [docs/SECURITY_TEST_PLAN.md](docs/SECURITY_TEST_PLAN.md) | Security tests, active and planned |

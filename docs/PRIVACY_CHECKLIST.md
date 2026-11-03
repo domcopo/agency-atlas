@@ -1,8 +1,30 @@
-# Privacy Checklist — complete before ANY real client data
+# Privacy Checklist — for human review
 
 > This is a working checklist, **not legal advice**. Have qualified counsel review it before collecting real communications, recordings, or regulated data.
 
-Nothing on this list is required for Phase 1 (fake data only). All of it must be done before the one-client pilot (Phase 5). Transcript items must be done before Phase 6.
+The first section applies **now**: the user approved loading their real client list early (Phase 1 interim). The rest must be done before the one-client GoHighLevel pilot (Phase 5); transcript and survey items before Phase 6.
+
+## Now: real client list on this Mac (needs human review)
+
+- [x] Real data kept only in `private-data/` (Git-ignored, folder `700`, files `600`), read by one validating server-only loader
+- [x] Tests fail if a real client name appears in any tracked file; Wi-Fi mode blocked while real data exists
+- [ ] **Review:** real client names and monthly amounts are business/financial data. Confirm client contracts allow keeping them in this tool
+- [ ] **FileVault (full-disk encryption) is on** for this Mac. The app does not encrypt the file itself
+- [ ] Folder not copied to cloud sync (iCloud Desktop/Documents, Dropbox), backups you don't control, USB drives, or AI chats
+- [ ] Records flagged "needs check" verified against billing or the database (the list was transcribed from screenshots by ChatGPT)
+- [ ] Plan for Phase 2: import into Supabase with role-based access, then **delete** the private file
+
+## Surveys (before any real answers are collected)
+
+- [ ] Consent asked first, with a clear purpose and how long answers are kept (retention)
+- [ ] Cross-business trends use anonymized, combined answers only
+- [ ] Answers treated as untrusted text (never instructions, never rendered as HTML)
+- [ ] A public survey form is a new attack surface: later phase only, with spam protection and input validation
+- [ ] The app never sends surveys itself; staff copy questions manually
+
+## Team data
+
+- [ ] Developer pay and bonus information is **HR-sensitive**: owner-only once roles exist (Phase 2); never in sample data tied to a real person
 
 ## Authority and consent
 
@@ -29,7 +51,7 @@ Nothing on this list is required for Phase 1 (fake data only). All of it must be
 
 - [ ] For each table: why each field is needed, written down
 - [ ] Start with counts, references, and metadata. Message bodies only when justified and approved.
-- [ ] No real data in fixtures, dev databases, screenshots, or AI prompts during development
+- [ ] No real data in fixtures, tests, docs, dev databases, screenshots, or AI prompts during development (the private file is the one approved exception, and stays out of all of these)
 
 ## Retention and deletion
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Gauge, Layers, Lightbulb, ShieldCheck, Users } from "lucide-react";
+import { BriefcaseBusiness, Gauge, Sprout, TrendingUp, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/format";
@@ -8,9 +8,9 @@ import { cn } from "@/lib/format";
 const tabs = [
   { href: "/", label: "Home", icon: Gauge },
   { href: "/clients", label: "Clients", icon: Users },
-  { href: "/dex", label: "Dex", icon: Layers },
-  { href: "/insights", label: "Insights", icon: Lightbulb },
-  { href: "/safety", label: "Safety", icon: ShieldCheck },
+  { href: "/sales", label: "Sales", icon: TrendingUp },
+  { href: "/work", label: "Work", icon: BriefcaseBusiness },
+  { href: "/growth", label: "Growth", icon: Sprout },
 ] as const;
 
 export function BottomNav() {
@@ -23,7 +23,7 @@ export function BottomNav() {
     >
       <ul className="mx-auto mb-3 grid max-w-md grid-cols-5 rounded-[28px] border border-line bg-[#14111f]/95 px-1.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_12px_32px_-8px_rgb(0_0_0/0.8)] backdrop-blur-xl sm:mb-4">
         {tabs.map(({ href, label, icon: Icon }) => {
-          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          const active = href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
           return (
             <li key={href}>
               <Link

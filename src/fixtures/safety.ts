@@ -1,5 +1,5 @@
-// Phase 1 status for the Data Safety screen. This describes the app's real
-// current state: nothing is connected and nothing can write to GoHighLevel.
+// Status for the Data Safety screen. This describes the app's real current
+// state: no outside service is connected and nothing can write to GoHighLevel.
 
 import type { SafetyStatus } from "@/lib/types";
 
@@ -12,7 +12,7 @@ export const safetyStatus: SafetyStatus = {
       status: "not_connected",
       scopes: [],
       plannedPhase: 2,
-      note: "Separate dev project with sign-in and per-client access rules.",
+      note: "A brand-new project kept apart from your other databases, with sign-in and access rules, plus a local test copy for break-in tests.",
     },
     {
       id: "conn_ghl_api",
@@ -42,6 +42,7 @@ export const safetyStatus: SafetyStatus = {
     { label: "Mock-data prototype with DEMO labels", done: true, phase: 1 },
     { label: "Guardrail tests: no network, no GHL, no secrets", done: true, phase: 1 },
     { label: "Claude Code deny rules for secret files", done: true, phase: 1 },
+    { label: "Real client list kept in a Git-ignored private file, with a leak test", done: true, phase: 1 },
     { label: "Sign-in with MFA for staff", done: false, phase: 2 },
     { label: "Per-client row-level security, tested", done: false, phase: 2 },
     { label: "Audit log of who viewed what", done: false, phase: 2 },

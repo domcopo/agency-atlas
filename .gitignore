@@ -24,3 +24,6 @@ secrets/
 .DS_Store
 .vscode/
 .idea/
+
+# Real client data: stays on this Mac only, never in Git or GitHub
+private-data/

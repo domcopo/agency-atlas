@@ -1,12 +1,12 @@
-import { Eye, FileText, FlaskConical, Megaphone, Tag, Users } from "lucide-react";
+import { Eye, FileText, FlaskConical, Megaphone, MessageSquareQuote, Tag } from "lucide-react";
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Monogram, industryGradient } from "@/components/cards/DexCard";
 import { ConfidenceMeter, Pill, RevenueLabel, SourceTag } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getBusiness, getBusinesses } from "@/lib/data-source";
+import { getBusiness, getBusinesses, getCaseStudyHistory, getSurveyQuestions, getSurveyResponses } from "@/lib/data-source";
+import { Sparkline } from "@/components/labels/charts";
 import { formatDate, formatDexNumber } from "@/lib/format";
 import type { Hypothesis } from "@/lib/types";
 
@@ -35,10 +35,22 @@ export default async function DexDetailPage({ params }: Props) {
   if (!b) notFound();
   const sourceById = new Map(b.sources.map((s) => [s.id, s]));
   const revenueSource = b.revenue.status !== "unknown" ? sourceById.get(b.revenue.sourceId) : undefined;
+  const history = getCaseStudyHistory(b.id);
+  const first = history[0];
+  const last = history[history.length - 1];
+  const answers = getSurveyResponses(b.id);
+  const questionById = new Map(getSurveyQuestions().map((q) => [q.id, q]));
+  const series = first && last
+    ? [
+        { label: "Leads per month", values: history.map((h) => h.leads), from: first.leads, to: last.leads, color: "var(--color-violet)" },
+        { label: "Booked calls per month", values: history.map((h) => h.bookedCalls), from: first.bookedCalls, to: last.bookedCalls, color: "var(--color-teal)" },
+        { label: "Revenue index (start = 100)", values: history.map((h) => h.revenueIndex), from: first.revenueIndex, to: last.revenueIndex, color: "var(--color-lime)" },
+      ]
+    : [];
 
   return (
     <>
-      <PageHeader title={b.name} subtitle={b.tagline} backHref="/dex" backLabel="Business Dex" />
+      <PageHeader title={b.name} subtitle={b.tagline} backHref="/growth/dex" backLabel="Business Dex" />
 
       <GlassCard className="overflow-hidden">
         <div
@@ -51,12 +63,58 @@ export default async function DexDetailPage({ params }: Props) {
             <p className="font-mono text-xs font-semibold text-muted">{formatDexNumber(b.dexNumber)}</p>
             <div className="flex flex-wrap gap-1.5">
               <Pill color="violet">{b.industry}</Pill>
-              {b.isClient ? <Pill color="lime">Client</Pill> : <Pill>Not a client</Pill>}
+              {b.isClient ? <Pill color="lime">Sample client</Pill> : <Pill>Sample business</Pill>}
             </div>
             <p className="text-xs text-muted">{b.region}</p>
           </div>
         </div>
       </GlassCard>
+
+      {series.length > 0 && (
+        <>
+          <SectionTitle aside="Sample · 12 months">Long-term case study</SectionTitle>
+          <GlassCard className="space-y-3">
+            {series.map((x) => {
+              const change = Math.round(((x.to - x.from) / Math.max(1, x.from)) * 100);
+              return (
+                <div key={x.label} className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-muted">{x.label}</p>
+                    <p className="text-sm font-semibold">
+                      {x.from} → {x.to}{" "}
+                      <span className={change >= 0 ? "text-lime" : "text-rose"}>
+                        ({change >= 0 ? "+" : ""}
+                        {change}%)
+                      </span>
+                    </p>
+                  </div>
+                  <Sparkline values={x.values} color={x.color} width={110} height={34} />
+                </div>
+              );
+            })}
+            <p className="border-t border-line pt-2 text-[11px] text-faint">
+              {first?.month} to {last?.month}. Revenue is shown as an index, not dollars, so no revenue is invented.
+            </p>
+          </GlassCard>
+        </>
+      )}
+
+      {answers.length > 0 && (
+        <>
+          <SectionTitle aside="Sample answers">Survey answers</SectionTitle>
+          <div className="space-y-2.5">
+            {answers.map((a) => (
+              <GlassCard key={a.id} padding="tight" className="flex gap-2.5">
+                <MessageSquareQuote aria-hidden className="mt-0.5 size-4 shrink-0 text-teal" />
+                <div className="min-w-0">
+                  <p className="text-xs text-muted">{questionById.get(a.questionId)?.question}</p>
+                  <p className="mt-0.5 text-sm">{a.answer}</p>
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        </>
+      )}
 
       <SectionTitle>Revenue</SectionTitle>
       <GlassCard className="space-y-2">
@@ -155,14 +213,6 @@ export default async function DexDetailPage({ params }: Props) {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-faint">
         <span>Updated {formatDate(b.updatedAt)}</span>
-        {b.clientId && (
-          <Link
-            href={`/clients/${b.clientId}`}
-            className="pressable inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-white/5 px-3 font-semibold text-ink"
-          >
-            <Users aria-hidden className="size-3.5 text-violet" /> Open client profile
-          </Link>
-        )}
       </div>
     </>
   );

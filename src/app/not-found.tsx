@@ -6,7 +6,7 @@ export default function NotFound() {
   return (
     <div className="pt-16">
       <EmptyState icon={<Compass className="size-5" />} title="Page not found">
-        <p>That record doesn&apos;t exist in the demo data.</p>
+        <p>That page or record doesn&apos;t exist.</p>
         <Link href="/" className="mt-3 inline-block font-semibold text-violet">
           Back to Mission Control
         </Link>

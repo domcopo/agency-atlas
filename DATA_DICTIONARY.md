@@ -1,6 +1,6 @@
 # Data Dictionary
 
-Two parts. **Part 1** describes the record shapes used today, all synthetic, defined in [`src/lib/types.ts`](src/lib/types.ts). **Part 2** is the **proposed** future database. It is **not deployed** and gets reviewed in Phase 2.
+Two parts. **Part 1** describes the record shapes used today, defined in [`src/lib/types.ts`](src/lib/types.ts): the real client roster and team (from a private file) plus sample data. **Part 2** is the **proposed** future database. It is **not deployed** and gets reviewed in Phase 2.
 
 ## Global rules
 
@@ -20,9 +20,14 @@ Two parts. **Part 1** describes the record shapes used today, all synthetic, def
 
 ---
 
-## Part 1 — Phase 1 types (synthetic)
+## Part 1 — Phase 1 types
 
-All records have `isSynthetic: true`. Fake contacts use `@example.com` emails and `555-01XX` phones. Source URLs use `synthetic://`. Screens get data only through `src/lib/data-source.ts` (`DATA_MODE = "mock"`).
+Screens get data only through `src/lib/data-source.ts` (`DATA_MODE = "mock"`, meaning no outside connections).
+
+**Two kinds of data:**
+
+- **REAL (user-approved):** `RosterClient` and `TeamMember`, loaded by `src/lib/private-data.ts` from `private-data/clients.json` and `private-data/team.json` on this Mac (Git-ignored). Each record is validated; bad ones are skipped and counted. If the files are missing, a fictional demo roster ("(fictional)" names) is used instead. `RosterSource` says which: `private_file | demo`.
+- **SAMPLE:** every other record has `isSynthetic: true`, "(sample)"/"(fictional)" names, `@example.com` emails, `555-01XX` phones and `synthetic://` sources. Sample records are never attached to a real client or team member.
 
 ### Shared
 
@@ -30,50 +35,57 @@ All records have `isSynthetic: true`. Fake contacts use `@example.com` emails an
 |---|---|---|
 | `ISODate` / `ISODateTime` | string | `2026-10-28` / `2026-10-28T14:30:00Z` |
 | `Confidence` | `high \| medium \| low` | |
-| `Unit` | `percent \| count \| minutes \| usd` | |
-| `DataMode` | `mock \| live_read_only` | Shown on every screen |
-| `Source` | `id, label, kind, url, retrievedAt` | `kind`: `client_provided`, `public_web`, `industry_report`, `internal_observation` |
+| `Unit` | `percent \| count \| minutes \| usd \| ratio` | |
+| `DataMode` | `mock \| live_read_only` | |
+| `Source` | `id, label, kind, url, retrievedAt` | `url` is always `synthetic://` today |
 | `Revenue` | union by `status` (see table above) | `annualUsd` or `lowUsd`/`highUsd`, plus `asOf`, `sourceId` |
+| `Metric` | `label, value, previous, unit, betterWhen` | |
 
-### Business Dex
+### Client roster and team (REAL when the private file is loaded)
 
-| Type | Key fields |
-|---|---|
-| `Business` | `id, dexNumber, name, tagline, industry, region, isClient, clientId?, revenue, signals[], hypotheses[], acquisitionChannels[], patternTags[], sources[], updatedAt` |
-| `Observation` (signal) | `id, text, observedAt, confidence, sourceId` |
-| `Hypothesis` | `id, text, confidence, status` |
-| `Industry` | Dental, Home services, Events & food, Fitness, Legal, Restaurant, Automotive, Education, Energy |
+| Type | Key fields | Notes |
+|---|---|---|
+| `RosterClient` | `id` (made from the name), `name` (≤80 chars), `monthlyUsd` (0–100,000), `startDate`, `status`, `listedIn[]`, `check?`, `services[]` | `status`: `active \| paused \| canceled \| incomplete_expired`. `check` = "needs check" note; some records were transcribed from screenshots and must be verified |
+| `ClientTier` | `high` ($500+/mo) · `mid` ($150–499) · `low` (under $150) | Active clients only |
+| `RosterSummary` | counts and monthly totals by status and tier, `needsCheck`, `skipped`, `avgMonthsActive`, `source` | Calculated, not stored |
+| `TeamMember` | `id, name, role, handles[]` | `role`: `founder \| client_comms \| client_manager \| seo_developer` |
 
-`patternTags` are short labels shared across businesses. The Dex uses them to show patterns.
-
-### Clients
-
-| Type | Key fields |
-|---|---|
-| `Client` | `id, businessId, name, industry, dataSensitivity, primaryContact{name,email,phone}, clientSince, health{score 0–100, status, trend[]}, metrics[], goals[], blockers[], whatChanged[], notes[]` |
-| `Metric` | `label, value, previous, unit, betterWhen (higher \| lower)` |
-| `Note` | `id, author, createdAt, text` (staff-entered) |
-| `HealthStatus` | `thriving \| steady \| at_risk` |
-
-`dataSensitivity: "regulated"` marks industries such as dental and medical, where customer messages may contain protected health information (PHI). Example: *Brightline Dental*. These clients need legal and HIPAA review, and possibly a Business Associate Agreement (BAA), before any live data.
-
-### Mission Control
+### Agency sales (SAMPLE)
 
 | Type | Key fields |
 |---|---|
-| `MissionControlData` | `weekLabel, kpis[], alerts[], followUps[], activity[]` |
-| `AgencyKpi` | `Metric` + `id, trend[]` |
-| `Alert` | `id, clientId?, severity (critical \| warning \| info), title, detail` |
-| `FollowUp` | `id, clientId, title, due, priority` (internal only; checking one off is local screen state, not saved) |
-| `ActivityItem` | `id, clientId?, kind, title, at`. `kind`: appointment_booked, deal_won, deal_lost, lead_new, no_show, note_added |
+| `Prospect` | `name, contactName, email, phone, industry, wants[], source, stage, estMonthlyUsd{low,high}, grade{letter A–D, score, factors[]}, nextFollowUp?, lastTouch?, businessId?, notes[]` |
+| `Conversation` | `prospectId, channel (sms \| call \| email \| chat), lastDirection, preview` (**untrusted text**; one sample contains a prompt-injection string to prove it is ignored), `at, unread, needsReply` |
+| `FollowUp` | `prospectId, title, due, urgency (gold = hot \| red = overdue \| normal), why` |
 
-### Insights
+### Home
 
 | Type | Key fields |
 |---|---|
-| `Insight` | `id, generatedBy (mock_ai \| human), title, observation, evidence[{label, recordType, recordId}], confidence, caveats[], suggestedNextStep, reviewStatus, createdAt` |
+| `MissionControlData` | `weekLabel, today, clientResults[] (SAMPLE lead-result KPIs incl. leads per appointment, appointments per deal), alerts[], followUps[], activity[]` |
+| `Alert` / `ActivityItem` | `isSynthetic` is `false` for items calculated from the real roster, `true` for samples; `href` is always an in-app path |
 
-`mock_ai` means a person wrote it by hand for the demo. No AI produced it.
+### Work (SAMPLE orders, real rules)
+
+| Type | Key fields |
+|---|---|
+| `WorkOrder` | `clientLabel` ("Sample client: …"), `title, service, priority (urgent \| high \| normal \| low), status, assignee` (Developer A–D, sample), `requestedByClient, createdAt, due, lastTouched, checklist[]` |
+| `DeveloperLoad` | `memberId, seoClients, successfulThisMonth, hoursLogged` |
+| Work rules (real process) | 10 hrs per SEO client; up to 15 SEO clients per developer; 80% SEO / 20% misc; $15 bonus per client after 10 successful monthly clients; escalation by role; daily order: queue → work orders → SEO → stay active |
+
+### Growth (SAMPLE case studies, real survey questions)
+
+| Type | Key fields |
+|---|---|
+| `Business` | `dexNumber, name, tagline, industry, region, isClient, revenue, signals[], hypotheses[], acquisitionChannels[], patternTags[], sources[], updatedAt` |
+| `Observation` / `Hypothesis` | sourced, dated facts / ideas with `status: untested \| testing \| supported \| rejected` |
+| `MonthlyPoint` | `month, leads, bookedCalls, revenueIndex` (100 = first month; avoids inventing dollars). 12 months per case study |
+| `Trend` | `title, finding, businessIds[], confidence, caveat` |
+| `SurveyQuestion` | `topic, question, why, answerType, options?` (the user's real 20-question bank; consent question first) |
+| `SurveyResponse` | `businessId, questionId, answer` (**untrusted text**), `answeredAt` |
+| `Insight` | `generatedBy (mock_ai \| human), title, observation, evidence[], confidence, caveats[], suggestedNextStep, reviewStatus`. `mock_ai` = hand-written; no AI produced it |
+
+`Brightline Dental Studio` (a fictional sample) shows how regulated industries are flagged: real dental or medical data may contain protected health information (PHI) and needs HIPAA review first.
 
 ### Data Safety
 
@@ -81,14 +93,14 @@ All records have `isSynthetic: true`. Fake contacts use `@example.com` emails an
 |---|---|
 | `SafetyStatus` | `dataMode, connections[], ghlWriteTargets: [] (always empty, by type), retention[], checklist[]` |
 | `SourceConnection` | `id, name, status (not_connected \| connected_read_only), scopes[], plannedPhase, note` |
-| `RetentionRule` | `dataClass, keepFor, status (planned \| active)` |
-| `SafetyCheck` | `label, done, phase` |
 
 ---
 
 ## Part 2 — Future database map (PROPOSED, NOT DEPLOYED)
 
-Built gradually from Phase 2 onward through reviewed migrations, in a **separate development Supabase project** first. Only a few tables go into the first database sprint.
+Built gradually from Phase 2 onward through reviewed migrations, in a **brand-new, separate Supabase project** (plus a local Docker copy for access-rule tests).
+
+**Proposed first Phase 2 tables (pending approval):** `clients`/`subscriptions`, `prospects`, `conversations` (metadata + preview), `work_orders`, `team_members`, `case_study_metrics`, `survey_questions`, `survey_responses` (+ consent), `insights`, `audit_logs`. Access by role: owner sees everything (including developer pay/bonus); managers a narrower view; developers their own work. The private client file is imported, then deleted. The longer-term map below covers later phases.
 
 ### Provenance fields on every synced record
 
@@ -100,9 +112,9 @@ Tenant boundary means the column that ties a row to a client. RLS uses it to dec
 
 | Table | Purpose | Tenant boundary | Sensitivity | Retention category |
 |---|---|---|---|---|
-| `clients` | Agency clients | `id` (is the tenant) | Internal | Life of relationship |
+| `clients` (+ `subscriptions`) | Agency clients, monthly amount, status, start date | `id` (is the tenant) | **Business confidential** (names + amounts) | Life of relationship |
 | `ghl_locations` | Authorized GHL sub-accounts (allowlist) | `client_id` | Internal | Life of relationship |
-| `app_users` | Staff accounts (linked to Supabase Auth) | n/a (agency-wide) | Personal | Until offboarded |
+| `app_users` / `team_members` | Staff accounts (linked to Supabase Auth) and roles; pay/bonus is owner-only | n/a (agency-wide) | Personal; pay/bonus is **HR-sensitive** | Until offboarded |
 | `client_memberships` | Which staff can see which client | `client_id` + `user_id` | Access control | Until revoked |
 | `contacts` | Read-only copy of minimal GHL contact fields | `client_id`, `ghl_location_id` | **Personal (PII)** | Short; minimize fields |
 | `conversations` | Thread metadata (channel, counts, timestamps) | `client_id`, `ghl_location_id` | Personal | Short |
@@ -112,7 +124,7 @@ Tenant boundary means the column that ties a row to a client. RLS uses it to dec
 | `opportunities` | Pipeline deals, stages, values (read replica) | `client_id`, `ghl_location_id` | Business confidential | Medium |
 | `appointments` | Booked / showed / no-show (read replica) | `client_id`, `ghl_location_id` | Personal | Medium |
 | `surveys` | Survey definitions | `client_id` or agency | Internal | Medium |
-| `survey_responses` | Submitted answers (untrusted text) | `client_id` | Personal | Short–medium |
+| `survey_responses` | Submitted answers (untrusted text) + consent record | `client_id` | Personal / business confidential | Short–medium; cross-business trends anonymized |
 | `businesses` | Business Dex entries (public research) | none, **public research only** | Public / internal | Long |
 | `business_observations` | Sourced, dated observations; `revenue_label`, `source_url`, `evidence_excerpt`, `metric_definition` | `business_id`; private claims stored separately with `client_id` | Public vs private, kept apart | Long (public) / client rules (private) |
 | `metric_snapshots` | Point-in-time KPIs | `client_id` | Business confidential | Long (aggregates) |

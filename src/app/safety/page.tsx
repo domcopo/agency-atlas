@@ -11,9 +11,9 @@ import {
 } from "lucide-react";
 import type { Metadata } from "next";
 import { GlassCard } from "@/components/cards/GlassCard";
-import { DataModeBadge, Pill } from "@/components/labels/labels";
+import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getSafetyStatus } from "@/lib/data-source";
+import { getRosterSummary, getSafetyStatus } from "@/lib/data-source";
 import { cn } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Data Safety" };
@@ -27,15 +27,17 @@ const connectionIcon = {
 export default function SafetyPage() {
   const s = getSafetyStatus();
   const doneCount = s.checklist.filter((c) => c.done).length;
+  const roster = getRosterSummary();
+  const real = roster.source === "private_file";
 
   return (
     <>
-      <PageHeader title="Data Safety" subtitle="What this app can see, keep and touch." />
+      <PageHeader title="Data Safety" subtitle="What this app can see, keep and touch." backHref="/" backLabel="Home" />
 
       <GlassCard className="space-y-4">
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted">Data mode</p>
-          <DataModeBadge mode={s.dataMode} />
+          <p className="text-sm text-muted">GoHighLevel &amp; database</p>
+          <Pill>Not connected</Pill>
         </div>
         <div className="flex items-start gap-3 rounded-2xl border border-lime/30 bg-lime/8 p-3.5">
           <ShieldCheck aria-hidden className="mt-0.5 size-5 shrink-0 text-lime" />
@@ -51,6 +53,24 @@ export default function SafetyPage() {
           <span className="text-muted">Places this app can write to in GHL</span>
           <span className="font-display text-lg font-bold text-lime">{s.ghlWriteTargets.length}</span>
         </div>
+      </GlassCard>
+
+      <SectionTitle>Your client list</SectionTitle>
+      <GlassCard className="space-y-2 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold">{real ? "Real · private file on this Mac" : "Demo list (no private file found)"}</span>
+          <Pill color={real ? "teal" : "amber"}>{real ? "Loaded" : "Demo"}</Pill>
+        </div>
+        <p className="text-muted">
+          {roster.total} records loaded{roster.skipped > 0 ? `, ${roster.skipped} skipped because they failed checks` : ", none skipped"}.
+          {" "}{roster.needsCheck} marked for you to confirm.
+        </p>
+        <ul className="space-y-1 text-xs text-muted">
+          <li>• Kept in <code className="text-ink">private-data/</code>, which Git ignores, so it never reaches GitHub.</li>
+          <li>• A test fails if any real client name shows up in the app&apos;s code, docs or tests.</li>
+          <li>• Read only by the server on this Mac. Wi-Fi (phone) mode refuses to start while it exists.</li>
+          <li>• Not encrypted by the app: keep FileVault on.</li>
+        </ul>
       </GlassCard>
 
       <SectionTitle>Source connections</SectionTitle>
@@ -83,13 +103,13 @@ export default function SafetyPage() {
           <Lock aria-hidden className="mt-0.5 size-4 shrink-0 text-violet" />
           <span>
             <span className="font-semibold">Runs on this computer only.</span>{" "}
-            <span className="text-muted">No sign-in yet because there is no real data to protect.</span>
+            <span className="text-muted">There&apos;s no sign-in yet, so real data must never leave this Mac.</span>
           </span>
         </p>
         <p className="flex gap-2">
           <ShieldX aria-hidden className="mt-0.5 size-4 shrink-0 text-violet" />
           <span className="text-muted">
-            Phase 2 adds staff sign-in with MFA and per-client rules enforced by the database, not the screen.
+            Phase 2 adds team sign-in with MFA and access rules enforced by the database (pay and bonus details owner-only), not by the screen.
           </span>
         </p>
       </GlassCard>

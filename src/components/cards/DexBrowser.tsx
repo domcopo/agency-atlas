@@ -15,8 +15,8 @@ type Segment = "all" | "clients" | "prospects";
 
 const segments: { id: Segment; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "clients", label: "Clients" },
-  { id: "prospects", label: "Non-clients" },
+  { id: "clients", label: "Sample clients" },
+  { id: "prospects", label: "Others" },
 ];
 
 export function DexBrowser({

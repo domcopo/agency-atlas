@@ -26,8 +26,8 @@ export function AlertCard({ alert }: { alert: Alert }) {
   );
   const classes = cn("flex gap-3 rounded-2xl border p-3.5", s.ring);
 
-  return alert.clientId ? (
-    <Link href={`/clients/${alert.clientId}`} className={cn(classes, "pressable")}>
+  return alert.href ? (
+    <Link href={alert.href} className={cn(classes, "pressable")}>
       {body}
     </Link>
   ) : (

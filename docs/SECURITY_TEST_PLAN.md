@@ -17,21 +17,25 @@ Run everything with `npm run check`. **Never weaken or delete one of these tests
 | 3b | No GHL / Supabase / axios packages yet | `package.json` contains none of them | **Active (Phase 1)** | `tests/guardrails.test.ts` |
 | 4 | Invalid webhook signatures rejected | Missing, malformed, or wrong Ed25519 `X-GHL-Signature`, and modified bodies, return an error and store nothing | Planned (Phase 4) | — |
 | 5 | Duplicate webhooks not duplicated | Same event delivered twice or out of order creates exactly one record | Planned (Phase 4) | — |
-| 6 | Unauthorized cross-client reads denied | User in Client A cannot select/insert/update/delete Client B rows; anonymous users read nothing | Planned (Phase 2) | — |
+| 6 | Unauthorized reads denied by role | Anonymous users read nothing; developers see only their own work; only the owner sees pay/bonus; run against a local Docker copy of Supabase | Planned (Phase 2) | — |
 | 7 | Data deletion works | Deleting a client or contact removes its rows (and derived insights) per the retention rules | Planned (Phase 5) | — |
 | 8 | Untrusted transcript text cannot cause actions | Injection examples from `docs/THREAT_MODEL.md` produce no tool calls, writes, or executed URLs | Planned (Phase 6) | — |
 | 9 | No raw HTML / code execution | No `dangerouslySetInnerHTML`, `innerHTML =`, `eval`, `new Function` | **Active (Phase 1)** | `tests/guardrails.test.ts` |
 | 10 | No offline caching | No service worker files or registration | **Active (Phase 1)** | `tests/guardrails.test.ts` |
-| 11 | Fake data stays fake | Every record `isSynthetic: true`; emails `@example.com`; phones `555-01XX`; sources `synthetic://`; IDs unique; 3 clients / 10 businesses | **Active (Phase 1)** | `tests/fixtures.test.ts` |
-| 12 | Revenue never invented | `unknown` has no amount; others have a source that exists and a date; estimates have low < high; `client_reported` only for clients | **Active (Phase 1)** | `tests/fixtures.test.ts` |
+| 11 | Sample data stays fake | Every sample record `isSynthetic: true`; prospects "(sample)" with `@example.com` emails and `555-01XX` phones; sources `synthetic://`; IDs unique; work orders use "Sample client" labels and sample developers; demo roster names "(fictional)"; 12 months of history per case study | **Active (Phase 1)** | `tests/fixtures.test.ts` |
+| 11b | Private data stays out of Git | `private-data/` in `.gitignore`; `git check-ignore` confirms it; Git tracks nothing in it; only `src/lib/private-data.ts` reads it; no real client name in any tracked file (skipped when the private file is absent) | **Active (Phase 1)** | `tests/guardrails.test.ts` |
+| 11c | Private file is validated | Missing/malformed file returns nothing; bad names, negative or text amounts, bad dates, unknown statuses are skipped and counted; control characters stripped; duplicate names get distinct page addresses; demo roster passes | **Active (Phase 1)** | `tests/fixtures.test.ts` |
+| 11d | Untrusted message text changes nothing | The sample "ignore your previous instructions" conversation doesn't change its prospect or create a client | **Active (Phase 1)** | `tests/fixtures.test.ts` |
+| 12 | Revenue never invented | `unknown` has no amount; others have a source that exists and a date; estimates have low < high | **Active (Phase 1)** | `tests/fixtures.test.ts` |
 
 ## Manual checks each phase
 
 - Review every dependency added (why, maintainer, alternatives). Run `npm audit`.
+- Phase 1: confirm `npm run dev:phone` refuses to start while `private-data/` exists (`scripts/guard-phone.mjs`; not an automated test), and that FileVault is on.
 - Confirm the security headers in the browser's network tab.
 - Phase 2+: try reading another client's data with a second test account.
 - Phase 3+: confirm logs contain no tokens, phone numbers, or message bodies.
 
 ## Limitations
 
-The Phase 1 guardrails are text scans. They catch accidents, not someone deliberately hiding a write call (e.g. building a method name from pieces). Code review remains a control in its own right.
+The real-name leak test only runs where the private file exists (this Mac); elsewhere it passes by skipping. It compares exact names in lowercase, so a misspelled or partial name could slip through. The Phase 1 guardrails are text scans. They catch accidents, not someone deliberately hiding a write call (e.g. building a method name from pieces). Code review remains a control in its own right.

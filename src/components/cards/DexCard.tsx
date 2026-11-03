@@ -39,7 +39,7 @@ function topConfidence(b: Business) {
 export function DexCard({ business }: { business: Business }) {
   return (
     <GlassCard
-      href={`/dex/${business.id}`}
+      href={`/growth/dex/${business.id}`}
       label={`Open ${business.name}, Dex ${formatDexNumber(business.dexNumber)}`}
       padding="tight"
       className="flex h-full flex-col gap-3"
@@ -61,7 +61,7 @@ export function DexCard({ business }: { business: Business }) {
       <div className="relative mt-auto space-y-2 text-xs">
         <RevenueLabel revenue={business.revenue} compact />
         <div className="flex flex-wrap items-center gap-1.5">
-          {business.isClient && <Pill color="violet">Client</Pill>}
+          {business.isClient && <Pill color="violet">Sample client</Pill>}
           <ConfidenceMeter level={topConfidence(business)} />
         </div>
       </div>

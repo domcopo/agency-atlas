@@ -12,8 +12,7 @@ export const insights: Insight[] = [
     observation:
       "At Brightline, appointments booked more than 10 days ahead account for most recent no-shows.",
     evidence: [
-      { label: "Brightline Dental (client)", recordType: "client", recordId: "cli_brightline" },
-      { label: "Dex #001 signals", recordType: "business", recordId: "biz_001" },
+      { label: "Brightline Dental (sample)", recordType: "business", recordId: "biz_001" },
     ],
     confidence: "medium",
     caveats: ["Six weeks of data only", "Staffing changes happened at the same time"],
@@ -27,9 +26,10 @@ export const insights: Insight[] = [
     generatedBy: "mock_ai",
     title: "Speed-to-lead shows up across strong performers",
     observation:
-      "Reply speed is a theme in four Dex records. Summit, the healthiest client, replies in about 11 minutes; Copper Kettle, slower on weekends, is losing inquiries.",
+      "Reply speed is a theme in four Dex records. Summit, the healthiest sample client, replies in about 11 minutes; Copper Kettle, slower on weekends, is losing inquiries.",
     evidence: [
-      { label: "Summit Roof (client)", recordType: "client", recordId: "cli_summit" },
+      { label: "Summit Roof (sample)", recordType: "business", recordId: "biz_002" },
+      { label: "Trend: fast replies", recordType: "trend", recordId: "tr_speed" },
       { label: "Dex #006 Harbor & Pine", recordType: "business", recordId: "biz_006" },
       { label: "Dex #005 Fieldstone", recordType: "business", recordId: "biz_005" },
     ],
@@ -51,12 +51,13 @@ export const insights: Insight[] = [
       "Fitness, HVAC and auto detailing businesses in the Dex all lean on recurring memberships.",
     evidence: [
       { label: "Dex #004 Lumen Yoga", recordType: "business", recordId: "biz_004" },
+      { label: "Trend: memberships", recordType: "trend", recordId: "tr_membership" },
       { label: "Dex #005 Fieldstone", recordType: "business", recordId: "biz_005" },
       { label: "Dex #008 Apex Auto", recordType: "business", recordId: "biz_008" },
     ],
     confidence: "medium",
     caveats: ["Revenue figures for these are estimates, not verified"],
-    suggestedNextStep: "Ask Summit whether an annual gutter-cleaning plan would interest customers.",
+    suggestedNextStep: "Add the membership question (q08) to every new-client survey.",
     reviewStatus: "approved",
     createdAt: "2026-10-22",
   },

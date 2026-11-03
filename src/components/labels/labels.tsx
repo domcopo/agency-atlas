@@ -4,7 +4,7 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn, describeChange, formatDate, formatUsd } from "@/lib/format";
-import type { Confidence, DataMode, Metric, Revenue, Source } from "@/lib/types";
+import type { Confidence, DataMode, Grade, Metric, Revenue, Source, SubscriptionStatus } from "@/lib/types";
 
 const tone = {
   violet: "border-violet/30 bg-violet/12 text-violet",
@@ -153,4 +153,46 @@ export function EmptyState({
       <div className="mx-auto mt-1 max-w-xs text-sm text-muted">{children}</div>
     </div>
   );
+}
+
+/** Says whether a section shows your REAL client list or SAMPLE data. */
+export function Provenance({ kind, what = "your client list" }: { kind: "real" | "sample" | "demo"; what?: string }) {
+  if (kind === "real") return <Pill color="teal">Real · {what}</Pill>;
+  if (kind === "demo") return <Pill color="amber">Demo list</Pill>;
+  return <Pill color="amber">Sample data</Pill>;
+}
+
+const gradeStyles: Record<Grade, string> = {
+  A: "from-amber to-[#ffe08a] text-bg shadow-[0_0_14px_-2px_var(--color-amber)]",
+  B: "from-teal to-sky text-bg",
+  C: "from-white/25 to-white/10 text-ink",
+  D: "from-white/10 to-white/5 text-faint",
+};
+
+/** A–D grade chip. Grade A glows gold. */
+export function GradeBadge({ grade, size = "md" }: { grade: Grade; size?: "md" | "lg" }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br font-display font-extrabold",
+        size === "lg" ? "size-14 text-2xl" : "size-9 text-base",
+        gradeStyles[grade],
+      )}
+    >
+      <span className="sr-only">Grade </span>
+      {grade}
+    </span>
+  );
+}
+
+const statusStyles: Record<SubscriptionStatus, { label: string; color: Tone }> = {
+  active: { label: "Active", color: "lime" },
+  paused: { label: "Paused", color: "amber" },
+  canceled: { label: "Canceled", color: "rose" },
+  incomplete_expired: { label: "Expired", color: "neutral" },
+};
+
+export function StatusPill({ status }: { status: SubscriptionStatus }) {
+  const s = statusStyles[status];
+  return <Pill color={s.color}>{s.label}</Pill>;
 }

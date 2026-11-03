@@ -125,3 +125,44 @@ export function HealthRing({
     </div>
   );
 }
+
+/** Circular 0–100 score in any color (used for prospect grades). */
+export function ScoreRing({
+  score,
+  color,
+  label,
+  size = 56,
+}: {
+  score: number;
+  color: string;
+  /** Read aloud by screen readers, e.g. "Prospect score 90 out of 100". */
+  label: string;
+  size?: number;
+}) {
+  const stroke = size >= 80 ? 7 : 5;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - score / 100);
+  return (
+    <div role="img" aria-label={label} className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgb(255 255 255 / 0.08)" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+        />
+      </svg>
+      <span aria-hidden className="absolute inset-0 flex items-center justify-center font-display font-bold" style={{ fontSize: size * 0.3 }}>
+        {score}
+      </span>
+    </div>
+  );
+}

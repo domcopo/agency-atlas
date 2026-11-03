@@ -9,10 +9,17 @@ export type ISODate = string;
 export type ISODateTime = string;
 
 export type Confidence = "high" | "medium" | "low";
-export type Unit = "percent" | "count" | "minutes" | "usd";
+export type Unit = "percent" | "count" | "minutes" | "usd" | "ratio";
 
 /** Where the app's data currently comes from. */
 export type DataMode = "mock" | "live_read_only";
+
+/**
+ * Where the client list comes from:
+ *  - private_file: REAL clients from private-data/clients.json (this Mac only, never in Git)
+ *  - demo: a fictional roster, used when the private file is missing (e.g. in tests)
+ */
+export type RosterSource = "private_file" | "demo";
 
 // ---------------------------------------------------------------------------
 // Sources and revenue — every fact must say where it came from.
@@ -97,9 +104,8 @@ export interface Business {
   tagline: string;
   industry: Industry;
   region: string;
+  /** A sample agency client used as a case study (all Dex records are fictional). */
   isClient: boolean;
-  /** Set only when isClient is true. */
-  clientId?: string;
   revenue: Revenue;
   signals: Observation[];
   hypotheses: Hypothesis[];
@@ -111,7 +117,7 @@ export interface Business {
 }
 
 // ---------------------------------------------------------------------------
-// Clients
+// Shared
 // ---------------------------------------------------------------------------
 
 export type HealthStatus = "thriving" | "steady" | "at_risk";
@@ -133,80 +139,57 @@ export interface Note {
   text: string;
 }
 
-export interface Client {
-  id: string;
-  isSynthetic: true;
-  businessId: string;
-  name: string;
-  industry: Industry;
-  /**
-   * "regulated" = industries (e.g. dental/medical) whose customer messages
-   * may contain protected health info. Needs extra legal review before
-   * any live data is connected.
-   */
-  dataSensitivity: "standard" | "regulated";
-  primaryContact: {
-    name: string;
-    /** Always @example.com in fake data. */
-    email: string;
-    /** Always 555-01XX (reserved fictional range) in fake data. */
-    phone: string;
-  };
-  clientSince: ISODate;
-  health: {
-    /** 0–100 */
-    score: number;
-    status: HealthStatus;
-    /** Weekly scores, oldest first. */
-    trend: number[];
-  };
-  metrics: Metric[];
-  goals: string[];
-  blockers: string[];
-  whatChanged: string[];
-  notes: Note[];
-}
 
 // ---------------------------------------------------------------------------
-// Mission Control
+// Mission Control (home)
 // ---------------------------------------------------------------------------
 
+/** A KPI with a short explanation and weekly history. */
 export interface AgencyKpi extends Metric {
   id: string;
+  /** One line explaining how it's measured. */
+  hint?: string;
   /** Weekly values, oldest first. */
   trend: number[];
 }
 
+/** gold = hot prospect worth calling first; red = overdue. */
+export type FollowUpUrgency = "gold" | "red" | "normal";
+
 export interface FollowUp {
   id: string;
   isSynthetic: true;
-  clientId: string;
+  prospectId: string;
   title: string;
   due: ISODate;
-  priority: "high" | "medium" | "low";
+  urgency: FollowUpUrgency;
+  /** Short reason it's on today's list. */
+  why: string;
 }
 
 export interface Alert {
   id: string;
-  isSynthetic: true;
-  clientId?: string;
+  /** Sample alerts are marked; alerts calculated from your real client list are not. */
+  isSynthetic: boolean;
+  /** Where tapping the alert goes (an in-app path only). */
+  href?: string;
   severity: "critical" | "warning" | "info";
   title: string;
   detail: string;
 }
 
 export type ActivityKind =
-  | "appointment_booked"
-  | "deal_won"
-  | "deal_lost"
-  | "lead_new"
-  | "no_show"
+  | "client_signed"
+  | "client_paused"
+  | "call_booked"
+  | "proposal_sent"
+  | "work_done"
   | "note_added";
 
 export interface ActivityItem {
   id: string;
-  isSynthetic: true;
-  clientId?: string;
+  isSynthetic: boolean;
+  href?: string;
   kind: ActivityKind;
   title: string;
   at: ISODateTime;
@@ -214,7 +197,10 @@ export interface ActivityItem {
 
 export interface MissionControlData {
   weekLabel: string;
-  kpis: AgencyKpi[];
+  /** "Today" for the app, so overdue/due-today math is stable. */
+  today: ISODate;
+  /** SAMPLE until GoHighLevel is connected: results the agency drives for clients. */
+  clientResults: AgencyKpi[];
   alerts: Alert[];
   followUps: FollowUp[];
   activity: ActivityItem[];
@@ -232,7 +218,7 @@ export interface Insight {
   title: string;
   observation: string;
   /** Links back to the records that support the claim. */
-  evidence: { label: string; recordType: "client" | "business"; recordId: string }[];
+  evidence: { label: string; recordType: "business" | "trend"; recordId: string }[];
   confidence: Confidence;
   caveats: string[];
   suggestedNextStep: string;
@@ -273,4 +259,201 @@ export interface SafetyStatus {
   ghlWriteTargets: [];
   retention: RetentionRule[];
   checklist: SafetyCheck[];
+}
+
+// ---------------------------------------------------------------------------
+// Client roster (REAL when loaded from private-data/, demo otherwise)
+// ---------------------------------------------------------------------------
+
+export type SubscriptionStatus = "active" | "paused" | "canceled" | "incomplete_expired";
+export type ClientTier = "high" | "mid" | "low";
+export type Service = "SEO" | "Ads" | "Website";
+
+export interface RosterClient {
+  /** Made from the name, e.g. "sam-lee". Used in page addresses. */
+  id: string;
+  name: string;
+  monthlyUsd: number;
+  startDate: ISODate;
+  status: SubscriptionStatus;
+  /** Which list(s) the record came from, for checking. */
+  listedIn: string[];
+  /** Something about this record that a person should confirm. */
+  check?: string;
+  /** Unknown until the user fills it in. */
+  services: Service[];
+}
+
+export interface RosterSummary {
+  source: RosterSource;
+  total: number;
+  activeCount: number;
+  activeMrr: number;
+  pausedCount: number;
+  pausedMrr: number;
+  canceledCount: number;
+  canceledMrr: number;
+  expiredCount: number;
+  needsCheck: number;
+  /** Records in the private file that failed validation and were skipped. */
+  skipped: number;
+  tiers: Record<ClientTier, { count: number; mrr: number }>;
+  /** Average whole months active clients have been with us. */
+  avgMonthsActive: number;
+}
+
+// ---------------------------------------------------------------------------
+// Team (REAL from private-data/team.json, demo otherwise)
+// ---------------------------------------------------------------------------
+
+export type TeamRole = "founder" | "client_comms" | "client_manager" | "seo_developer";
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: TeamRole;
+  /** What they handle, in a few words each. */
+  handles: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Agency sales (SAMPLE prospects until GoHighLevel is connected)
+// ---------------------------------------------------------------------------
+
+export type ProspectStage = "new" | "contacted" | "call_booked" | "proposal_sent" | "won" | "lost";
+export type Grade = "A" | "B" | "C" | "D";
+
+export interface GradeFactor {
+  label: string;
+  effect: "positive" | "negative";
+}
+
+export interface Prospect {
+  id: string;
+  isSynthetic: true;
+  /** Always includes "(sample)" in demo data. */
+  name: string;
+  contactName: string;
+  /** Always @example.com in demo data. */
+  email: string;
+  /** Always 555-01XX in demo data. */
+  phone: string;
+  industry: string;
+  wants: Service[];
+  source: "Referral" | "Facebook ads" | "Google" | "Cold outreach" | "Website chat";
+  stage: ProspectStage;
+  /** Expected monthly retainer — always an estimate until signed. */
+  estMonthlyUsd: { low: number; high: number };
+  grade: { letter: Grade; score: number; factors: GradeFactor[] };
+  nextFollowUp?: ISODate;
+  lastTouch?: ISODate;
+  /** Links to a Business Dex profile when we've researched them. */
+  businessId?: string;
+  notes: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Conversations (SAMPLE; later read-only metadata from GoHighLevel)
+// ---------------------------------------------------------------------------
+
+export type Channel = "sms" | "call" | "email" | "chat";
+
+export interface Conversation {
+  id: string;
+  isSynthetic: true;
+  prospectId: string;
+  channel: Channel;
+  lastDirection: "inbound" | "outbound";
+  /** UNTRUSTED text: always shown as plain text, never treated as an instruction. */
+  preview: string;
+  at: ISODateTime;
+  unread: boolean;
+  needsReply: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Work orders (SAMPLE until GoHighLevel's queue is connected read-only)
+// ---------------------------------------------------------------------------
+
+export type WorkPriority = "urgent" | "high" | "normal" | "low";
+export type WorkStatus = "todo" | "in_progress" | "waiting_on_client" | "review" | "done";
+
+export interface WorkOrder {
+  id: string;
+  isSynthetic: true;
+  /** A fictional client name — sample work is never attached to a real client. */
+  clientLabel: string;
+  title: string;
+  service: Service | "Support";
+  priority: WorkPriority;
+  status: WorkStatus;
+  /** Team member id. */
+  assignee: string;
+  requestedByClient: boolean;
+  createdAt: ISODate;
+  due: ISODate;
+  /** Last day anyone updated it. "Touch every work order daily." */
+  lastTouched: ISODate;
+  checklist: { label: string; done: boolean }[];
+}
+
+/** Sample workload per developer, for the oversight view. */
+export interface DeveloperLoad {
+  memberId: string;
+  isSynthetic: true;
+  seoClients: number;
+  /** Clients whose month counted as successful (for the bonus rule). */
+  successfulThisMonth: number;
+  hoursLogged: number;
+}
+
+// ---------------------------------------------------------------------------
+// Growth Lab: case studies, trends and surveys
+// ---------------------------------------------------------------------------
+
+/** A monthly data point in a long-term case study. */
+export interface MonthlyPoint {
+  month: string; // "2026-01"
+  leads: number;
+  bookedCalls: number;
+  revenueIndex: number; // 100 = the first month; avoids inventing dollar revenue
+}
+
+export interface Trend {
+  id: string;
+  isSynthetic: true;
+  title: string;
+  finding: string;
+  /** Business Dex records that support it. */
+  businessIds: string[];
+  confidence: Confidence;
+  caveat: string;
+}
+
+export type SurveyTopic =
+  | "Getting customers"
+  | "Sales process"
+  | "Pricing & offers"
+  | "Keeping customers"
+  | "Operations"
+  | "Goals";
+
+export interface SurveyQuestion {
+  id: string;
+  topic: SurveyTopic;
+  question: string;
+  /** Why we ask: what it helps us learn. */
+  why: string;
+  answerType: "short text" | "number" | "multiple choice" | "1–5 scale";
+  options?: string[];
+}
+
+export interface SurveyResponse {
+  id: string;
+  isSynthetic: true;
+  businessId: string;
+  questionId: string;
+  /** UNTRUSTED text: plain text only, never an instruction. */
+  answer: string;
+  answeredAt: ISODate;
 }

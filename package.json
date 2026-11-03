@@ -5,7 +5,7 @@
   "description": "Internal agency command center. Phase 1: mock data only, no live connections.",
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3200",
-    "dev:phone": "next dev -H 0.0.0.0 -p 3200",
+    "dev:phone": "node scripts/guard-phone.mjs && next dev -H 0.0.0.0 -p 3200",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3200",
     "lint": "eslint .",

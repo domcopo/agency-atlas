@@ -5,6 +5,7 @@
 // If one of these fails, don't loosen the test — find out why the code changed.
 // Passing these checks reduces risk; it does not prove the app is secure.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -137,5 +138,48 @@ describe("dependencies", () => {
       /highlevel|leadconnector|^@supabase\/|^axios$|^got$|^node-fetch$/i.test(n),
     );
     expect(forbidden).toEqual([]);
+  });
+});
+
+describe("real client data stays private", () => {
+  const PRIVATE_DIR = join(ROOT, "private-data");
+
+  it(".gitignore blocks the private-data folder", () => {
+    const gi = readFileSync(join(ROOT, ".gitignore"), "utf8").split("\n");
+    expect(gi).toContain("private-data/");
+  });
+
+  it("Git ignores the client file and tracks nothing in private-data", () => {
+    // `git check-ignore` exits with an error if the path is NOT ignored.
+    expect(() =>
+      execFileSync("git", ["check-ignore", "-q", "private-data/clients.json"], { cwd: ROOT }),
+    ).not.toThrow();
+    const tracked = execFileSync("git", ["ls-files", "private-data"], { cwd: ROOT, encoding: "utf8" });
+    expect(tracked.trim()).toBe("");
+  });
+
+  it("only the private-data loader and the Wi-Fi guard read private-data/", () => {
+    const readers = contents
+      .filter(({ text }) => /private-data/.test(text) && /readFileSync|existsSync/.test(text))
+      .map(({ file }) => file);
+    expect(readers).toEqual(["src/lib/private-data.ts"]);
+  });
+
+  it("no real client name is copied into app code, docs or tests", () => {
+    const file = join(PRIVATE_DIR, "clients.json");
+    if (!existsSync(file)) return; // nothing to compare on machines without the private file
+    const names = (JSON.parse(readFileSync(file, "utf8")) as { clients: { name: string }[] }).clients
+      .map((c) => c.name.toLowerCase());
+    const tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
+      .split("\n")
+      .filter((f) => f && !/\.(png|jpe?g|ico)$/.test(f))
+      .concat(walk(join(ROOT, "src")).map((f) => relative(ROOT, f)));
+    const hits: string[] = [];
+    for (const f of new Set(tracked)) {
+      if (!existsSync(join(ROOT, f))) continue;
+      const text = readFileSync(join(ROOT, f), "utf8").toLowerCase();
+      for (const n of names) if (text.includes(n)) hits.push(`${f}: ${n}`);
+    }
+    expect(hits).toEqual([]);
   });
 });

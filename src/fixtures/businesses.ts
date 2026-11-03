@@ -13,7 +13,6 @@ export const businesses: Business[] = [
     industry: "Dental",
     region: "Lakeview (fictional)",
     isClient: true,
-    clientId: "cli_brightline",
     revenue: {
       status: "client_reported",
       annualUsd: 1_200_000,
@@ -73,7 +72,6 @@ export const businesses: Business[] = [
     industry: "Home services",
     region: "Cedar Ridge (fictional)",
     isClient: true,
-    clientId: "cli_summit",
     revenue: {
       status: "verified",
       annualUsd: 2_400_000,
@@ -133,7 +131,6 @@ export const businesses: Business[] = [
     industry: "Events & food",
     region: "Harborview (fictional)",
     isClient: true,
-    clientId: "cli_copper",
     revenue: { status: "unknown" },
     signals: [
       {
