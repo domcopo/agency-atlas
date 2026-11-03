@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: { default: "Agency Atlas (Demo)", template: "%s · Agency Atlas" },
-  description: "Command center for a wholesale real estate team — demo with mock data only.",
+  description: "Internal agency command center — demo with mock data only.",
   // Internal tool: ask search engines not to index it.
   robots: { index: false, follow: false },
   icons: { icon: "/icon.svg" },

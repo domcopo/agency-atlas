@@ -30,7 +30,7 @@ export default function SafetyPage() {
 
   return (
     <>
-      <PageHeader title="Data Safety" subtitle="What this app can see, keep and touch." backHref="/more" backLabel="More" />
+      <PageHeader title="Data Safety" subtitle="What this app can see, keep and touch." />
 
       <GlassCard className="space-y-4">
         <div className="flex items-center justify-between">
@@ -89,7 +89,7 @@ export default function SafetyPage() {
         <p className="flex gap-2">
           <ShieldX aria-hidden className="mt-0.5 size-4 shrink-0 text-violet" />
           <span className="text-muted">
-            Phase 2 adds invite-only team sign-in and role rules (owner, acquisitions, dispo) enforced by the database, not the screen. Two-step sign-in is required before any real data.
+            Phase 2 adds staff sign-in with MFA and per-client rules enforced by the database, not the screen.
           </span>
         </p>
       </GlassCard>
