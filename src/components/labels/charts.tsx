@@ -1,7 +1,6 @@
 // Tiny hand-drawn SVG charts — no chart library needed.
 
 import { useId } from "react";
-import type { HealthStatus } from "@/lib/types";
 
 /** A small trend line. Decorative: the number next to it carries the meaning. */
 export function Sparkline({
@@ -58,50 +57,28 @@ export function Sparkline({
   );
 }
 
-export const healthColor: Record<HealthStatus, string> = {
-  thriving: "var(--color-lime)",
-  steady: "var(--color-sky)",
-  at_risk: "var(--color-rose)",
-};
-
-export const healthLabel: Record<HealthStatus, string> = {
-  thriving: "Thriving",
-  steady: "Steady",
-  at_risk: "At risk",
-};
-
-/** Circular 0–100 health score. */
-export function HealthRing({
+/** Circular 0–100 score (used for lead grades). */
+export function ScoreRing({
   score,
-  status,
+  color,
+  label,
   size = 56,
 }: {
   score: number;
-  status: HealthStatus;
+  color: string;
+  /** Read aloud by screen readers, e.g. "Lead score 91 out of 100". */
+  label: string;
   size?: number;
 }) {
   const stroke = size >= 80 ? 7 : 5;
   const r = (size - stroke) / 2;
   const circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - score / 100);
-  const color = healthColor[status];
 
   return (
-    <div
-      role="img"
-      aria-label={`Health score ${score} out of 100, ${healthLabel[status]}`}
-      className="relative shrink-0"
-      style={{ width: size, height: size }}
-    >
+    <div role="img" aria-label={label} className="relative shrink-0" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke="rgb(255 255 255 / 0.08)"
-          strokeWidth={stroke}
-        />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgb(255 255 255 / 0.08)" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}

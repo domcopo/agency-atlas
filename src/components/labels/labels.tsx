@@ -3,8 +3,8 @@
 
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import type { ReactNode } from "react";
-import { cn, describeChange, formatDate, formatUsd } from "@/lib/format";
-import type { Confidence, DataMode, Metric, Revenue, Source } from "@/lib/types";
+import { cn, describeChange, formatMoney } from "@/lib/format";
+import type { BuyerInterest, Confidence, DataMode, DealStage, LeadGrade, LeadStage, Metric, Money } from "@/lib/types";
 
 const tone = {
   violet: "border-violet/30 bg-violet/12 text-violet",
@@ -40,34 +40,90 @@ export function Pill({
   );
 }
 
-const revenueStyles: Record<Revenue["status"], { label: string; color: Tone }> = {
-  verified: { label: "Verified", color: "lime" },
-  client_reported: { label: "Client-reported", color: "teal" },
+const moneyStyles: Record<Money["status"], { label: string; color: Tone }> = {
+  confirmed: { label: "Confirmed", color: "lime" },
   estimated: { label: "Estimate", color: "amber" },
   unknown: { label: "Unknown", color: "neutral" },
 };
 
-/** Revenue is never shown without its trust label. */
-export function RevenueLabel({ revenue, compact }: { revenue: Revenue; compact?: boolean }) {
-  const style = revenueStyles[revenue.status];
-  const amount =
-    revenue.status === "unknown"
-      ? "Not known"
-      : revenue.status === "estimated"
-        ? `${formatUsd(revenue.lowUsd)}–${formatUsd(revenue.highUsd)}`
-        : formatUsd(revenue.annualUsd);
-
+/** Money is never shown without its trust label (and, when asked, its basis). */
+export function MoneyLabel({ money, showBasis }: { money: Money; showBasis?: boolean }) {
+  const style = moneyStyles[money.status];
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
-      <span className={cn("font-semibold", revenue.status === "unknown" && "text-faint")}>
-        {amount}
-        {revenue.status !== "unknown" && !compact && (
-          <span className="font-normal text-faint"> /yr</span>
-        )}
+    <span className="inline-flex flex-col gap-0.5">
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <span className={cn("font-semibold", money.status === "unknown" && "text-faint")}>
+          {money.status === "unknown" ? "Not known" : formatMoney(money)}
+        </span>
+        <Pill color={style.color}>{style.label}</Pill>
       </span>
-      <Pill color={style.color}>{style.label}</Pill>
+      {showBasis && money.status !== "unknown" && (
+        <span className="text-[11px] text-faint">{money.basis}</span>
+      )}
     </span>
   );
+}
+
+const gradeStyles: Record<LeadGrade, string> = {
+  A: "from-amber to-[#ffe08a] text-bg shadow-[0_0_14px_-2px_var(--color-amber)]",
+  B: "from-teal to-sky text-bg",
+  C: "from-white/25 to-white/10 text-ink",
+  D: "from-white/10 to-white/5 text-faint",
+};
+
+/** A–D grade chip. Grade A glows gold. */
+export function GradeBadge({ grade, size = "md" }: { grade: LeadGrade; size?: "md" | "lg" }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br font-display font-extrabold",
+        size === "lg" ? "size-14 text-2xl" : "size-9 text-base",
+        gradeStyles[grade],
+      )}
+    >
+      <span className="sr-only">Grade </span>
+      {grade}
+    </span>
+  );
+}
+
+const leadStageStyles: Record<LeadStage, { label: string; color: Tone }> = {
+  new: { label: "New", color: "violet" },
+  contacted: { label: "Contacted", color: "sky" },
+  appointment_set: { label: "Appointment set", color: "teal" },
+  offer_made: { label: "Offer made", color: "amber" },
+  under_contract: { label: "Under contract", color: "lime" },
+  dead: { label: "Dead", color: "neutral" },
+};
+
+export function LeadStagePill({ stage }: { stage: LeadStage }) {
+  const s = leadStageStyles[stage];
+  return <Pill color={s.color}>{s.label}</Pill>;
+}
+
+export const dealStageStyles: Record<DealStage, { label: string; color: Tone }> = {
+  under_contract: { label: "Under contract", color: "sky" },
+  in_dispo: { label: "In dispo", color: "violet" },
+  assigned: { label: "Assigned", color: "teal" },
+  closed: { label: "Closed", color: "lime" },
+  fell_through: { label: "Fell through", color: "rose" },
+};
+
+export function DealStagePill({ stage }: { stage: DealStage }) {
+  const s = dealStageStyles[stage];
+  return <Pill color={s.color}>{s.label}</Pill>;
+}
+
+const interestStyles: Record<BuyerInterest["status"], { label: string; color: Tone }> = {
+  sent: { label: "Shared", color: "neutral" },
+  walkthrough: { label: "Walkthrough", color: "sky" },
+  offer: { label: "Offer", color: "lime" },
+  passed: { label: "Passed", color: "rose" },
+};
+
+export function BuyerInterestPill({ status }: { status: BuyerInterest["status"] }) {
+  const s = interestStyles[status];
+  return <Pill color={s.color}>{s.label}</Pill>;
 }
 
 const confidenceLevels: Record<Confidence, number> = { low: 1, medium: 2, high: 3 };
@@ -91,22 +147,6 @@ export function ConfidenceMeter({ level }: { level: Confidence }) {
       <span>
         {level.charAt(0).toUpperCase() + level.slice(1)} confidence
       </span>
-    </span>
-  );
-}
-
-const sourceKindLabel: Record<Source["kind"], string> = {
-  client_provided: "Client-provided",
-  public_web: "Public web",
-  industry_report: "Industry report",
-  internal_observation: "Agency data",
-};
-
-/** Sources are shown as plain text, never as clickable links, in Phase 1. */
-export function SourceTag({ source }: { source: Source }) {
-  return (
-    <span className="text-[11px] text-faint">
-      {sourceKindLabel[source.kind]} · {source.label} · {formatDate(source.retrievedAt)}
     </span>
   );
 }

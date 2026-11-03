@@ -36,7 +36,7 @@ export function InsightCard({ insight }: { insight: Insight }) {
           {insight.evidence.map((e) => (
             <li key={e.recordId}>
               <Link
-                href={e.recordType === "client" ? `/clients/${e.recordId}` : `/dex/${e.recordId}`}
+                href={`/${e.recordType === "lead" ? "leads" : e.recordType === "deal" ? "deals" : "buyers"}/${e.recordId}`}
                 className="pressable inline-flex min-h-8 items-center gap-1 rounded-full border border-line bg-white/5 px-2.5 text-xs text-ink hover:border-violet/50"
               >
                 <Link2 aria-hidden className="size-3 text-violet" />

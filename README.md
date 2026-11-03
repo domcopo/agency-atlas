@@ -1,18 +1,24 @@
 # Agency Atlas
 
-An internal, phone-friendly command center for the agency: KPIs, client health, a research "Business Dex", insights, and a Data Safety center.
+An internal, phone-friendly command center for our **wholesale real estate team**: sales KPIs, today's follow-ups, seller leads, deals under contract, disposition to cash buyers, a Buyers Dex, insights, and a Data Safety center.
 
-> **Status: Phase 1 — DEMO / MOCK DATA.** Everything you see is fake. The app has no database, no sign-in, no GoHighLevel connection, and makes no network calls.
+> **Status: Phase 1 — DEMO / MOCK DATA, reworked for wholesale real estate. Phase 2 not started.** Everything you see is fake. The app has no database, no sign-in, no GoHighLevel connection, and makes no network calls. It never texts, calls, or emails anyone.
 
 ## Screens
 
+Bottom tabs: **Home · Leads · Deals · Dispo · More**
+
 | Path | Screen | What it shows |
 |---|---|---|
-| `/` | Mission Control | KPI tiles, alerts, follow-up priorities, recent activity |
-| `/clients` | Clients | Client list with health scores |
-| `/clients/[id]` | Client profile | Metrics, goals, blockers, notes, "what changed" |
-| `/dex` | Business Dex | Searchable trading-card index of businesses + shared patterns |
-| `/dex/[id]` | Dex record | Revenue (with label + source), signals, hypotheses, sources |
+| `/` | Mission Control | Three tiles (Sales KPIs, Follow-ups, Conversations), top follow-ups today (gold = high-value, red = overdue), wholesale alerts, recent activity |
+| `/leads` | Leads | Seller leads with an A–D grade |
+| `/leads/[id]` | Lead | Property, motivation, timeline, asking price (labeled), grade reasons, notes |
+| `/deals` | Deals | Contracts with stage, key dates, and a needs-review flag |
+| `/deals/[id]` | Deal | Contract price, ARV, repairs, assignment fee (each labeled confirmed / estimate / unknown), dates, risks, next step |
+| `/dispo` | Dispo | Deals in disposition and buyer interest logged by the team. The app never sends anything. |
+| `/more` | More | Links to Buyers Dex, Conversations, Insights, Data Safety |
+| `/buyers`, `/buyers/[id]` | Buyers Dex | Cash buyer profiles: buy box, areas, proof-of-funds status, reliability grade |
+| `/conversations` | Conversations | Mock message previews, shown as plain text only |
 | `/insights` | Insights | Mock "AI" observations — hand-written, clearly labeled |
 | `/safety` | Data Safety | Data mode, connections, retention plan, safety checklist |
 
@@ -32,7 +38,7 @@ npm install --before=2026-10-18
 npm run dev
 ```
 
-Open http://127.0.0.1:3000. This only works on this computer.
+Open http://127.0.0.1:3200. This only works on this computer. (Port 3200 is used because other local apps use 3000 and 3100.)
 
 ### Viewing on your phone
 
@@ -40,13 +46,13 @@ Open http://127.0.0.1:3000. This only works on this computer.
 npm run dev:phone
 ```
 
-This makes the app visible to devices on the same Wi-Fi. Open the "Network" address it prints on your phone. Only do this with mock data and on a network you trust. Stop it when you're done.
+This makes the app visible to devices on the same Wi-Fi (port 3200). Open the "Network" address it prints on your phone. Only do this with mock data and on a network you trust. Stop it when you're done.
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Start the app on this computer only |
+| `npm run dev` | Start the app on this computer only (port 3200) |
 | `npm run dev:phone` | Start the app on your local network |
 | `npm run lint` | Check code style and common mistakes |
 | `npm run typecheck` | Check TypeScript types |
@@ -63,5 +69,5 @@ This makes the app visible to devices on the same Wi-Fi. Open the "Network" addr
 | [SECURITY.md](SECURITY.md) | Hard boundaries, current controls, known gaps |
 | [DATA_DICTIONARY.md](DATA_DICTIONARY.md) | Record shapes today + proposed database tables |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What could go wrong and how we prevent it |
-| [docs/PRIVACY_CHECKLIST.md](docs/PRIVACY_CHECKLIST.md) | Must-do list before any real client data |
+| [docs/PRIVACY_CHECKLIST.md](docs/PRIVACY_CHECKLIST.md) | Must-do list before any real lead, seller, or buyer data |
 | [docs/SECURITY_TEST_PLAN.md](docs/SECURITY_TEST_PLAN.md) | Security tests, active and planned |

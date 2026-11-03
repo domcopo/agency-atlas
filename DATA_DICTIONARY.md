@@ -1,28 +1,27 @@
 # Data Dictionary
 
-Two parts. **Part 1** describes the record shapes used today, all synthetic, defined in [`src/lib/types.ts`](src/lib/types.ts). **Part 2** is the **proposed** future database. It is **not deployed** and gets reviewed in Phase 2.
+Two parts. **Part 1** describes the record shapes used today, all synthetic, defined in [`src/lib/types.ts`](src/lib/types.ts) (the source of truth). **Part 2** is the **proposed** future database. It is **not deployed** and gets reviewed in Phase 2.
 
 ## Global rules
 
-- **Revenue is never a bare number.** Every value has one of four labels:
+- **Money is never a bare number.** Every value has one of three labels:
 
   | Label | Meaning | Must include |
   |---|---|---|
-  | `verified` | Confirmed from a trustworthy document (e.g. client-provided financials) | amount, as-of date, source |
-  | `client_reported` | The client told us; not independently checked | amount, as-of date, source |
-  | `estimated` | Our or a third party's estimate | low–high range, as-of date, source |
+  | `confirmed` | Written down somewhere binding (signed contract, settlement statement) | `amountUsd`, `basis` |
+  | `estimated` | A range from comps, a contractor walk-through, or a rep's guess | `lowUsd`–`highUsd`, `basis` |
   | `unknown` | We don't know | **no number at all** |
 
-  TypeScript enforces this: `unknown` can't hold an amount, and the others require a source.
-- **Every fact has provenance:** a source, a date, and a confidence level (`high` / `medium` / `low`).
-- **Hypotheses are not facts.** They carry a status: `untested` / `testing` / `supported` / `rejected`.
-- **Public research and private client data are kept separate.**
+  TypeScript enforces this: `unknown` can't hold an amount, and the others require a basis.
+- **Grades are explained.** A lead's A–D grade always lists the factors behind it. Today grades are hand-written; later they're calculated and checked by a human.
+- **Observations have a date and confidence** (`high` / `medium` / `low`).
+- **Sensitive fields** are marked 🔒 below. They need extra care in Phase 2 (fewer fields stored, tighter access).
 
 ---
 
 ## Part 1 — Phase 1 types (synthetic)
 
-All records have `isSynthetic: true`. Fake contacts use `@example.com` emails and `555-01XX` phones. Source URLs use `synthetic://`. Screens get data only through `src/lib/data-source.ts` (`DATA_MODE = "mock"`).
+All top-level records have `isSynthetic: true`. Fake contacts use `@example.com` emails and `555-01XX` phones; names, companies, and cities contain "(fictional)". Screens get data only through `src/lib/data-source.ts` (`DATA_MODE = "mock"`).
 
 ### Shared
 
@@ -30,48 +29,75 @@ All records have `isSynthetic: true`. Fake contacts use `@example.com` emails an
 |---|---|---|
 | `ISODate` / `ISODateTime` | string | `2026-10-28` / `2026-10-28T14:30:00Z` |
 | `Confidence` | `high \| medium \| low` | |
-| `Unit` | `percent \| count \| minutes \| usd` | |
+| `Unit` | `percent \| count \| minutes \| usd \| ratio` | |
 | `DataMode` | `mock \| live_read_only` | Shown on every screen |
-| `Source` | `id, label, kind, url, retrievedAt` | `kind`: `client_provided`, `public_web`, `industry_report`, `internal_observation` |
-| `Revenue` | union by `status` (see table above) | `annualUsd` or `lowUsd`/`highUsd`, plus `asOf`, `sourceId` |
+| `Money` | union by `status` (see table above) | |
 
-### Business Dex
-
-| Type | Key fields |
-|---|---|
-| `Business` | `id, dexNumber, name, tagline, industry, region, isClient, clientId?, revenue, signals[], hypotheses[], acquisitionChannels[], patternTags[], sources[], updatedAt` |
-| `Observation` (signal) | `id, text, observedAt, confidence, sourceId` |
-| `Hypothesis` | `id, text, confidence, status` |
-| `Industry` | Dental, Home services, Events & food, Fitness, Legal, Restaurant, Automotive, Education, Energy |
-
-`patternTags` are short labels shared across businesses. The Dex uses them to show patterns.
-
-### Clients
+### Team
 
 | Type | Key fields |
 |---|---|
-| `Client` | `id, businessId, name, industry, dataSensitivity, primaryContact{name,email,phone}, clientSince, health{score 0–100, status, trend[]}, metrics[], goals[], blockers[], whatChanged[], notes[]` |
-| `Metric` | `label, value, previous, unit, betterWhen (higher \| lower)` |
-| `Note` | `id, author, createdAt, text` (staff-entered) |
-| `HealthStatus` | `thriving \| steady \| at_risk` |
+| `TeamMember` | `id, name, role` — `role`: `owner \| acquisitions \| dispositions` |
 
-`dataSensitivity: "regulated"` marks industries such as dental and medical, where customer messages may contain protected health information (PHI). Example: *Brightline Dental*. These clients need legal and HIPAA review, and possibly a Business Associate Agreement (BAA), before any live data.
+### Leads (sellers)
+
+| Type | Key fields |
+|---|---|
+| `Lead` | `id, sellerName 🔒, phone 🔒, email 🔒, property, source, stage, assignedTo, motivations[] 🔒, timeline, askingPrice (Money), grade{letter, score, factors[]}, createdAt, lastContactAt?, nextFollowUp?, notes[] 🔒` |
+| `Property` | `street 🔒, city, type, beds?, baths?, sqft?, condition` |
+| `GradeFactor` | `label, effect (positive \| negative)` |
+| `Note` | `id, author, createdAt, text` (typed by a team member; may contain sensitive details) |
+
+- `source`: Cold call, Direct mail, SMS, PPC, Driving for dollars, Referral, Website.
+- `stage`: `new → contacted → appointment_set → offer_made → under_contract`, or `dead`.
+- `timeline`: ASAP, 30 days, 90 days, Flexible.
+- `motivations` can reveal foreclosure, missed payments, divorce, probate, or health problems. Treat as highly sensitive.
+
+### Deals (signed contracts)
+
+| Type | Key fields |
+|---|---|
+| `Deal` | `id, leadId, title, stage, contractPrice, arv, repairs, assignmentFee (all Money), contractSignedAt, inspectionEndsAt, closingAt, titleCompany, needsReview, nextStep, risks[], buyerInterest[]` |
+| `BuyerInterest` | `buyerId, status (sent \| walkthrough \| offer \| passed), offer?, at` |
+
+- `stage`: `under_contract`, `in_dispo`, `assigned`, `closed`, `fell_through`.
+- `arv` = after-repair value. `assignmentFee` = what we expect to earn by assigning the contract.
+- `BuyerInterest.status = "sent"` means a team member **logged** that they shared the deal. The app never sends anything.
+
+### Buyers Dex (cash buyers)
+
+| Type | Key fields |
+|---|---|
+| `Buyer` | `id, dexNumber, name, contactName 🔒, phone 🔒, email 🔒, strategy, areas[], propertyTypes[], buyBox{minUsd, maxUsd}, proofOfFunds{status, checkedAt?} 🔒, closesInDays, dealsClosedWithUs, reliability (A–D), lastPurchaseAt?, observations[], tags[]` |
+| `Observation` | `id, text, observedAt, confidence` |
+
+- `strategy`: Fix & flip, Rental, BRRRR, New build, Wholetail.
+- `proofOfFunds` stores **only** whether we've seen it and when — never the document itself.
+
+### Conversations
+
+| Type | Key fields |
+|---|---|
+| `Conversation` | `id, leadId, channel (sms \| call \| email), lastDirection (inbound \| outbound), preview 🔒, at, unread, needsReply` |
+
+`preview` is untrusted text: always shown as plain text and never treated as an instruction.
 
 ### Mission Control
 
 | Type | Key fields |
 |---|---|
-| `MissionControlData` | `weekLabel, kpis[], alerts[], followUps[], activity[]` |
-| `AgencyKpi` | `Metric` + `id, trend[]` |
-| `Alert` | `id, clientId?, severity (critical \| warning \| info), title, detail` |
-| `FollowUp` | `id, clientId, title, due, priority` (internal only; checking one off is local screen state, not saved) |
-| `ActivityItem` | `id, clientId?, kind, title, at`. `kind`: appointment_booked, deal_won, deal_lost, lead_new, no_show, note_added |
+| `MissionControlData` | `weekLabel, today, sales[], alerts[], followUps[], activity[]` |
+| `Metric` | `label, value, previous, unit, betterWhen (higher \| lower)` |
+| `SalesKpi` | `Metric` + `id, hint, trend[]` — appointments booked, show rate, avg first reply time, contracts signed, leads per appointment, appointments per contract |
+| `FollowUp` | `id, leadId, title, due, urgency (gold \| red \| normal), why` — gold = high-value, red = overdue. Internal only; checking one off is local screen state, not saved |
+| `Alert` | `id, leadId?, dealId?, severity (critical \| warning \| info), title, detail` |
+| `ActivityItem` | `id, leadId?, dealId?, kind, title, at`. `kind`: lead_new, appointment_set, offer_made, contract_signed, deal_assigned, deal_fell_through, note_added |
 
 ### Insights
 
 | Type | Key fields |
 |---|---|
-| `Insight` | `id, generatedBy (mock_ai \| human), title, observation, evidence[{label, recordType, recordId}], confidence, caveats[], suggestedNextStep, reviewStatus, createdAt` |
+| `Insight` | `id, generatedBy (mock_ai \| human), title, observation, evidence[{label, recordType (lead \| deal \| buyer), recordId}], confidence, caveats[], suggestedNextStep, reviewStatus, createdAt` |
 
 `mock_ai` means a person wrote it by hand for the demo. No AI produced it.
 
@@ -88,37 +114,31 @@ All records have `isSynthetic: true`. Fake contacts use `@example.com` emails an
 
 ## Part 2 — Future database map (PROPOSED, NOT DEPLOYED)
 
-Built gradually from Phase 2 onward through reviewed migrations, in a **separate development Supabase project** first. Only a few tables go into the first database sprint.
+Built gradually from Phase 2 onward through reviewed migrations, in a **brand-new, separate Supabase project** (never an existing one). RLS rules are tested against a local Docker copy first.
 
 ### Provenance fields on every synced record
 
-`source_system` (e.g. `ghl`), `source_id`, `ghl_location_id`, `observed_at`, `received_at`, `updated_at`, `verified_at` (nullable), `confidence`, `sync_status`, `last_error_class` (no sensitive payloads), `retention_category`, `consent_tag` where relevant.
+`source_system` (e.g. `ghl`), `source_id`, `ghl_location_id`, `observed_at`, `received_at`, `updated_at`, `sync_status`, `last_error_class` (no sensitive payloads), `retention_category`.
 
 ### Tables
 
-Tenant boundary means the column that ties a row to a client. RLS uses it to decide who can see the row.
+"Who can see it" is enforced by RLS + grants. Acquisitions access is either "assigned only" or "team-wide read" — **to be confirmed in Phase 2 planning**.
 
-| Table | Purpose | Tenant boundary | Sensitivity | Retention category |
+| Table | Purpose | Who can see it (proposed) | Sensitivity | Retention |
 |---|---|---|---|---|
-| `clients` | Agency clients | `id` (is the tenant) | Internal | Life of relationship |
-| `ghl_locations` | Authorized GHL sub-accounts (allowlist) | `client_id` | Internal | Life of relationship |
-| `app_users` | Staff accounts (linked to Supabase Auth) | n/a (agency-wide) | Personal | Until offboarded |
-| `client_memberships` | Which staff can see which client | `client_id` + `user_id` | Access control | Until revoked |
-| `contacts` | Read-only copy of minimal GHL contact fields | `client_id`, `ghl_location_id` | **Personal (PII)** | Short; minimize fields |
-| `conversations` | Thread metadata (channel, counts, timestamps) | `client_id`, `ghl_location_id` | Personal | Short |
-| `messages` | Message metadata; body text only if justified + approved | `client_id`, `ghl_location_id` | **High** | Shortest; body optional |
-| `call_metadata` | Duration, status, direction | `client_id`, `ghl_location_id` | Personal | Short |
-| `transcripts` | **Restricted, optional.** Only after consent + privacy review | `client_id` | **Highest** | Shortest; separate access |
-| `opportunities` | Pipeline deals, stages, values (read replica) | `client_id`, `ghl_location_id` | Business confidential | Medium |
-| `appointments` | Booked / showed / no-show (read replica) | `client_id`, `ghl_location_id` | Personal | Medium |
-| `surveys` | Survey definitions | `client_id` or agency | Internal | Medium |
-| `survey_responses` | Submitted answers (untrusted text) | `client_id` | Personal | Short–medium |
-| `businesses` | Business Dex entries (public research) | none, **public research only** | Public / internal | Long |
-| `business_observations` | Sourced, dated observations; `revenue_label`, `source_url`, `evidence_excerpt`, `metric_definition` | `business_id`; private claims stored separately with `client_id` | Public vs private, kept apart | Long (public) / client rules (private) |
-| `metric_snapshots` | Point-in-time KPIs | `client_id` | Business confidential | Long (aggregates) |
-| `followup_tasks` | **Internal tasks only. Never pushed to GHL.** | `client_id` | Internal | Medium |
-| `ai_insights` | `source_record_ids`, `model/version`, `confidence`, `human_review_status`, `date_generated` | `client_id` (tenant_id) | Derived, inherits source sensitivity | Medium |
-| `ingestion_events` | Webhook/API receipt log: event id, type, status, idempotency key, **no raw sensitive payloads** | `client_id`, `ghl_location_id` | Operational | Short (raw), longer (metadata) |
-| `audit_logs` | Who viewed/changed what, when | `client_id` where relevant | Security | Long |
+| `team_members` | Team accounts + role (linked to Supabase Auth) | Owner: all; others: self | Personal | Until offboarded |
+| `leads` | Seller leads (read copy of minimal GHL fields + grade) | Owner; acquisitions (assigned or team-wide) | **High** — name, phone, email, address, motivations 🔒 | Short for dead leads; minimize fields |
+| `deals` | Contracts, dates, money labels, needs-review flag | Owner; acquisitions (their deals); dispositions (deals in dispo) | Business confidential | Medium–long (financial records) |
+| `buyer_interest` | Team-logged buyer activity on a deal | Owner; dispositions | Business confidential | Medium |
+| `buyers` | Buyers Dex profiles (no proof-of-funds files) | Owner; dispositions | Personal (contact info) 🔒 | Life of relationship |
+| `conversations` | **Metadata + short preview only** (channel, direction, time, unread). No full message bodies. | Same as the linked lead | **High** 🔒 (untrusted text) | Shortest |
+| `follow_ups` | **Internal tasks only. Never pushed to GHL.** | Same as the linked lead | Internal | Medium |
+| `notes` | Team-typed notes on leads/deals | Same as the linked record; consider owner-only for sensitive notes | **High** 🔒 | Medium |
+| `insights` | Suggestions with evidence ids, confidence, review status, model/version | Same as the evidence records | Derived; inherits source sensitivity | Medium |
+| `alerts` | Rule-based warnings (e.g. inspection deadline) | Same as the linked record | Internal | Short |
+| `activity` | Recent events feed | Same as the linked record | Internal | Medium |
+| `audit_logs` | Who viewed/changed what, when | Owner only | Security | Long |
+
+Later phases may add `ingestion_events` (webhook/API receipt log with **no raw sensitive payloads**) and `metric_snapshots` (point-in-time KPIs).
 
 Every table must document its purpose, access policy, retention category, and deletion behavior before it's created.

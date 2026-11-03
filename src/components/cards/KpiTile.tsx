@@ -1,26 +1,28 @@
 import { describeChange, formatValue } from "@/lib/format";
-import type { AgencyKpi } from "@/lib/types";
+import type { SalesKpi } from "@/lib/types";
 import { Sparkline } from "@/components/labels/charts";
 import { DeltaPill } from "@/components/labels/labels";
 import { GlassCard } from "./GlassCard";
 
-export function KpiTile({ kpi }: { kpi: AgencyKpi }) {
+/** Compact sales number with its change vs last week and a tiny trend line. */
+export function KpiTile({ kpi }: { kpi: SalesKpi }) {
   const { isGood } = describeChange(kpi);
   const color =
     isGood === null ? "var(--color-sky)" : isGood ? "var(--color-lime)" : "var(--color-rose)";
 
   return (
-    <GlassCard className="flex flex-col justify-between gap-3">
-      <p className="text-xs font-medium text-muted">{kpi.label}</p>
+    <GlassCard padding="tight" className="flex flex-col justify-between gap-2">
+      <p className="text-[11px] font-medium leading-tight text-muted">{kpi.label}</p>
       <div>
-        <p className="font-display text-[26px] font-bold leading-none tracking-tight">
+        <p className="font-display text-xl font-bold leading-none tracking-tight">
           {formatValue(kpi.value, kpi.unit)}
         </p>
-        <div className="mt-2 flex items-end justify-between gap-2">
+        <div className="mt-1.5 flex items-end justify-between gap-2">
           <DeltaPill metric={kpi} />
-          <Sparkline values={kpi.trend} color={color} width={64} height={24} />
+          <Sparkline values={kpi.trend} color={color} width={48} height={18} />
         </div>
       </div>
+      <p className="text-[10px] leading-snug text-faint">{kpi.hint}</p>
     </GlassCard>
   );
 }
