@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { AlertCard } from "@/components/cards/AlertCard";
 import { ConversationRow } from "@/components/cards/ConversationRow";
+import { DetectionRadar } from "@/components/cards/DetectionRadar";
 import { FollowUpList } from "@/components/cards/FollowUpList";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { HomeTabs } from "@/components/cards/HomeTabs";
@@ -25,6 +26,8 @@ import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
   getConversations,
+  getCoachHints,
+  getDetections,
   getMissionControl,
   getProspects,
   getProspectsToWork,
@@ -64,14 +67,15 @@ export default function MissionControlPage() {
   const needsReply = getConversations().filter((c) => c.needsReply);
   const trends = getTrends();
   const real = summary.source === "private_file";
+  const coach = getCoachHints();
 
   const tabs = [
     {
       id: "results",
-      label: "Client results",
+      label: "Results",
       icon: <BadgeDollarSign aria-hidden />,
-      stat: formatUsdExact(summary.activeMrr),
-      statLabel: `${summary.activeCount} active clients/mo`,
+      stat: `$${(summary.activeMrr / 1000).toFixed(1)}k`,
+      statLabel: `a month from ${summary.activeCount} active clients`,
       panel: (
         <div className="space-y-3">
           <GlassCard className="space-y-3">
@@ -112,7 +116,7 @@ export default function MissionControlPage() {
     },
     {
       id: "case",
-      label: "Case studies",
+      label: "Cases",
       icon: <Sprout aria-hidden />,
       stat: String(trends.length),
       statLabel: "growth trends",
@@ -135,11 +139,12 @@ export default function MissionControlPage() {
     },
     {
       id: "followups",
-      label: "Follow-ups",
+      label: "Leads",
       icon: <Users aria-hidden />,
       stat: String(toWork.all.length),
       statLabel: "prospects to work",
       attention: toWork.overdue.length > 0,
+      coachSignature: coach.leads.signature,
       panel: (
         <div className="glass overflow-hidden rounded-3xl">
           <div className="grid grid-cols-3 divide-x divide-line border-b border-line text-center">
@@ -169,11 +174,12 @@ export default function MissionControlPage() {
     },
     {
       id: "conversations",
-      label: "Conversations",
+      label: "Chats",
       icon: <MessagesSquare aria-hidden />,
       stat: String(needsReply.length),
       statLabel: "need a reply",
       attention: needsReply.length > 0,
+      coachSignature: coach.chats.signature,
       panel: (
         <div className="glass overflow-hidden rounded-3xl">
           <ul className="divide-y divide-line">
@@ -206,7 +212,11 @@ export default function MissionControlPage() {
         }
       />
 
-      <HomeTabs tabs={tabs} columns={2} />
+      <HomeTabs tabs={tabs} />
+
+      <div className="mt-3">
+        <DetectionRadar detections={getDetections()} coachSignature={coach.radar.signature} />
+      </div>
 
       <SectionTitle aside="Internal only, never sent">Top follow-ups today</SectionTitle>
       <FollowUpList

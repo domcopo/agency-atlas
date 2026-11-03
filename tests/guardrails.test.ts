@@ -165,11 +165,26 @@ describe("real client data stays private", () => {
     expect(readers).toEqual(["src/lib/private-data.ts"]);
   });
 
-  it("no real client name is copied into app code, docs or tests", () => {
+  it("no real client or team name is copied into app code, docs or tests", () => {
     const file = join(PRIVATE_DIR, "clients.json");
     if (!existsSync(file)) return; // nothing to compare on machines without the private file
-    const names = (JSON.parse(readFileSync(file, "utf8")) as { clients: { name: string }[] }).clients
-      .map((c) => c.name.toLowerCase());
+    const people = [
+      ...(JSON.parse(readFileSync(file, "utf8")) as { clients: { name: string }[] }).clients,
+      ...(existsSync(join(PRIVATE_DIR, "team.json"))
+        ? (JSON.parse(readFileSync(join(PRIVATE_DIR, "team.json"), "utf8")) as { members: { name: string }[] }).members
+        : []),
+    ];
+    // Check each name as written AND in page-address form ("first-last"), which once slipped past.
+    const names = [
+      ...new Set(
+        people.flatMap((p) => {
+          const lower = p.name.toLowerCase().trim();
+          const slugged = lower.normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+          // Single-word names (e.g. a first name only) are too common to search for safely.
+          return lower.includes(" ") ? [lower, slugged] : [];
+        }),
+      ),
+    ];
     const tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
       .split("\n")
       .filter((f) => f && !/\.(png|jpe?g|ico)$/.test(f))

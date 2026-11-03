@@ -125,3 +125,13 @@ export function initials(name: string): string {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+/**
+ * Short, non-reversible fingerprint of a list of item ids. Used to notice when
+ * the things needing review have changed, without storing the items themselves.
+ */
+export function fingerprint(ids: string[]): string {
+  let h = 5381;
+  for (const ch of [...ids].sort().join("|")) h = ((h << 5) + h + ch.charCodeAt(0)) | 0;
+  return (h >>> 0).toString(36);
+}

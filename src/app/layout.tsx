@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { BottomNav } from "@/components/shell/BottomNav";
 import { DemoBanner } from "@/components/shell/DemoBanner";
-import { getRosterSource } from "@/lib/data-source";
+import { getCoachHints, getRosterSource } from "@/lib/data-source";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,7 +28,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <div aria-hidden className="app-glow" />
         <DemoBanner realClients={getRosterSource() === "private_file"} />
         <main className="mx-auto max-w-lg px-4 pb-32">{children}</main>
-        <BottomNav />
+        <BottomNav hints={getCoachHints().tabs} />
       </body>
     </html>
   );

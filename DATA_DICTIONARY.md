@@ -45,7 +45,8 @@ Screens get data only through `src/lib/data-source.ts` (`DATA_MODE = "mock"`, me
 
 | Type | Key fields | Notes |
 |---|---|---|
-| `RosterClient` | `id` (made from the name), `name` (≤80 chars), `monthlyUsd` (0–100,000), `startDate`, `status`, `listedIn[]`, `check?`, `services[]` | `status`: `active \| paused \| canceled \| incomplete_expired`. `check` = "needs check" note; some records were transcribed from screenshots and must be verified |
+| `RosterClient` | `id` (made from the name), `name` (≤80 chars), `monthlyUsd` (0–100,000), `startDate`, `status`, `listedIn[]`, `check?`, `services[]`, `followUp?` (≤120 chars), `endDate?` (cancel/pause day) | `status`: `active \| paused \| canceled \| incomplete_expired`. `check` = "needs check" note; some records were transcribed from screenshots and must be verified. `endDate` is needed to chart clients lost by month |
+| `Detection` | `id`, `kind` (`problem` red · `attention` amber · `opportunity` green), `title`, `why`, `closeness` 0–1, `confidence` 0–1, `href`, `isSynthetic` | Client detection radar on Home. Built by plain rules in `data-source.ts`; later AI may add suggestions for human review only |
 | `ClientTier` | `high` ($500+/mo) · `mid` ($150–499) · `low` (under $150) | Active clients only |
 | `RosterSummary` | counts and monthly totals by status and tier, `needsCheck`, `skipped`, `avgMonthsActive`, `source` | Calculated, not stored |
 | `TeamMember` | `id, name, role, handles[]` | `role`: `founder \| client_comms \| client_manager \| seo_developer` |

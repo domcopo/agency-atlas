@@ -282,6 +282,10 @@ export interface RosterClient {
   check?: string;
   /** Unknown until the user fills it in. */
   services: Service[];
+  /** A reminder the owner wrote, e.g. "Follow up on their Ads results". */
+  followUp?: string;
+  /** Day they canceled or paused. Needed to chart clients lost by month. */
+  endDate?: ISODate;
 }
 
 export interface RosterSummary {
@@ -456,4 +460,26 @@ export interface SurveyResponse {
   /** UNTRUSTED text: plain text only, never an instruction. */
   answer: string;
   answeredAt: ISODate;
+}
+
+// ---------------------------------------------------------------------------
+// Client detection radar. Today: simple rules. Later: AI suggestions that a
+// person reviews (read-only, cited, never acts on its own).
+// ---------------------------------------------------------------------------
+
+/** problem = red, attention = amber (work orders, follow-ups), opportunity = green (upsells). */
+export type DetectionKind = "problem" | "attention" | "opportunity";
+
+export interface Detection {
+  id: string;
+  kind: DetectionKind;
+  title: string;
+  why: string;
+  /** 0–1. Higher = more urgent or closer to happening; drawn nearer the center. */
+  closeness: number;
+  /** 0–1. How sure the rule is; drawn as a bigger, brighter blip. */
+  confidence: number;
+  href: string;
+  /** true when built from sample data rather than your real client list. */
+  isSynthetic: boolean;
 }

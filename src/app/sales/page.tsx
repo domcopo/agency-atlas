@@ -4,6 +4,7 @@ import { ConversationRow } from "@/components/cards/ConversationRow";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard, stageInfo } from "@/components/cards/ProspectCard";
+import { WinLossChart } from "@/components/cards/WinLossChart";
 import { Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
@@ -11,8 +12,8 @@ import {
   getConversations,
   getProspects,
   getRosterSource,
-  getSignupsByMonth,
   getToday,
+  getWinLoss,
 } from "@/lib/data-source";
 import { formatUsd, formatUsdExact } from "@/lib/format";
 import type { ProspectStage } from "@/lib/types";
@@ -27,10 +28,7 @@ function monthLabel(key: string) {
 
 export default function SalesPage() {
   const today = getToday();
-  const signups = getSignupsByMonth(6);
-  const maxSigned = Math.max(1, ...signups.map((s) => s.signed));
-  const thisMonth = signups[signups.length - 1];
-  const lastMonth = signups[signups.length - 2];
+  const winLoss = getWinLoss(6);
   const prospects = getProspects();
   const names = Object.fromEntries(prospects.map((p) => [p.id, p.name]));
   const open = prospects.filter((p) => p.stage !== "won" && p.stage !== "lost");
@@ -43,31 +41,34 @@ export default function SalesPage() {
     <>
       <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
 
-      <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients signed by month</SectionTitle>
+      <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients won &amp; lost</SectionTitle>
       <GlassCard>
-        <div className="flex h-32 items-end gap-2" role="img" aria-label={`Clients signed per month: ${signups.map((s) => `${monthLabel(s.month)} ${s.signed}`).join(", ")}`}>
-          {signups.map((s) => (
-            <div key={s.month} className="flex flex-1 flex-col items-center gap-1">
-              <span className="text-xs font-semibold">{s.signed}</span>
-              <div
-                className="w-full rounded-t-lg bg-gradient-to-t from-violet-deep to-violet"
-                style={{ height: `${Math.max(4, (s.signed / maxSigned) * 88)}px` }}
-              />
-              <span className="text-[10px] text-muted">{monthLabel(s.month)}</span>
-            </div>
-          ))}
-        </div>
-        <p className="mt-3 border-t border-line pt-2 text-xs text-muted">
-          {lastMonth && (
-            <>
-              {monthLabel(lastMonth.month)}: <span className="font-semibold text-ink">{lastMonth.signed} clients</span>, adding{" "}
-              <span className="font-semibold text-ink">{formatUsdExact(lastMonth.mrrAdded)}/mo</span>.{" "}
-            </>
-          )}
-          {thisMonth && `${monthLabel(thisMonth.month)} so far: ${thisMonth.signed}. `}
-          Counts every client by start date, including ones that later paused or canceled.
-        </p>
+        <WinLossChart
+          months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))}
+          lostWithoutDate={winLoss.lostWithoutDate}
+          hasRealData={real}
+        />
       </GlassCard>
+      <div className="mt-2.5 grid grid-cols-3 gap-2.5 text-center">
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold text-rose">{winLoss.lostTotal}</p>
+          <p className="text-[10px] leading-tight text-muted">Lost all-time</p>
+          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>
+        </GlassCard>
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold text-amber">{winLoss.pausedCount}</p>
+          <p className="text-[10px] leading-tight text-muted">Paused (at risk)</p>
+          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>
+        </GlassCard>
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold">{winLoss.lifetimeChurnPct}%</p>
+          <p className="text-[10px] leading-tight text-muted">Lifetime churn</p>
+          <p className="text-[11px] text-faint">lost ÷ ever signed</p>
+        </GlassCard>
+      </div>
+      <p className="mt-1.5 px-1 text-[11px] text-faint">
+        Lost = canceled or expired. Paused clients are shown separately because they may come back.
+      </p>
 
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
       <div className="grid grid-cols-2 gap-2.5">

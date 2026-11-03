@@ -18,7 +18,7 @@ import { missionControl } from "@/fixtures/mission-control";
 import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects";
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
-import { daysBetween, monthsBetween } from "@/lib/format";
+import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import type {
   Alert,
@@ -31,6 +31,7 @@ import type {
   MissionControlData,
   MonthlyPoint,
   Prospect,
+  Detection,
   RosterClient,
   RosterSource,
   RosterSummary,
@@ -135,6 +136,43 @@ export function getSignupsByMonth(count = 6): { month: string; signed: number; m
   return out;
 }
 
+export interface WinLossMonth {
+  month: string;
+  won: number;
+  wonMrr: number;
+  lost: number;
+  lostMrr: number;
+}
+
+/**
+ * Clients won (by start date) and lost (by end date) per month, last `count` months.
+ * "Lost" = canceled or expired. Lost clients without an end date can't be placed
+ * in a month yet, so they are counted separately instead of guessed.
+ */
+export function getWinLoss(count = 6) {
+  const clients = roster().clients;
+  const isLost = (c: RosterClient) => c.status === "canceled" || c.status === "incomplete_expired";
+  const lost = clients.filter(isLost);
+  const money = (xs: RosterClient[]) => Math.round(xs.reduce((n, c) => n + c.monthlyUsd, 0) * 100) / 100;
+  const months: WinLossMonth[] = getSignupsByMonth(count).map((m) => {
+    const out = lost.filter((c) => c.endDate?.startsWith(m.month));
+    return { month: m.month, won: m.signed, wonMrr: m.mrrAdded, lost: out.length, lostMrr: money(out) };
+  });
+  const undated = lost.filter((c) => !c.endDate);
+  const paused = clients.filter((c) => c.status === "paused");
+  const everSigned = clients.length;
+  return {
+    months,
+    lostTotal: lost.length,
+    lostTotalMrr: money(lost),
+    lostWithoutDate: undated.length,
+    pausedCount: paused.length,
+    pausedMrr: money(paused),
+    /** Share of every client ever signed who has canceled or expired. */
+    lifetimeChurnPct: everSigned ? Math.round((lost.length / everSigned) * 100) : 0,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Team
 // ---------------------------------------------------------------------------
@@ -179,6 +217,100 @@ export function getMissionControl(): MissionControlData {
     ...missionControl,
     alerts: [...realAlerts, ...missionControl.alerts],
     activity: [...realActivity, ...missionControl.activity].sort((a, b) => b.at.localeCompare(a.at)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Client detection radar — simple, explainable rules for now. Later an AI may
+// suggest items too, but only as cited suggestions a person reviews.
+// ---------------------------------------------------------------------------
+
+const clamp = (n: number) => Math.min(1, Math.max(0, n));
+
+export function getDetections(): Detection[] {
+  const clients = roster().clients;
+  const real = roster().source === "private_file";
+  const out: Detection[] = [];
+
+  // Real list: owner's follow-up notes (amber).
+  for (const c of clients.filter((x) => x.followUp && x.status !== "canceled")) {
+    out.push({ id: `d_fu_${c.id}`, kind: "attention", title: `Follow up: ${c.name}`, why: c.followUp!, closeness: 0.85, confidence: 0.95, href: `/clients/${c.id}`, isSynthetic: !real });
+  }
+  // Real list: paused clients are money on hold (red).
+  for (const c of clients.filter((x) => x.status === "paused")) {
+    out.push({ id: `d_pause_${c.id}`, kind: "problem", title: `${c.name} is paused`, why: `$${c.monthlyUsd.toLocaleString("en-US")}/mo on hold. A check-in call could win them back.`, closeness: 0.7, confidence: 0.9, href: `/clients/${c.id}`, isSynthetic: !real });
+  }
+  // Real list: records the two lists disagreed on (amber, one blip).
+  const toCheck = clients.filter((c) => c.check).length;
+  if (toCheck > 0)
+    out.push({ id: "d_check", kind: "attention", title: `${toCheck} client records need checking`, why: "Your two client lists disagreed on these. Confirm them once.", closeness: 0.35, confidence: 1, href: "/clients", isSynthetic: !real });
+  // Real list: active clients under $150 with no SEO yet → SEO upsell (green).
+  for (const c of clients.filter((x) => x.status === "active" && x.monthlyUsd < 150 && !x.services.includes("SEO"))) {
+    const months = monthsBetween(c.startDate, TODAY);
+    out.push({ id: `d_up_${c.id}`, kind: "opportunity", title: `SEO upsell: ${c.name}`, why: `Pays $${c.monthlyUsd.toLocaleString("en-US")}/mo; SEO plans start at $150. With you ${months} months, so trust is ${months >= 6 ? "built" : "still building"}.`, closeness: clamp(0.25 + months / 24), confidence: 0.45, href: `/clients/${c.id}`, isSynthetic: !real });
+  }
+  // Real list: SEO clients not running ads (green, one blip).
+  const seoNoAds = clients.filter((c) => c.status === "active" && c.services.includes("SEO") && !c.services.includes("Ads")).length;
+  if (seoNoAds > 0)
+    out.push({ id: "d_ads", kind: "opportunity", title: `Ads upsell: ${seoNoAds} SEO clients`, why: "They already trust you with SEO and don't run ads with you yet.", closeness: 0.3, confidence: 0.35, href: "/clients", isSynthetic: !real });
+
+  // Sample work orders: urgent = red, overdue = amber.
+  for (const w of workOrders.filter((x) => x.status !== "done")) {
+    if (w.priority === "urgent")
+      out.push({ id: `d_wo_${w.id}`, kind: "problem", title: w.title, why: `${w.clientLabel}. Urgent work order.`, closeness: 0.9, confidence: 0.8, href: `/work/${w.id}`, isSynthetic: true });
+    else if (w.due < TODAY)
+      out.push({ id: `d_wo_${w.id}`, kind: "attention", title: w.title, why: `${w.clientLabel}. Overdue work order.`, closeness: clamp(0.5 + daysBetween(w.due, TODAY) / 14), confidence: 0.75, href: `/work/${w.id}`, isSynthetic: true });
+  }
+  // Sample prospects graded A: green opportunities.
+  for (const p of prospects.filter((x) => x.grade.letter === "A" && x.stage !== "won" && x.stage !== "lost")) {
+    out.push({ id: `d_pr_${p.id}`, kind: "opportunity", title: `Hot prospect: ${p.name}`, why: `Grade A (${p.grade.score}/100). ${p.wants.join(" + ")}.`, closeness: p.grade.score / 100, confidence: 0.6, href: `/sales/${p.id}`, isSynthetic: true });
+  }
+
+  return out.sort((a, b) => b.closeness * b.confidence - a.closeness * a.confidence);
+}
+
+// ---------------------------------------------------------------------------
+// Coaching: which buttons and tabs should glow because something is worth a look.
+// Items "build up" quietly until an area reaches its minimum, then it glows.
+// Raise a minimum to be notified less often. Later, smarter rules (or AI
+// suggestions a person reviews) can feed the same shape.
+// ---------------------------------------------------------------------------
+
+export const COACH_RULES = {
+  /** A radar blip is worth checking when closeness × confidence reaches this. */
+  radarWorthScore: 0.45,
+  /** How many items an area collects before it starts glowing. */
+  minToNotify: { radar: 1, clients: 1, sales: 1, work: 1, leads: 1, chats: 1 },
+} as const;
+
+export interface CoachHint {
+  count: number;
+  /** Changes whenever the set of items changes; null = nothing to show. */
+  signature: string | null;
+  reason: string;
+}
+
+function hint(area: keyof typeof COACH_RULES.minToNotify, ids: string[], reason: string): CoachHint {
+  const glow = ids.length >= COACH_RULES.minToNotify[area];
+  return { count: ids.length, signature: glow ? fingerprint(ids) : null, reason };
+}
+
+export function getCoachHints() {
+  const clients = roster().clients;
+  const worth = getDetections().filter((d) => d.closeness * d.confidence >= COACH_RULES.radarWorthScore);
+  const toWork = getProspectsToWork();
+  const replies = conversations.filter((c) => c.needsReply);
+  const work = workOrders.filter((w) => w.status !== "done" && (w.priority === "urgent" || w.due < TODAY));
+  const clientItems = clients.filter((c) => c.check || (c.followUp && c.status !== "canceled"));
+  return {
+    radar: hint("radar", worth.map((d) => d.id), `${worth.length} worth checking`),
+    leads: hint("leads", toWork.overdue.map((p) => p.id), `${toWork.overdue.length} overdue follow-ups`),
+    chats: hint("chats", replies.map((c) => c.id), `${replies.length} need a reply`),
+    tabs: {
+      "/clients": hint("clients", clientItems.map((c) => c.id), "Records to check or follow up"),
+      "/sales": hint("sales", [...toWork.overdue.map((p) => p.id), ...replies.map((c) => c.id)], "Overdue follow-ups and replies"),
+      "/work": hint("work", work.map((w) => w.id), "Urgent or overdue work orders"),
+    } as Record<string, CoachHint>,
   };
 }
 

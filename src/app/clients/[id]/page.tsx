@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarDays, Clock, Layers, ListChecks } from "lucide-react";
+import { AlertTriangle, BellRing, CalendarDays, Clock, Layers, ListChecks } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { GlassCard } from "@/components/cards/GlassCard";
@@ -48,6 +48,15 @@ export default async function ClientPage({ params }: Props) {
           <AlertTriangle aria-hidden className="mt-0.5 size-5 shrink-0 text-amber" />
           <p>
             <span className="font-semibold">Needs checking.</span> <span className="text-muted">{c.check}</span>
+          </p>
+        </div>
+      )}
+
+      {c.followUp && (
+        <div className="mb-4 flex gap-3 rounded-2xl border border-amber/35 bg-amber/8 p-3.5 text-sm">
+          <BellRing aria-hidden className="mt-0.5 size-5 shrink-0 text-amber" />
+          <p>
+            <span className="font-semibold">Follow up.</span> <span className="text-muted">{c.followUp}</span>
           </p>
         </div>
       )}

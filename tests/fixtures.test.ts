@@ -8,10 +8,13 @@ import { describe, expect, it } from "vitest";
 import { demoRosterRaw } from "@/fixtures/demo-roster";
 import { missionControl as sampleHome } from "@/fixtures/mission-control";
 import {
+  COACH_RULES,
   DATA_MODE,
+  getCoachHints,
   getBusinesses,
   getCaseStudyHistory,
   getConversations,
+  getDetections,
   getInsights,
   getMissionControl,
   getProspects,
@@ -23,10 +26,11 @@ import {
   getSurveyQuestions,
   getSurveyResponses,
   getTrends,
+  getWinLoss,
   getWorkOrders,
   tierOf,
 } from "@/lib/data-source";
-import { describeTenure, monthsBetween } from "@/lib/format";
+import { describeTenure, fingerprint, monthsBetween } from "@/lib/format";
 import { parseRoster } from "@/lib/private-data";
 
 const businesses = getBusinesses();
@@ -269,5 +273,80 @@ describe("untrusted message text", () => {
     expect(p.stage).not.toBe("won");
     // It must not have created a client either.
     expect(getRoster().some((c) => c.name.toLowerCase().includes("velvet fork"))).toBe(false);
+  });
+});
+
+describe("client detection radar", () => {
+  const detections = getDetections();
+
+  it("every blip has a known color, a 0–1 position and confidence, and an in-app link", () => {
+    expect(detections.length).toBeGreaterThan(0);
+    for (const d of detections) {
+      expect(["problem", "attention", "opportunity"]).toContain(d.kind);
+      expect(d.closeness).toBeGreaterThanOrEqual(0);
+      expect(d.closeness).toBeLessThanOrEqual(1);
+      expect(d.confidence).toBeGreaterThanOrEqual(0);
+      expect(d.confidence).toBeLessThanOrEqual(1);
+      expect(d.href).toMatch(/^\/[a-z]/); // internal page, never an outside URL
+    }
+    expect(new Set(detections.map((d) => d.id)).size).toBe(detections.length);
+  });
+
+  it("blips from sample work orders and prospects are marked as sample", () => {
+    for (const d of detections.filter((x) => x.id.startsWith("d_wo_") || x.id.startsWith("d_pr_"))) {
+      expect(d.isSynthetic).toBe(true);
+    }
+  });
+
+  it("most urgent and confident items come first", () => {
+    const score = detections.map((d) => d.closeness * d.confidence);
+    expect(score).toEqual([...score].sort((a, b) => b - a));
+  });
+});
+
+describe("clients won and lost", () => {
+  const wl = getWinLoss(6);
+
+  it("covers 6 months and never counts more lost than exist", () => {
+    expect(wl.months).toHaveLength(6);
+    const dated = wl.months.reduce((n, m) => n + m.lost, 0);
+    expect(dated + wl.lostWithoutDate).toBeLessThanOrEqual(wl.lostTotal);
+    expect(wl.lifetimeChurnPct).toBeGreaterThanOrEqual(0);
+    expect(wl.lifetimeChurnPct).toBeLessThanOrEqual(100);
+  });
+
+  it("the client-file checker keeps valid follow-up notes and end dates, and drops bad ones", () => {
+    const base = { name: "Pat Example (fictional)", monthlyUsd: 100, startDate: "2026-01-05", status: "canceled" };
+    const r = parseRoster({
+      clients: [
+        { ...base, followUp: "Call about ads", endDate: "2026-09-30" },
+        { ...base, name: "Lee Example (fictional)", followUp: 42, endDate: "last week" },
+      ],
+    });
+    expect(r?.clients[0]?.followUp).toBe("Call about ads");
+    expect(r?.clients[0]?.endDate).toBe("2026-09-30");
+    expect(r?.clients[1]?.followUp).toBeUndefined();
+    expect(r?.clients[1]?.endDate).toBeUndefined();
+  });
+});
+
+describe("coaching glow", () => {
+  const coach = getCoachHints();
+
+  it("an area glows only once it reaches its minimum, and stays quiet below it", () => {
+    const all = { radar: coach.radar, leads: coach.leads, chats: coach.chats, ...coach.tabs };
+    for (const [area, h] of Object.entries(all)) {
+      const key = area.replace("/", "") as keyof typeof COACH_RULES.minToNotify;
+      const min = COACH_RULES.minToNotify[key];
+      expect(h.signature !== null, area).toBe(h.count >= min);
+    }
+  });
+
+  it("the saved fingerprint is short, changes when items change, and never contains the items", () => {
+    const a = fingerprint(["d_fu_sam-lee", "wo_01"]);
+    expect(a).toMatch(/^[0-9a-z]{1,8}$/);
+    expect(a).not.toContain("sam");
+    expect(fingerprint(["wo_01", "d_fu_sam-lee"])).toBe(a); // order doesn't matter
+    expect(fingerprint(["wo_01"])).not.toBe(a);
   });
 });

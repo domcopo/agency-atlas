@@ -132,6 +132,53 @@ body {
   animation: rise-in 380ms ease-out both;
 }
 
+/* Client detection radar: rotating sweep, blips flare as it passes. */
+@keyframes radar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes radar-ping {
+  0% {
+    transform: scale(1.7);
+    filter: brightness(1.7);
+  }
+  30% {
+    transform: scale(1);
+    filter: brightness(1.1);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(0.75);
+  }
+}
+
+.radar-sweep {
+  animation: radar-spin linear infinite;
+}
+
+.radar-blip {
+  animation: radar-ping ease-out infinite;
+}
+
+/* Coaching glow: a slow amber pulse on whatever is worth tapping next. */
+@keyframes coach-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgb(251 191 74 / 0.45), 0 0 0 0 rgb(251 191 74 / 0);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgb(251 191 74 / 0.9), 0 0 16px 3px rgb(251 191 74 / 0.35);
+  }
+}
+
+.coach {
+  /* Still highlighted (just not pulsing) when Reduce Motion is on. */
+  box-shadow: 0 0 0 1px rgb(251 191 74 / 0.7);
+  animation: coach-pulse 2.8s ease-in-out infinite;
+}
+
 /* Visible keyboard focus everywhere. */
 :focus-visible {
   outline: 2px solid var(--color-violet);

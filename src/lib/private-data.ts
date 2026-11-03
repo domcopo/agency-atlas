@@ -36,6 +36,10 @@ function readJson(file: string): unknown {
   }
 }
 
+function isDate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
 function slug(name: string): string {
   return name
     .toLowerCase()
@@ -74,9 +78,7 @@ export function parseRoster(input: unknown): LoadedRoster | null {
       Number.isFinite(monthly) &&
       monthly >= 0 &&
       monthly <= 100_000 &&
-      typeof start === "string" &&
-      /^\d{4}-\d{2}-\d{2}$/.test(start) &&
-      !Number.isNaN(Date.parse(start)) &&
+      isDate(start) &&
       STATUSES.includes(status as SubscriptionStatus);
     if (!valid) {
       skipped++;
@@ -103,6 +105,8 @@ export function parseRoster(input: unknown): LoadedRoster | null {
       listedIn,
       check: cleanText(item.check, 300) ?? undefined,
       services,
+      followUp: cleanText(item.followUp, 120) ?? undefined,
+      endDate: isDate(item.endDate) ? item.endDate : undefined,
     });
   }
 
