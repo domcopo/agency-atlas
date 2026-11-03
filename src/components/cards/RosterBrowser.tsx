@@ -7,13 +7,15 @@ import { AlertCircle, ChevronRight, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn, formatDate, formatUsdExact } from "@/lib/format";
-import type { RosterClient, SubscriptionStatus } from "@/lib/types";
-import { EmptyState, StatusPill } from "@/components/labels/labels";
+import type { HealthLevel, RosterClient, SubscriptionStatus } from "@/lib/types";
+import { EmptyState, HealthBadge, StatusPill } from "@/components/labels/labels";
 import { Chip, ChipRow, SearchBox } from "./Filters";
 
 export interface RosterRow extends RosterClient {
   tenure: string;
   tier: "high" | "mid" | "low";
+  /** Missing for past clients. */
+  health?: HealthLevel;
 }
 
 const groups: { id: string; title: string; hint: string; match: (c: RosterRow) => boolean }[] = [
@@ -24,7 +26,7 @@ const groups: { id: string; title: string; hint: string; match: (c: RosterRow) =
   { id: "canceled", title: "Canceled & expired", hint: "Past clients", match: (c) => c.status === "canceled" || c.status === "incomplete_expired" },
 ];
 
-type Filter = "all" | SubscriptionStatus | "check";
+type Filter = "all" | SubscriptionStatus | "check" | "at_risk" | "watch";
 
 export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
   const [query, setQuery] = useState("");
@@ -33,14 +35,19 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     return clients.filter((c) => {
-      if (filter === "check" && !c.check) return false;
-      if (filter !== "all" && filter !== "check" && c.status !== filter) return false;
+      if (filter === "check") {
+        if (!c.check) return false;
+      } else if (filter === "at_risk" || filter === "watch") {
+        if (c.health !== filter) return false;
+      } else if (filter !== "all" && c.status !== filter) return false;
       return !q || c.name.toLowerCase().includes(q);
     });
   }, [clients, query, filter]);
 
   const filters: { id: Filter; label: string }[] = [
     { id: "all", label: "All" },
+    { id: "at_risk", label: "At risk" },
+    { id: "watch", label: "Watch" },
     { id: "active", label: "Active" },
     { id: "paused", label: "Paused" },
     { id: "canceled", label: "Canceled" },
@@ -57,7 +64,13 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
               key={f.id}
               active={filter === f.id}
               onClick={() => setFilter(f.id)}
-              count={f.id === "check" ? clients.filter((c) => c.check).length : undefined}
+              count={
+                f.id === "check"
+                  ? clients.filter((c) => c.check).length
+                  : f.id === "at_risk" || f.id === "watch"
+                    ? clients.filter((c) => c.health === f.id).length
+                    : undefined
+              }
             >
               {f.label}
             </Chip>
@@ -96,8 +109,12 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
                         <span className="truncate">{c.name}</span>
                         {c.check && <AlertCircle aria-label="Needs checking" className="size-3.5 shrink-0 text-amber" />}
                       </p>
-                      <p className="text-xs text-muted">
-                        {c.tenure} · since {formatDate(c.startDate)}
+                      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
+                        {c.health && <HealthBadge level={c.health} />}
+                        {c.health && <span aria-hidden>·</span>}
+                        <span>
+                          {c.tenure} · since {formatDate(c.startDate)}
+                        </span>
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">

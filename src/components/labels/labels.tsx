@@ -4,7 +4,7 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn, describeChange, formatDate, formatUsd } from "@/lib/format";
-import type { Confidence, DataMode, Grade, Metric, Revenue, Source, SubscriptionStatus } from "@/lib/types";
+import type { Confidence, DataMode, Grade, HealthLevel, Metric, Revenue, Source, SubscriptionStatus } from "@/lib/types";
 
 const tone = {
   violet: "border-violet/30 bg-violet/12 text-violet",
@@ -195,4 +195,21 @@ const statusStyles: Record<SubscriptionStatus, { label: string; color: Tone }> =
 export function StatusPill({ status }: { status: SubscriptionStatus }) {
   const s = statusStyles[status];
   return <Pill color={s.color}>{s.label}</Pill>;
+}
+
+export const healthStyle: Record<HealthLevel, { label: string; dot: string; text: string; ring: string }> = {
+  healthy: { label: "Healthy", dot: "bg-lime", text: "text-lime", ring: "#d4f57a" },
+  watch: { label: "Watch", dot: "bg-amber", text: "text-amber", ring: "#fbbf4a" },
+  at_risk: { label: "At risk", dot: "bg-rose", text: "text-rose", ring: "#ff7a93" },
+};
+
+/** Small colored dot + word for a client's health. */
+export function HealthBadge({ level }: { level: HealthLevel }) {
+  const h = healthStyle[level];
+  return (
+    <span className={cn("inline-flex items-center gap-1 text-[11px] font-semibold", h.text)}>
+      <span aria-hidden className={cn("size-1.5 rounded-full", h.dot)} />
+      {h.label}
+    </span>
+  );
 }

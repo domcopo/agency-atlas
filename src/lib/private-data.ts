@@ -107,6 +107,7 @@ export function parseRoster(input: unknown): LoadedRoster | null {
       services,
       followUp: cleanText(item.followUp, 120) ?? undefined,
       endDate: isDate(item.endDate) ? item.endDate : undefined,
+      lastContact: isDate(item.lastContact) ? item.lastContact : undefined,
     });
   }
 

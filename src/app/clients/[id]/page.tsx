@@ -1,10 +1,12 @@
 import { AlertTriangle, BellRing, CalendarDays, Clock, Layers, ListChecks } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { CopyButton } from "@/components/cards/CopyButton";
 import { GlassCard } from "@/components/cards/GlassCard";
-import { EmptyState, Pill, Provenance, StatusPill } from "@/components/labels/labels";
+import { ScoreRing } from "@/components/labels/charts";
+import { EmptyState, Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getRoster, getRosterClient, getRosterSource, getToday, tierOf } from "@/lib/data-source";
+import { getClientHealth, getRoster, getRosterClient, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
@@ -32,6 +34,9 @@ export default async function ClientPage({ params }: Props) {
   if (!c) notFound();
   const today = getToday();
   const real = getRosterSource() === "private_file";
+  const health = getClientHealth(c);
+  const winBack = getWinBackList().find((w) => w.client.id === c.id);
+  const ci = health?.checkIn;
 
   return (
     <>
@@ -76,6 +81,49 @@ export default async function ClientPage({ params }: Props) {
           <CalendarDays aria-hidden className="size-4" /> Started {formatDate(c.startDate)}
         </div>
       </GlassCard>
+
+      {health && ci && (
+        <>
+          <SectionTitle>Health &amp; check-ins</SectionTitle>
+          <GlassCard className="space-y-3">
+            <div className="flex items-center gap-4">
+              <ScoreRing score={health.score} color={healthStyle[health.level].ring} label={`Health ${health.score} out of 100`} size={64} />
+              <div>
+                <p className={`text-lg font-bold ${healthStyle[health.level].text}`}>{healthStyle[health.level].label}</p>
+                <p className="text-xs text-muted">
+                  {ci.state === "never_logged"
+                    ? `No check-in logged · check in every ${ci.cadenceDays} days`
+                    : `Last check-in ${formatDate(ci.last!)} · next ${ci.state === "overdue" ? "was due" : "due"} ${formatDate(ci.due!)}`}
+                </p>
+              </div>
+            </div>
+            <ul className="space-y-1.5 border-t border-line pt-3 text-xs">
+              {health.factors.map((f) => (
+                <li key={f.label} className="flex justify-between gap-3">
+                  <span className="text-muted">{f.label}</span>
+                  <span className={f.impact < 0 ? "shrink-0 font-semibold text-rose" : "shrink-0 text-faint"}>
+                    {f.impact < 0 ? f.impact : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-faint">Starts at 100. Each risk takes points off. 75+ healthy, 50–74 watch, under 50 at risk.</p>
+          </GlassCard>
+        </>
+      )}
+
+      {winBack && (
+        <>
+          <SectionTitle>Win-back message</SectionTitle>
+          <GlassCard className="space-y-3">
+            <p className="text-sm text-muted">{winBack.script}</p>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-faint">Copy, edit, and send it yourself. The app never sends.</span>
+              <CopyButton text={winBack.script} label="Copy win-back message" />
+            </div>
+          </GlassCard>
+        </>
+      )}
 
       <SectionTitle>Services</SectionTitle>
       <GlassCard className="flex flex-wrap items-center gap-2 text-sm">

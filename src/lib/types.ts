@@ -286,6 +286,27 @@ export interface RosterClient {
   followUp?: string;
   /** Day they canceled or paused. Needed to chart clients lost by month. */
   endDate?: ISODate;
+  /** Last time someone on the team checked in with them. */
+  lastContact?: ISODate;
+}
+
+export type HealthLevel = "healthy" | "watch" | "at_risk";
+export type CheckInState = "on_track" | "due_soon" | "overdue" | "never_logged";
+
+export interface CheckIn {
+  /** How often to check in, from the services they buy. */
+  cadenceDays: number;
+  last?: ISODate;
+  due?: ISODate;
+  state: CheckInState;
+}
+
+/** A simple, explainable score. Every point lost has a reason the owner can read. */
+export interface ClientHealth {
+  score: number;
+  level: HealthLevel;
+  factors: { label: string; impact: number }[];
+  checkIn: CheckIn;
 }
 
 export interface RosterSummary {

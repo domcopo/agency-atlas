@@ -14,7 +14,6 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { AlertCard } from "@/components/cards/AlertCard";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { DetectionRadar } from "@/components/cards/DetectionRadar";
 import { FollowUpList } from "@/components/cards/FollowUpList";
@@ -220,7 +219,7 @@ export default function MissionControlPage() {
 
       <SectionTitle aside="Internal only, never sent">Top follow-ups today</SectionTitle>
       <FollowUpList
-        items={data.followUps}
+        items={data.followUps.slice(0, 3)}
         today={data.today}
         prospects={Object.fromEntries(
           data.followUps.map((f) => [
@@ -230,16 +229,9 @@ export default function MissionControlPage() {
         )}
       />
 
-      <SectionTitle>Alerts</SectionTitle>
-      <div className="space-y-2.5">
-        {data.alerts.map((a) => (
-          <AlertCard key={a.id} alert={a} />
-        ))}
-      </div>
-
       <SectionTitle>Recent activity</SectionTitle>
       <ol className="glass divide-y divide-line rounded-3xl">
-        {data.activity.slice(0, 7).map((item) => {
+        {data.activity.slice(0, 5).map((item) => {
           const { icon: Icon, color } = activityIcon[item.kind];
           const body = (
             <>

@@ -11,6 +11,9 @@ import {
   COACH_RULES,
   DATA_MODE,
   getCoachHints,
+  getCheckIn,
+  getClientHealth,
+  getWinBackList,
   getBusinesses,
   getCaseStudyHistory,
   getConversations,
@@ -348,5 +351,37 @@ describe("coaching glow", () => {
     expect(a).not.toContain("sam");
     expect(fingerprint(["wo_01", "d_fu_sam-lee"])).toBe(a); // order doesn't matter
     expect(fingerprint(["wo_01"])).not.toBe(a);
+  });
+});
+
+describe("check-ins, health and win-backs", () => {
+  const base = { id: "x", name: "Pat Example (fictional)", monthlyUsd: 300, startDate: "2025-01-10", status: "active" as const, listedIn: [], services: ["SEO" as const] };
+
+  it("check-in rhythm follows the service, and the shortest one wins", () => {
+    expect(getCheckIn({ ...base }).cadenceDays).toBe(30);
+    expect(getCheckIn({ ...base, services: ["SEO", "Ads"] }).cadenceDays).toBe(14);
+    expect(getCheckIn({ ...base }).state).toBe("never_logged");
+    expect(getCheckIn({ ...base, lastContact: "2026-09-01" }).state).toBe("overdue");
+    expect(getCheckIn({ ...base, lastContact: "2026-10-31" }).state).toBe("on_track");
+    expect(getCheckIn({ ...base, lastContact: "2026-10-05" }).state).toBe("due_soon");
+  });
+
+  it("health starts at 100, every lost point has a reason, and paused is at risk", () => {
+    const fine = getClientHealth({ ...base, lastContact: "2026-10-31" })!;
+    expect(fine.score).toBe(100);
+    expect(fine.level).toBe("healthy");
+    const paused = getClientHealth({ ...base, status: "paused" })!;
+    expect(paused.level).toBe("at_risk");
+    for (const h of [fine, paused]) {
+      expect(h.score).toBe(Math.max(0, 100 + h.factors.reduce((n, f) => n + f.impact, 0)));
+    }
+    expect(getClientHealth({ ...base, status: "canceled" })).toBeNull();
+  });
+
+  it("win-back list is only paused clients, and messages are copy-only text", () => {
+    for (const w of getWinBackList()) {
+      expect(w.client.status).toBe("paused");
+      expect(w.script).not.toMatch(/https?:\/\//); // no links in a message we suggest
+    }
   });
 });

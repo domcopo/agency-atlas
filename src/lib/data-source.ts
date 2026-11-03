@@ -31,6 +31,8 @@ import type {
   MissionControlData,
   MonthlyPoint,
   Prospect,
+  CheckIn,
+  ClientHealth,
   Detection,
   RosterClient,
   RosterSource,
@@ -174,6 +176,62 @@ export function getWinLoss(count = 6) {
 }
 
 // ---------------------------------------------------------------------------
+// Check-ins, client health and win-backs. Plain rules, easy to change here.
+// ---------------------------------------------------------------------------
+
+/** Days between check-ins. A client with several services uses the shortest. */
+export const CHECK_IN_DAYS = { Ads: 14, SEO: 30, Website: 60, unknown: 30 } as const;
+/** "Due soon" starts this many days before the due date. */
+const DUE_SOON_DAYS = 5;
+
+function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+export function getCheckIn(c: RosterClient): CheckIn {
+  const cadenceDays = Math.min(...(c.services.length ? c.services.map((s) => CHECK_IN_DAYS[s]) : [CHECK_IN_DAYS.unknown]));
+  if (!c.lastContact) return { cadenceDays, state: "never_logged" };
+  const due = addDays(c.lastContact, cadenceDays);
+  const left = daysBetween(TODAY, due);
+  return { cadenceDays, last: c.lastContact, due, state: due < TODAY ? "overdue" : left <= DUE_SOON_DAYS ? "due_soon" : "on_track" };
+}
+
+/** Health for active and paused clients (null for past clients). Starts at 100; each risk takes points off. */
+export function getClientHealth(c: RosterClient): ClientHealth | null {
+  if (c.status === "canceled" || c.status === "incomplete_expired") return null;
+  const checkIn = getCheckIn(c);
+  const factors: { label: string; impact: number }[] = [];
+  if (c.status === "paused") factors.push({ label: "Paused: not paying right now", impact: -50 });
+  if (checkIn.state === "overdue") factors.push({ label: `Check-in overdue (every ${checkIn.cadenceDays} days)`, impact: -25 });
+  if (checkIn.state === "never_logged") factors.push({ label: "No check-in logged yet", impact: -10 });
+  const months = monthsBetween(c.startDate, TODAY);
+  if (months < 2) factors.push({ label: "New client: the first 2 months need extra care", impact: -10 });
+  if (c.followUp) factors.push({ label: `Open follow-up: ${c.followUp}`, impact: -10 });
+  if (c.check) factors.push({ label: "Record needs checking", impact: -5 });
+  if (months >= 12) factors.push({ label: `Long-term client (${months} months)`, impact: 0 });
+  factors.push({ label: "Lead results: not connected yet (Phase 3)", impact: 0 });
+  const score = Math.max(0, 100 + factors.reduce((n, f) => n + f.impact, 0));
+  return { score, level: score >= 75 ? "healthy" : score >= 50 ? "watch" : "at_risk", factors, checkIn };
+}
+
+/** Paused clients, biggest first, with a copy-only message to start the conversation. */
+export function getWinBackList() {
+  return roster()
+    .clients.filter((c) => c.status === "paused")
+    .sort((a, b) => b.monthlyUsd - a.monthlyUsd)
+    .map((c) => {
+      const first = c.name.split(/\s+/)[0] ?? c.name;
+      const service = c.services[0] ?? "marketing";
+      return {
+        client: c,
+        script: `Hi ${first}, it's been a little while since we paused your ${service} work, and I wanted to check in. How's business going right now? If it would help, I can put together a quick update on where things stand and a simple plan to pick back up. No pressure either way.`,
+      };
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Team
 // ---------------------------------------------------------------------------
 
@@ -254,6 +312,24 @@ export function getDetections(): Detection[] {
   if (seoNoAds > 0)
     out.push({ id: "d_ads", kind: "opportunity", title: `Ads upsell: ${seoNoAds} SEO clients`, why: "They already trust you with SEO and don't run ads with you yet.", closeness: 0.3, confidence: 0.35, href: "/clients", isSynthetic: !real });
 
+  // Real list: health and check-ins.
+  const live = clients.filter((c) => c.status === "active");
+  for (const c of live) {
+    const h = getClientHealth(c);
+    if (h?.level === "at_risk")
+      out.push({ id: `d_risk_${c.id}`, kind: "problem", title: `At risk: ${c.name}`, why: `Health ${h.score}/100. ${h.factors.filter((f) => f.impact < 0).map((f) => f.label).join(". ")}.`, closeness: 0.8, confidence: 0.7, href: `/clients/${c.id}`, isSynthetic: !real });
+    if (h?.checkIn.state === "overdue")
+      out.push({ id: `d_ci_${c.id}`, kind: "attention", title: `Check in: ${c.name}`, why: `Due ${h.checkIn.due}. Check in every ${h.checkIn.cadenceDays} days.`, closeness: 0.75, confidence: 0.9, href: `/clients/${c.id}`, isSynthetic: !real });
+  }
+  const neverLogged = live.filter((c) => !c.lastContact).length;
+  if (neverLogged > 0)
+    out.push({ id: "d_ci_unknown", kind: "attention", title: `${neverLogged} clients have no check-in logged`, why: "Log the last time you talked so reminders can start. Until the database is set up, tell Claude the dates.", closeness: 0.4, confidence: 0.9, href: "/clients#checkins", isSynthetic: !real });
+  const onboarding = live.filter((c) => daysBetween(c.startDate, TODAY) <= 30).length;
+  if (onboarding > 0)
+    out.push({ id: "d_onboard", kind: "attention", title: `${onboarding} new clients in their first month`, why: "Make sure onboarding and the first work orders are moving.", closeness: 0.6, confidence: 0.7, href: "/clients", isSynthetic: !real });
+  if (roster().skipped > 0)
+    out.push({ id: "d_skip", kind: "problem", title: `${roster().skipped} client records couldn't be read`, why: "They were left out. Check the private client file.", closeness: 0.95, confidence: 1, href: "/safety", isSynthetic: false });
+
   // Sample work orders: urgent = red, overdue = amber.
   for (const w of workOrders.filter((x) => x.status !== "done")) {
     if (w.priority === "urgent")
@@ -301,13 +377,16 @@ export function getCoachHints() {
   const toWork = getProspectsToWork();
   const replies = conversations.filter((c) => c.needsReply);
   const work = workOrders.filter((w) => w.status !== "done" && (w.priority === "urgent" || w.due < TODAY));
-  const clientItems = clients.filter((c) => c.check || (c.followUp && c.status !== "canceled"));
+  const clientItems = clients.filter((c) => {
+    const h = getClientHealth(c);
+    return c.check || (c.followUp && h) || h?.level === "at_risk" || h?.checkIn.state === "overdue";
+  });
   return {
     radar: hint("radar", worth.map((d) => d.id), `${worth.length} worth checking`),
     leads: hint("leads", toWork.overdue.map((p) => p.id), `${toWork.overdue.length} overdue follow-ups`),
     chats: hint("chats", replies.map((c) => c.id), `${replies.length} need a reply`),
     tabs: {
-      "/clients": hint("clients", clientItems.map((c) => c.id), "Records to check or follow up"),
+      "/clients": hint("clients", clientItems.map((c) => c.id), "At-risk clients, check-ins and records to check"),
       "/sales": hint("sales", [...toWork.overdue.map((p) => p.id), ...replies.map((c) => c.id)], "Overdue follow-ups and replies"),
       "/work": hint("work", work.map((w) => w.id), "Urgent or overdue work orders"),
     } as Record<string, CoachHint>,
