@@ -113,7 +113,8 @@ each morning.
   free plan doesn't allow business use). Keys move into the host's secret settings.
 - **Upgrade Supabase to Pro ($25/month)** for daily backups before the team relies on
   it. (Reminder requested by the owner.)
-- Add team members (managers first), each with two-factor.
+- **Add team logins** (postponed until hosting, at the owner's request): four team
+  members, managers first, each with two-factor. Steps: `docs/TEAM_ACCESS.md`.
 - Morning job: GHL sync, then the AI briefing, ready when you open the app.
 - Release checklist: secrets, access rules, backups, monitoring, error alerts, rollback.
 
