@@ -34,26 +34,26 @@ locally (43 database break-in checks); the owner still has to set it up and run
 
 ---
 
-## Phase 3 — GoHighLevel, read-only (needs approval)
+## Phase 3 — GoHighLevel, read-only (approved 2026-11-04, built)
 
 **Scope**
-- Start with ONE location: the agency's own sub-account (your sales pipeline and
-  conversations with prospects/clients). Client sub-accounts come later, one at a time.
+- Start with ONE location: the agency's own sub-account (your sales pipeline).
+  Client sub-accounts come later, one at a time.
 - A Private Integration token created in that sub-account with **only `.readonly`
-  scopes**: contacts, opportunities, calendars/events, locations. **No message bodies**
-  at first (counts, dates and stages only).
+  scopes**: opportunities, calendars, calendars/events, locations. No contacts, no
+  conversations and no message text in this first version (stages, values, dates only).
 - One small server-only module (`src/lib/ghl/`) that can only send GET requests to a
   fixed list of addresses. Tests fail if any other method or address appears.
 - A **"Sync from GoHighLevel"** button (owner only) copies the read results into new
   Supabase tables with the same security rules + two-factor requirement.
-- Sales, Home radar and client pages use the synced data instead of samples.
+- Sales shows the live pipeline from the synced copy. (Home radar and AI use it next.)
 
 **What the owner does**
 1. In GoHighLevel, in the agency's own sub-account: **Settings → Private Integrations →
    Create new integration**. Name it "Agency Atlas (read-only)". Tick only the
    `.readonly` scopes listed above. Copy the token.
 2. Add two lines to `.env.local` (same way as the Supabase lines):
-   `GHL_PRIVATE_TOKEN=...` and `GHL_LOCATION_ID=...` (the sub-account ID, shown in
+   `GHL_READONLY_TOKEN=...` and `GHL_LOCATION_ID=...` (the sub-account ID, shown in
    Settings → Business Profile).
 3. Run one new SQL file in the Supabase SQL Editor (new tables + rules).
 

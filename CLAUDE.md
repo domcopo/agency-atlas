@@ -2,7 +2,7 @@
 
 Internal, mobile-first agency command center (Next.js web app) for a small marketing agency (SEO, ads, website builds). Bottom tabs: Home · Clients · Sales · Work · Growth, plus a Data Safety screen (shield icon on Home).
 
-**Current phase: Phase 2 (approved): Supabase database + sign-in.** Data comes from the user's own NEW Supabase project when `.env.local` has `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` (server-only names); otherwise the app falls back to the private file / demo list. Still no GoHighLevel, no AI, no hosting. Do not start Phase 3+ without the user's explicit approval.
+**Current phase: Phase 2 (approved): Supabase database + sign-in.** Data comes from the user's own NEW Supabase project when `.env.local` has `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` (server-only names); otherwise the app falls back to the private file / demo list. Phase 3 (GoHighLevel read-only) approved 2026-11-04 and built: `src/lib/ghl/client.ts` is the ONLY file that may contact GHL or make network calls (GET only, allowlisted paths, tests enforce); the owner-only Sync copies pipeline + appointment metadata into `ghl_*` tables (`0003`). Setup: `docs/PHASE3_SETUP.md`. Still no AI, no hosting. Do not start Phase 4+ without explicit approval.
 
 Phase 2 rules:
 - Only `src/lib/supabase/server.ts` reads Supabase settings; it refuses secret/service-role keys. No admin key anywhere.

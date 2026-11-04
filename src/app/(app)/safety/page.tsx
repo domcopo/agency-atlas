@@ -13,9 +13,10 @@ import type { Metadata } from "next";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { getGhlSummary, getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
 import { hasPrivateRoster } from "@/lib/private-data";
 import { ImportButton } from "@/components/forms/ImportButton";
+import { SyncButton } from "@/components/forms/SyncButton";
 import { cn } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Data Safety" };
@@ -34,6 +35,8 @@ export default async function SafetyPage() {
   const db = usesDatabase();
   const member = db ? await getMember() : null;
   const privateFile = hasPrivateRoster();
+  const ghl = await getGhlSummary();
+  const ghlStatus = !ghl.configured ? "Not connected" : !db ? "Needs the database" : !ghl.tablesReady ? "Run setup SQL (0003)" : ghl.lastSync ? "Connected · read-only" : "Ready to sync";
 
   return (
     <>
@@ -42,7 +45,7 @@ export default async function SafetyPage() {
       <GlassCard className="space-y-4">
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted">GoHighLevel</p>
-          <Pill>Not connected (Phase 3)</Pill>
+          <Pill color={ghl.lastSync ? "teal" : "neutral"}>{ghlStatus}</Pill>
         </div>
         <div className="flex items-start gap-3 rounded-2xl border border-lime/30 bg-lime/8 p-3.5">
           <ShieldCheck aria-hidden className="mt-0.5 size-5 shrink-0 text-lime" />
@@ -58,6 +61,19 @@ export default async function SafetyPage() {
           <span className="text-muted">Places this app can write to in GHL</span>
           <span className="font-display text-lg font-bold text-lime">{s.ghlWriteTargets.length}</span>
         </div>
+        {ghl.configured && (
+          <ul className="space-y-1 text-xs text-muted">
+            <li>• Reads only: pipeline (opportunities) and appointment times. No contact details or message text.</li>
+            <li>• Every request is a GET to a short allowed list; the token only has read-only permissions.</li>
+            {ghl.lastSync && (
+              <li>
+                • Last sync: {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(ghl.lastSync.ranAt))}
+                {ghl.lastSync.locationName ? ` from ${ghl.lastSync.locationName}` : ""}: {ghl.lastSync.opportunities} opportunities, {ghl.lastSync.appointments} appointments.
+              </li>
+            )}
+          </ul>
+        )}
+        {db && member?.role === "owner" && ghl.configured && ghl.tablesReady && <SyncButton />}
       </GlassCard>
 
       <SectionTitle>Database</SectionTitle>
@@ -73,7 +89,7 @@ export default async function SafetyPage() {
           </p>
         )}
         <ul className="space-y-1 text-xs text-muted">
-          <li>• Signed-out visitors and people not on the team get nothing (tested on a local copy, 34 checks).</li>
+          <li>• Signed-out visitors and people not on the team get nothing (break-in tested on a local copy).</li>
           <li>• Owner: everything. Managers: read clients, log check-ins. Developers: nothing yet.</li>
           <li>• No admin key in the app. Nothing can be deleted through the app.</li>
         </ul>
@@ -118,7 +134,7 @@ export default async function SafetyPage() {
       <div className="space-y-2.5">
         {s.connections.map((c) => {
           const Icon = connectionIcon[c.id] ?? Database;
-          const connected = c.id === "conn_supabase" && roster.source === "database";
+          const connected = (c.id === "conn_supabase" && roster.source === "database") || (c.id === "conn_ghl_api" && Boolean(ghl.lastSync));
           return (
             <GlassCard key={c.id} className="flex gap-3">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white/5 text-muted">
@@ -131,7 +147,7 @@ export default async function SafetyPage() {
                 </div>
                 <p className="mt-1 text-xs text-muted">{c.note}</p>
                 <p className="mt-1.5 text-[11px] text-faint">
-                  {connected ? "Phase 2 · sign-in required, no admin key" : <>Planned for Phase {c.plannedPhase} · Scopes: {c.scopes.length ? c.scopes.join(", ") : "none"}</>}
+                  {connected ? (c.id === "conn_ghl_api" ? "Phase 3 · GET only · .readonly scopes" : "Phase 2 · sign-in required, no admin key") : <>Planned for Phase {c.plannedPhase} · Scopes: {c.scopes.length ? c.scopes.join(", ") : "none"}</>}
                 </p>
               </div>
             </GlassCard>

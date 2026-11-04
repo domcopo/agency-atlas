@@ -58,6 +58,10 @@ insert into public.team_members (user_id, display_name, role) values
 insert into public.clients (id, slug, name, monthly_usd, start_date, status, services) values
   ('00000000-0000-0000-0000-0000000000c1', 'pat-example', 'Pat Example (fictional)', 300, '2026-01-05', 'active', '{SEO}');
 insert into public.staff (name, role) values ('Dev A (test)', 'seo_developer');
+insert into public.ghl_opportunities (ghl_id, name, status, monetary_value) values
+  ('opp1', 'Sample Roofing (fictional)', 'open', 500);
+insert into public.ghl_appointments (ghl_id, calendar_name, status) values
+  ('appt1', 'Discovery calls (sample)', 'confirmed');
 
 -- ---------------------------------------------------------------------------
 -- 1. Signed out (anon): nothing at all.
@@ -152,7 +156,60 @@ select test.expect('select * from public.clients', 0, 'manager with no two-facto
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7. Every table has RLS on, and anon has no table permissions at all.
+-- 7. GoHighLevel copies: owner syncs, managers read, nobody deletes.
+-- ---------------------------------------------------------------------------
+begin;
+set local role anon;
+select test.expect('select * from public.ghl_opportunities', -1, 'signed out cannot read GHL opportunities');
+select test.expect('select * from public.ghl_appointments', -1, 'signed out cannot read GHL appointments');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.ghl_opportunities', 0, 'stranger sees no GHL opportunities');
+select test.expect($$insert into public.ghl_syncs (opportunities, appointments) values (0, 0)$$, -1, 'stranger cannot record a sync');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.ghl_opportunities', 0, 'developer sees no GHL opportunities');
+select test.expect('select * from public.ghl_appointments', 0, 'developer sees no GHL appointments');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.ghl_opportunities', 1, 'manager reads GHL opportunities');
+select test.expect('select * from public.ghl_appointments', 1, 'manager reads GHL appointments');
+select test.expect($$update public.ghl_opportunities set monetary_value = 1$$, 0, 'manager cannot change GHL copies');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, status) values ('opp2', 'open')$$, -1, 'manager cannot add GHL copies');
+select test.expect($$insert into public.ghl_syncs (opportunities, appointments) values (0, 0)$$, -1, 'manager cannot record a sync');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.ghl_opportunities (ghl_id, status) values ('opp2', 'won') on conflict (ghl_id) do update set status = excluded.status$$, 1, 'owner sync adds an opportunity');
+select test.expect($$update public.ghl_opportunities set stage_name = 'Proposal' where ghl_id = 'opp1'$$, 1, 'owner sync updates an opportunity');
+select test.expect($$update public.ghl_opportunities set status = 'deleted' where ghl_id = 'opp1'$$, -2, 'unknown opportunity status is rejected');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, status) values ('bad id; drop', 'open')$$, -2, 'odd GHL ids are rejected');
+select test.expect($$insert into public.ghl_syncs (opportunities, appointments) values (2, 1)$$, 1, 'owner records a sync');
+select test.expect($$insert into public.ghl_syncs (opportunities, appointments, ran_by) values (2, 1, '00000000-0000-0000-0000-0000000000a2')$$, -1, 'owner cannot record a sync as someone else');
+select test.expect($$delete from public.ghl_opportunities$$, -1, 'GHL copies cannot be deleted');
+select test.expect($$update public.ghl_syncs set opportunities = 0$$, -1, 'sync history cannot be rewritten');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.ghl_opportunities', 0, 'owner without two-factor sees no GHL opportunities');
+select test.expect($$insert into public.ghl_syncs (opportunities, appointments) values (0, 0)$$, -1, 'owner without two-factor cannot record a sync');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
 declare bad text;

@@ -19,6 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
+import { isGhlConfigured } from "@/lib/ghl/client";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
 import { cache } from "react";
@@ -41,6 +42,7 @@ import type {
   RosterSource,
   RosterSummary,
   SafetyStatus,
+  GhlSummary,
   SubscriptionStatus,
   SurveyQuestion,
   SurveyResponse,
@@ -628,3 +630,74 @@ export function getSafetyStatus(): SafetyStatus {
 export function getToday(): string {
   return today();
 }
+
+// ---------------------------------------------------------------------------
+// GoHighLevel (read-only copies, Phase 3)
+// ---------------------------------------------------------------------------
+
+const emptyGhl = (configured: boolean, tablesReady: boolean): GhlSummary => ({
+  configured,
+  tablesReady,
+  lastSync: null,
+  open: { count: 0, value: 0 },
+  byStage: [],
+  wonThisMonth: { count: 0, value: 0 },
+  lostThisMonth: 0,
+  newThisMonth: 0,
+  upcoming7: 0,
+  showed30: 0,
+  noShows30: 0,
+});
+
+/** Summary of the synced GHL copies. Read as the signed-in person (security rules apply). */
+export const getGhlSummary = cache(async (now: Date = new Date()): Promise<GhlSummary> => {
+  const configured = isGhlConfigured();
+  if (!usesDatabase()) return emptyGhl(configured, false);
+  const db = await createDatabaseClient();
+  const [syncs, opps, appts] = await Promise.all([
+    db.from("ghl_syncs").select("ran_at, location_name, opportunities, appointments").order("ran_at", { ascending: false }).limit(1),
+    db.from("ghl_opportunities").select("status, stage_name, monetary_value, ghl_created_at, status_changed_at").limit(5000),
+    db.from("ghl_appointments").select("status, starts_at").limit(5000),
+  ]);
+  if (syncs.error) return emptyGhl(configured, false); // tables not created yet
+  const s = emptyGhl(configured, true);
+  const last = syncs.data?.[0];
+  if (last) s.lastSync = { ranAt: last.ran_at, locationName: last.location_name, opportunities: last.opportunities, appointments: last.appointments };
+
+  const monthStart = `${today().slice(0, 7)}-01`;
+  const stages = new Map<string, { count: number; value: number }>();
+  for (const o of opps.data ?? []) {
+    const value = Number(o.monetary_value ?? 0);
+    if (o.status === "open") {
+      s.open.count++;
+      s.open.value += value;
+      const key = o.stage_name ?? "No stage";
+      const st = stages.get(key) ?? { count: 0, value: 0 };
+      st.count++;
+      st.value += value;
+      stages.set(key, st);
+    }
+    const changed = (o.status_changed_at ?? "").slice(0, 10);
+    if (o.status === "won" && changed >= monthStart) {
+      s.wonThisMonth.count++;
+      s.wonThisMonth.value += value;
+    }
+    if (o.status === "lost" && changed >= monthStart) s.lostThisMonth++;
+    if ((o.ghl_created_at ?? "").slice(0, 10) >= monthStart) s.newThisMonth++;
+  }
+  s.byStage = [...stages.entries()].map(([stage, v]) => ({ stage, ...v })).sort((a, b) => b.count - a.count).slice(0, 6);
+
+  const t = now.getTime();
+  const day = 24 * 60 * 60 * 1000;
+  for (const a of appts.data ?? []) {
+    const at = a.starts_at ? Date.parse(a.starts_at) : NaN;
+    if (Number.isNaN(at)) continue;
+    const status = (a.status ?? "").toLowerCase();
+    if (at >= t && at <= t + 7 * day && status !== "cancelled" && status !== "invalid") s.upcoming7++;
+    if (at < t && at >= t - 30 * day) {
+      if (status === "showed") s.showed30++;
+      if (status === "noshow") s.noShows30++;
+    }
+  }
+  return s;
+});

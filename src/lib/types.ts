@@ -528,3 +528,18 @@ export interface AtlasQuestion {
   /** For "check" questions: what the two lists disagreed on. */
   note?: string;
 }
+
+/** What the app knows from the read-only GoHighLevel copies (Phase 3). */
+export interface GhlSummary {
+  configured: boolean; // token + location set on this Mac
+  tablesReady: boolean; // 0003 migration has been run
+  lastSync: { ranAt: string; locationName: string | null; opportunities: number; appointments: number } | null;
+  open: { count: number; value: number };
+  byStage: { stage: string; count: number; value: number }[];
+  wonThisMonth: { count: number; value: number };
+  lostThisMonth: number;
+  newThisMonth: number;
+  upcoming7: number;
+  showed30: number;
+  noShows30: number;
+}

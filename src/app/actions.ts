@@ -4,12 +4,14 @@
 //   1. checks who is signed in (verified by Supabase, never trusted from the browser)
 //   2. checks the input strictly (dates, lengths, allowed values)
 //   3. writes AS that person, so the database's row-level security has the final say.
-// Nothing here can delete anything, and nothing here talks to GoHighLevel.
+// Nothing here can delete anything. The GoHighLevel sync only READS from GHL
+// (through the GET-only module) and writes copies into this app's own database.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getAtlasQuestions } from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
+import { GhlError, isGhlConfigured, readAppointments, readLocationName, readOpportunities, type GhlAppointment, type GhlOpportunity } from "@/lib/ghl/client";
 import { createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -241,5 +243,77 @@ export async function importPrivateData(): Promise<{ error?: string; message?: s
   revalidatePath("/", "layout");
   return {
     message: `Imported ${rows.length} clients${roster.skipped ? ` (${roster.skipped} skipped by checks)` : ""} and ${team.length} team members. The database now has ${count ?? "?"} clients.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GoHighLevel sync (owner only): READS from GHL, writes copies into OUR database.
+// Nothing is ever sent to GoHighLevel; src/lib/ghl/client.ts can only send GETs.
+// ---------------------------------------------------------------------------
+
+export async function syncFromGhl(): Promise<{ error?: string; message?: string }> {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can sync." };
+  if (!isGhlConfigured()) return { error: "GoHighLevel isn't set up on this Mac yet." };
+
+  let locationName: string | null;
+  let opportunities: GhlOpportunity[];
+  let appointments: GhlAppointment[];
+  try {
+    locationName = await readLocationName();
+    opportunities = await readOpportunities();
+    appointments = await readAppointments();
+  } catch (err) {
+    const message = err instanceof GhlError ? err.message : "Couldn't read from GoHighLevel.";
+    console.warn(`GHL sync stopped: ${err instanceof GhlError ? err.status : "unknown"}`);
+    return { error: `${message} Nothing was changed.` };
+  }
+
+  const db = await createDatabaseClient();
+  const now = new Date().toISOString();
+  if (opportunities.length) {
+    const { error } = await db.from("ghl_opportunities").upsert(
+      opportunities.map((o) => ({
+        ghl_id: o.ghlId,
+        name: o.name,
+        pipeline_name: o.pipelineName,
+        stage_name: o.stageName,
+        status: o.status,
+        monetary_value: o.monetaryValue,
+        source: o.source,
+        ghl_created_at: o.createdAt,
+        ghl_updated_at: o.updatedAt,
+        status_changed_at: o.statusChangedAt,
+        synced_at: now,
+      })),
+      { onConflict: "ghl_id" },
+    );
+    if (error) {
+      console.warn(`GHL opportunities save refused: ${error.code} ${error.message}`);
+      return { error: `Read from GoHighLevel, but saving failed (code ${error.code ?? "?"}).` };
+    }
+  }
+  if (appointments.length) {
+    const { error } = await db.from("ghl_appointments").upsert(
+      appointments.map((a) => ({
+        ghl_id: a.ghlId,
+        calendar_name: a.calendarName,
+        status: a.status,
+        starts_at: a.startsAt,
+        ends_at: a.endsAt,
+        ghl_created_at: a.createdAt,
+        synced_at: now,
+      })),
+      { onConflict: "ghl_id" },
+    );
+    if (error) {
+      console.warn(`GHL appointments save refused: ${error.code} ${error.message}`);
+      return { error: `Opportunities saved, but appointments failed (code ${error.code ?? "?"}).` };
+    }
+  }
+  await db.from("ghl_syncs").insert({ location_name: locationName, opportunities: opportunities.length, appointments: appointments.length });
+  revalidatePath("/", "layout");
+  return {
+    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. Nothing in GoHighLevel was changed.`,
   };
 }

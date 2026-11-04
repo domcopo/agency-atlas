@@ -49,23 +49,25 @@ describe("Phase 1 guardrails", () => {
     expect(contents.length).toBeGreaterThan(10);
   });
 
-  it("never references GoHighLevel API hosts", () => {
-    expect(
-      findMatches([/leadconnectorhq\.com/i, /gohighlevel\.com/i, /msgsndr\.com/i]),
-    ).toEqual([]);
+  // Phase 3: exactly ONE file may contact GoHighLevel or make network calls: the
+  // read-only module. It is checked line by line in "GoHighLevel read-only" below.
+  const GHL_MODULE = "src/lib/ghl/client.ts";
+
+  it("only the read-only GoHighLevel module references GoHighLevel API hosts", () => {
+    const hits = findMatches([/leadconnectorhq\.com/i, /gohighlevel\.com/i, /msgsndr\.com/i]);
+    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`))).toEqual([]);
   });
 
-  it("makes no network calls from app code", () => {
-    expect(
-      findMatches([
-        /\bfetch\s*\(/,
-        /XMLHttpRequest/,
-        /new\s+WebSocket\s*\(/,
-        /new\s+EventSource\s*\(/,
-        /sendBeacon/,
-        /\baxios\b/,
-      ]),
-    ).toEqual([]);
+  it("makes no network calls from app code (except the read-only GoHighLevel module)", () => {
+    const hits = findMatches([
+      /\bfetch\s*\(/,
+      /XMLHttpRequest/,
+      /new\s+WebSocket\s*\(/,
+      /new\s+EventSource\s*\(/,
+      /sendBeacon/,
+      /\baxios\b/,
+    ]);
+    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`))).toEqual([]);
   });
 
   it("contains no write-style HTTP methods", () => {
@@ -261,5 +263,48 @@ describe("database safety (Phase 2)", () => {
       expect(new RegExp(`alter table ${t.replace(".", "\\.")}\\s+enable row level security`).test(sql), t).toBe(true);
     }
     expect(/grant [^;]* to [^;]*\banon\b/i.test(sql)).toBe(false);
+  });
+});
+
+describe("GoHighLevel read-only (Phase 3)", () => {
+  const GHL_MODULE = "src/lib/ghl/client.ts";
+  const ghl = readFileSync(join(ROOT, GHL_MODULE), "utf8");
+
+  it("only the GoHighLevel module reads the GHL settings", () => {
+    const readers = contents.filter(({ text }) => /process\.env\.GHL_/.test(text)).map(({ file }) => file);
+    expect(readers).toEqual([GHL_MODULE]);
+  });
+
+  it("GHL settings are never exposed to the browser", () => {
+    expect(findMatches([/NEXT_PUBLIC_GHL/])).toEqual([]);
+  });
+
+  it("the module makes exactly one network call, and it is a GET", () => {
+    expect(ghl.match(/\bfetch\s*\(/g)?.length).toBe(1);
+    const methods = [...ghl.matchAll(/method\s*:\s*["'`]([A-Za-z]+)["'`]/g)].map((m) => m[1]);
+    expect(methods).toEqual(["GET"]);
+    expect(ghl).not.toMatch(/\b(POST|PUT|PATCH|DELETE)\b/);
+    expect(ghl).toMatch(/redirect:\s*"error"/); // never follows a redirect elsewhere
+  });
+
+  it("the module talks to one fixed host and only allowlisted read addresses", () => {
+    const hosts = [...ghl.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]);
+    expect(new Set(hosts)).toEqual(new Set(["https://services.leadconnectorhq.com"]));
+    const allowed = ghl.slice(ghl.indexOf("const ALLOWED"), ghl.indexOf("];", ghl.indexOf("const ALLOWED")));
+    const paths = [...allowed.matchAll(/pattern: \/\^(\\\/[^$]*)\$\//g)].map((m) => (m[1] ?? "").replace(/\\\//g, "/"));
+    expect(paths.sort()).toEqual(
+      ["/calendars/", "/calendars/events", "/locations/[A-Za-z0-9]+", "/opportunities/pipelines", "/opportunities/search"].sort(),
+    );
+  });
+
+  it("no GoHighLevel SDK or write-capable package is installed", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
+    expect(Object.keys(pkg.dependencies ?? {}).filter((d) => /highlevel|leadconnector|ghl/i.test(d))).toEqual([]);
+  });
+
+  it("only server code imports the GoHighLevel module", () => {
+    const importers = contents.filter(({ text }) => /from\s+["']@\/lib\/ghl\/client["']/.test(text)).map(({ file }) => file).sort();
+    expect(importers).toEqual(["src/app/actions.ts", "src/lib/data-source.ts"]);
+    for (const f of importers) expect(readFileSync(join(ROOT, f), "utf8")).not.toMatch(/^["']use client["']/m);
   });
 });

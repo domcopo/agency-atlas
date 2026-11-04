@@ -1,6 +1,7 @@
 import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 import { ConversationRow } from "@/components/cards/ConversationRow";
+import { GhlPipelineCard } from "@/components/cards/GhlPipelineCard";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard, stageInfo } from "@/components/cards/ProspectCard";
@@ -10,6 +11,7 @@ import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
   getAgencySalesKpis,
   getConversations,
+  getGhlSummary,
   getProspects,
   getRosterSource,
   getToday,
@@ -36,6 +38,7 @@ export default async function SalesPage() {
   const pipelineHigh = open.reduce((n, p) => n + p.estMonthlyUsd.high, 0);
   const conversations = getConversations();
   const real = (await getRosterSource()) !== "demo";
+  const ghl = await getGhlSummary();
 
   return (
     <>
@@ -69,6 +72,8 @@ export default async function SalesPage() {
       <p className="mt-1.5 px-1 text-[11px] text-faint">
         Lost = canceled or expired. Paused clients are shown separately because they may come back.
       </p>
+
+      <GhlPipelineCard ghl={ghl} />
 
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
       <div className="grid grid-cols-2 gap-2.5">
