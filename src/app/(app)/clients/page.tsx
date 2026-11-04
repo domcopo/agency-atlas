@@ -12,10 +12,10 @@ import type { HealthLevel } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Clients" };
 
-export default function ClientsPage() {
+export default async function ClientsPage() {
   const today = getToday();
-  const summary = getRosterSummary();
-  const withHealth = getRoster().map((c) => ({ c, h: getClientHealth(c) }));
+  const summary = await getRosterSummary();
+  const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c) }));
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
@@ -28,14 +28,14 @@ export default function ClientsPage() {
     .filter(({ c, h }) => c.status === "active" && (h?.checkIn.state === "overdue" || h?.checkIn.state === "due_soon"))
     .sort((a, b) => (a.h!.checkIn.due ?? "").localeCompare(b.h!.checkIn.due ?? ""));
   const neverLogged = withHealth.filter(({ c, h }) => c.status === "active" && h?.checkIn.state === "never_logged").length;
-  const winBack = getWinBackList();
+  const winBack = await getWinBackList();
 
   return (
     <>
       <PageHeader
         title="Clients"
         subtitle={`${summary.activeCount} active · ${summary.total} total`}
-        action={<Provenance kind={summary.source === "private_file" ? "real" : "demo"} />}
+        action={<Provenance kind={summary.source !== "demo" ? "real" : "demo"} />}
       />
 
       <GlassCard className="grid grid-cols-3 gap-2 text-center">
@@ -92,7 +92,7 @@ export default function ClientsPage() {
             {neverLogged > 0 && (
               <>
                 <span className="font-semibold text-amber">{neverLogged} active clients have no check-in logged.</span>{" "}
-                Until the database is set up, tell Claude the last date you talked to each.{" "}
+                Open a client to log the last time you talked, or answer Atlas asks on Home.{" "}
               </>
             )}
             Rhythm: Ads every {CHECK_IN_DAYS.Ads} days, SEO every {CHECK_IN_DAYS.SEO}, websites every{" "}
@@ -139,7 +139,7 @@ export default function ClientsPage() {
       </div>
 
       <p className="mt-6 px-1 text-[11px] text-faint">
-        {summary.source === "private_file"
+        {summary.source !== "demo"
           ? "From your private client file on this Mac. It never goes to Git or GitHub. Billing will verify these numbers once connected."
           : "Demo list. Add private-data/clients.json on this Mac to see your real clients."}
       </p>

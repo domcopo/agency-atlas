@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { DetectionRadar } from "@/components/cards/DetectionRadar";
 import { FollowUpList } from "@/components/cards/FollowUpList";
@@ -24,6 +25,7 @@ import { ProspectCard } from "@/components/cards/ProspectCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
+  getAtlasQuestions,
   getConversations,
   getCoachHints,
   getDetections,
@@ -57,16 +59,16 @@ function SeeAll({ href, children }: { href: string; children: string }) {
   );
 }
 
-export default function MissionControlPage() {
-  const data = getMissionControl();
-  const summary = getRosterSummary();
+export default async function MissionControlPage() {
+  const data = await getMissionControl();
+  const summary = await getRosterSummary();
   const prospects = getProspects();
   const prospectById = Object.fromEntries(prospects.map((p) => [p.id, p]));
   const toWork = getProspectsToWork();
   const needsReply = getConversations().filter((c) => c.needsReply);
   const trends = getTrends();
-  const real = summary.source === "private_file";
-  const coach = getCoachHints();
+  const real = summary.source !== "demo";
+  const coach = await getCoachHints();
 
   const tabs = [
     {
@@ -214,8 +216,10 @@ export default function MissionControlPage() {
       <HomeTabs tabs={tabs} />
 
       <div className="mt-3">
-        <DetectionRadar detections={getDetections()} coachSignature={coach.radar.signature} />
+        <DetectionRadar detections={await getDetections()} coachSignature={coach.radar.signature} />
       </div>
+
+      <AtlasAsks questions={await getAtlasQuestions(3)} today={data.today} />
 
       <SectionTitle aside="Internal only, never sent">Top follow-ups today</SectionTitle>
       <FollowUpList

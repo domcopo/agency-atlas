@@ -44,7 +44,13 @@ const trends = getTrends();
 const insights = getInsights();
 const questions = getSurveyQuestions();
 const answers = getSurveyResponses();
-const mc = getMissionControl();
+const mc = await getMissionControl();
+const rosterNow = await getRoster();
+const summaryNow = await getRosterSummary();
+const detectionsNow = await getDetections();
+const winLossNow = await getWinLoss(6);
+const coachNow = await getCoachHints();
+const winBackNow = await getWinBackList();
 
 const businessIds = new Set(businesses.map((b) => b.id));
 const prospectIds = new Set(prospects.map((p) => p.id));
@@ -192,8 +198,8 @@ describe("follow-ups and grades", () => {
 
 describe("client roster", () => {
   it("summary adds up", () => {
-    const s = getRosterSummary();
-    const active = getRoster().filter((c) => c.status === "active");
+    const s = summaryNow;
+    const active = rosterNow.filter((c) => c.status === "active");
     expect(s.activeCount).toBe(active.length);
     expect(s.activeMrr).toBeCloseTo(active.reduce((n, c) => n + c.monthlyUsd, 0), 2);
     expect(s.tiers.high.count + s.tiers.mid.count + s.tiers.low.count).toBe(active.length);
@@ -201,7 +207,7 @@ describe("client roster", () => {
   });
 
   it("each person appears once, with a unique page address", () => {
-    const roster = getRoster();
+    const roster = rosterNow;
     expect(new Set(roster.map((c) => c.name.toLowerCase())).size).toBe(roster.length);
     expect(new Set(roster.map((c) => c.id)).size).toBe(roster.length);
   });
@@ -275,12 +281,12 @@ describe("untrusted message text", () => {
     const p = prospects.find((x) => x.id === injected!.prospectId)!;
     expect(p.stage).not.toBe("won");
     // It must not have created a client either.
-    expect(getRoster().some((c) => c.name.toLowerCase().includes("velvet fork"))).toBe(false);
+    expect(rosterNow.some((c) => c.name.toLowerCase().includes("velvet fork"))).toBe(false);
   });
 });
 
 describe("client detection radar", () => {
-  const detections = getDetections();
+  const detections = detectionsNow;
 
   it("every blip has a known color, a 0–1 position and confidence, and an in-app link", () => {
     expect(detections.length).toBeGreaterThan(0);
@@ -308,7 +314,7 @@ describe("client detection radar", () => {
 });
 
 describe("clients won and lost", () => {
-  const wl = getWinLoss(6);
+  const wl = winLossNow;
 
   it("covers 6 months and never counts more lost than exist", () => {
     expect(wl.months).toHaveLength(6);
@@ -334,7 +340,7 @@ describe("clients won and lost", () => {
 });
 
 describe("coaching glow", () => {
-  const coach = getCoachHints();
+  const coach = coachNow;
 
   it("an area glows only once it reaches its minimum, and stays quiet below it", () => {
     const all = { radar: coach.radar, leads: coach.leads, chats: coach.chats, ...coach.tabs };
@@ -379,7 +385,7 @@ describe("check-ins, health and win-backs", () => {
   });
 
   it("win-back list is only paused clients, and messages are copy-only text", () => {
-    for (const w of getWinBackList()) {
+    for (const w of winBackNow) {
       expect(w.client.status).toBe("paused");
       expect(w.script).not.toMatch(/https?:\/\//); // no links in a message we suggest
     }

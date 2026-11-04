@@ -2,23 +2,20 @@ import { AlertTriangle, BellRing, CalendarDays, Clock, Layers, ListChecks } from
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
+import { CheckInForm } from "@/components/forms/CheckInForm";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { EmptyState, Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getClientHealth, getRoster, getRosterClient, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getClientHealth, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
 
-export function generateStaticParams() {
-  return getRoster().map((c) => ({ id: c.id }));
-}
-export const dynamicParams = false;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
-  return { title: getRosterClient(id)?.name ?? "Client" };
+  return { title: (await getRosterClient(id))?.name ?? "Client" };
 }
 
 const tierLabel = { high: "High tier ($500+)", mid: "Mid tier ($150–499)", low: "Low tier (under $150)" } as const;
@@ -30,13 +27,14 @@ const sourceLabel: Record<string, string> = {
 
 export default async function ClientPage({ params }: Props) {
   const { id } = await params;
-  const c = getRosterClient(id);
+  const c = await getRosterClient(id);
   if (!c) notFound();
   const today = getToday();
-  const real = getRosterSource() === "private_file";
+  const real = (await getRosterSource()) !== "demo";
   const health = getClientHealth(c);
-  const winBack = getWinBackList().find((w) => w.client.id === c.id);
+  const winBack = (await getWinBackList()).find((w) => w.client.id === c.id);
   const ci = health?.checkIn;
+  const member = await getMember();
 
   return (
     <>
@@ -109,6 +107,17 @@ export default async function ClientPage({ params }: Props) {
             </ul>
             <p className="text-[11px] text-faint">Starts at 100. Each risk takes points off. 75+ healthy, 50–74 watch, under 50 at risk.</p>
           </GlassCard>
+          {c.status !== "canceled" && c.status !== "incomplete_expired" && (
+            <GlassCard className="mt-2.5">
+              {usesDatabase() && c.dbId && member && member.role !== "developer" ? (
+                <CheckInForm clientId={c.dbId} slug={c.id} today={today} />
+              ) : (
+                <p className="text-xs text-muted">
+                  Logging check-ins turns on once the database is connected. For now, tell Claude the date.
+                </p>
+              )}
+            </GlassCard>
+          )}
         </>
       )}
 

@@ -2,7 +2,14 @@
 
 Internal, mobile-first agency command center (Next.js web app) for a small marketing agency (SEO, ads, website builds). Bottom tabs: Home · Clients · Sales · Work · Growth, plus a Data Safety screen (shield icon on Home).
 
-**Current phase: Phase 1 prototype, with the real client list loaded from a private, Git-ignored file (user-approved). Phase 2 not started.** No database, no sign-in, no GoHighLevel, no API keys, no network calls. Do not start any other phase without the user's explicit approval.
+**Current phase: Phase 2 (approved): Supabase database + sign-in.** Data comes from the user's own NEW Supabase project when `.env.local` has `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` (server-only names); otherwise the app falls back to the private file / demo list. Still no GoHighLevel, no AI, no hosting. Do not start Phase 3+ without the user's explicit approval.
+
+Phase 2 rules:
+- Only `src/lib/supabase/server.ts` reads Supabase settings; it refuses secret/service-role keys. No admin key anywhere.
+- All database writes live in `src/app/actions.ts` (validated, run as the signed-in user). No deletes.
+- Schema + RLS live in `supabase/migrations/`. The user applies them via the SQL Editor; never `supabase db push`/`link` (denied).
+- `npm run test:rls` runs the break-in tests on a throwaway local Postgres in Docker. Keep them passing; add a test for every new table/policy.
+- Setup steps for the user: `docs/PHASE2_SETUP.md`.
 
 ## Non-negotiable rules
 
@@ -26,6 +33,7 @@ npm run typecheck
 npm test
 npm run build
 npm run check       # lint + typecheck + test + build
+npm run test:rls    # database break-in tests (Docker, throwaway local Postgres)
 ```
 
 Install dependencies with `npm install --before=2026-10-18` (or a date ~2 weeks back) so only versions that have been public for a while are used. `.npmrc` sets `ignore-scripts=true` and `save-exact=true`.

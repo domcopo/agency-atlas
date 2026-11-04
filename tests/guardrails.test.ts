@@ -1,6 +1,7 @@
-// Phase 1 safety guardrails. These scan the app's own files and FAIL the test
-// run if anything appears that Phase 1 forbids: network calls, GoHighLevel
-// addresses, write-style requests, secrets, or raw-HTML rendering.
+// Safety guardrails. These scan the app's own files and FAIL the test run if
+// anything appears that the project rules forbid: network calls, GoHighLevel
+// addresses, write-style requests, secrets, raw-HTML rendering, database writes
+// outside the one actions file, or tables without row-level security.
 //
 // If one of these fails, don't loosen the test — find out why the code changed.
 // Passing these checks reduces risk; it does not prove the app is secure.
@@ -78,6 +79,7 @@ describe("Phase 1 guardrails", () => {
         /\bsk_(live|test)_[A-Za-z0-9]{8,}/, // payment-style secret key
         /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
         /service_role/i, // Supabase admin key name
+        /sb_secret_[A-Za-z0-9]/, // Supabase secret (admin) key value
         /\bpit-[0-9a-f]{8}-[0-9a-f]{4}/i, // GoHighLevel private integration token
         /Bearer\s+[A-Za-z0-9._-]{20,}/,
       ]),
@@ -120,24 +122,35 @@ describe("secret files", () => {
     expect(gi).toContain(".env.*");
   });
 
-  it("has no real .env files in the project during Phase 1", () => {
-    // Lists file NAMES only — never opens them.
-    const envFiles = readdirSync(ROOT).filter((n) => n.startsWith(".env") && n !== ".env.example");
-    expect(envFiles).toEqual([]);
+  it("Git ignores local settings files and tracks no .env file except the example", () => {
+    // Phase 2: a private .env.local may exist on this Mac (Supabase address + publishable key).
+    // It must never be committed. Checks file NAMES only — never opens them.
+    expect(() =>
+      execFileSync("git", ["check-ignore", "-q", ".env.local"], { cwd: ROOT }),
+    ).not.toThrow();
+    const tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
+      .split("\n")
+      .filter((f) => /(^|\/)\.env/.test(f) && !f.endsWith(".env.example"));
+    expect(tracked).toEqual([]);
   });
 });
 
 describe("dependencies", () => {
-  it("includes no GoHighLevel SDK, database client or HTTP library in Phase 1", () => {
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    const names = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-    const forbidden = names.filter((n) =>
-      /highlevel|leadconnector|^@supabase\/|^axios$|^got$|^node-fetch$/i.test(n),
-    );
-    expect(forbidden).toEqual([]);
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const names = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+
+  it("includes no GoHighLevel SDK or general HTTP library", () => {
+    expect(names.filter((n) => /highlevel|leadconnector|^axios$|^got$|^node-fetch$|^ky$/i.test(n))).toEqual([]);
+  });
+
+  it("uses only Supabase's two official app libraries, pinned to exact versions", () => {
+    expect(names.filter((n) => n.startsWith("@supabase/")).sort()).toEqual(["@supabase/ssr", "@supabase/supabase-js"]);
+    for (const n of ["@supabase/ssr", "@supabase/supabase-js"]) {
+      expect(pkg.dependencies?.[n], n).toMatch(/^\d+\.\d+\.\d+$/);
+    }
   });
 });
 
@@ -196,5 +209,41 @@ describe("real client data stays private", () => {
       for (const n of names) if (text.includes(n)) hits.push(`${f}: ${n}`);
     }
     expect(hits).toEqual([]);
+  });
+});
+
+describe("database safety (Phase 2)", () => {
+  const ACTIONS = "src/app/actions.ts";
+  const SERVER = "src/lib/supabase/server.ts";
+
+  it("only the database module reads the Supabase settings", () => {
+    const readers = contents.filter(({ text }) => /process\.env\.SUPABASE_/.test(text)).map(({ file }) => file);
+    expect(readers).toEqual([SERVER]);
+  });
+
+  it("Supabase settings are never exposed to the browser", () => {
+    expect(findMatches([/NEXT_PUBLIC_SUPABASE/])).toEqual([]);
+  });
+
+  it("database writes happen only in the actions file", () => {
+    const writers = contents
+      .filter(({ text }) => /\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.(insert|update|upsert)\(/.test(text))
+      .map(({ file }) => file);
+    expect(writers).toEqual([ACTIONS]); // also proves the check really finds writes
+  });
+
+  it("the app never deletes database rows, calls database functions, or uses admin APIs", () => {
+    expect(findMatches([/\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.delete\(/, /\.rpc\(/, /auth\.admin/])).toEqual([]);
+  });
+
+  it("every table in the migrations has row-level security, and signed-out users get no grants", () => {
+    const dir = join(ROOT, "supabase", "migrations");
+    const sql = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
+    const tables = [...sql.matchAll(/create table (public\.[a-z_]+)/g)].map((m) => m[1] ?? "");
+    expect(tables.length).toBeGreaterThan(0);
+    for (const t of tables) {
+      expect(new RegExp(`alter table ${t.replace(".", "\\.")}\\s+enable row level security`).test(sql), t).toBe(true);
+    }
+    expect(/grant [^;]* to [^;]*\banon\b/i.test(sql)).toBe(false);
   });
 });

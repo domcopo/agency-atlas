@@ -26,16 +26,16 @@ function monthLabel(key: string) {
   return new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(new Date(`${key}-01T00:00:00Z`));
 }
 
-export default function SalesPage() {
+export default async function SalesPage() {
   const today = getToday();
-  const winLoss = getWinLoss(6);
+  const winLoss = await getWinLoss(6);
   const prospects = getProspects();
   const names = Object.fromEntries(prospects.map((p) => [p.id, p.name]));
   const open = prospects.filter((p) => p.stage !== "won" && p.stage !== "lost");
   const pipelineLow = open.reduce((n, p) => n + p.estMonthlyUsd.low, 0);
   const pipelineHigh = open.reduce((n, p) => n + p.estMonthlyUsd.high, 0);
   const conversations = getConversations();
-  const real = getRosterSource() === "private_file";
+  const real = (await getRosterSource()) !== "demo";
 
   return (
     <>

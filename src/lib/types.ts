@@ -19,7 +19,8 @@ export type DataMode = "mock" | "live_read_only";
  *  - private_file: REAL clients from private-data/clients.json (this Mac only, never in Git)
  *  - demo: a fictional roster, used when the private file is missing (e.g. in tests)
  */
-export type RosterSource = "private_file" | "demo";
+/** Where the client list came from: your Supabase database, the private file on this Mac, or the fictional demo list. */
+export type RosterSource = "database" | "private_file" | "demo";
 
 // ---------------------------------------------------------------------------
 // Sources and revenue — every fact must say where it came from.
@@ -272,6 +273,8 @@ export type Service = "SEO" | "Ads" | "Website";
 export interface RosterClient {
   /** Made from the name, e.g. "sam-lee". Used in page addresses. */
   id: string;
+  /** Database row id (database mode only). */
+  dbId?: string;
   name: string;
   monthlyUsd: number;
   startDate: ISODate;
@@ -503,4 +506,25 @@ export interface Detection {
   href: string;
   /** true when built from sample data rather than your real client list. */
   isSynthetic: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Atlas asks: short questions that fill gaps in your data. Rules today; an AI
+// may suggest questions later. Answers only ever change YOUR database.
+// ---------------------------------------------------------------------------
+
+export type AtlasQuestionType = "services" | "also_seo" | "end_date" | "last_contact" | "check";
+
+export interface AtlasQuestion {
+  /** Stable id, e.g. "end_date:<client id>". */
+  key: string;
+  type: AtlasQuestionType;
+  clientDbId: string;
+  clientSlug: string;
+  clientName: string;
+  prompt: string;
+  why: string;
+  services: Service[];
+  /** For "check" questions: what the two lists disagreed on. */
+  note?: string;
 }

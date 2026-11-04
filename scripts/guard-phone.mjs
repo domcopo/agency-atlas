@@ -1,13 +1,22 @@
 // Runs before `npm run dev:phone`. Wi-Fi mode lets other devices on your network
-// open the app, and the app has no sign-in yet. So if your REAL client list is
-// present, refuse to start and explain why.
+// open the app over plain (unencrypted) http. So refuse to start while:
+//  - your REAL client list is in private-data/, or
+//  - the app is connected to your database (.env.local exists): sign-in cookies and
+//    client data would cross the Wi-Fi unencrypted.
+// Phone access comes with proper hosting over https (a later phase).
+// Checks file NAMES only; never opens them.
 import { existsSync } from "node:fs";
 
-if (existsSync("private-data/clients.json") || existsSync("private-data/team.json")) {
+const reasons = [];
+if (existsSync("private-data/clients.json") || existsSync("private-data/team.json"))
+  reasons.push("your real client list is in private-data/");
+if (existsSync(".env.local")) reasons.push("the app is connected to your database (.env.local exists)");
+
+if (reasons.length) {
   console.error(
-    "\nWi-Fi mode is blocked: your real client list is in private-data/ and the app has no sign-in yet.\n" +
-      "Anyone on the same Wi-Fi could see it. Use `npm run dev` (this Mac only) instead.\n" +
-      "Phone access will be allowed once sign-in exists (Phase 2).\n",
+    `\nWi-Fi mode is blocked: ${reasons.join(" and ")}.\n` +
+      "On Wi-Fi the app runs without encryption, so others on the network could see data or sign-in cookies.\n" +
+      "Use `npm run dev` (this Mac only). Phone access will come with https hosting.\n",
   );
   process.exit(1);
 }

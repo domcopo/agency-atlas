@@ -17,14 +17,14 @@ const roleInfo: Record<TeamRole, { label: string; icon: typeof Crown; color: str
   seo_developer: { label: "SEO developer", icon: Wrench, color: "text-teal bg-teal/12" },
 };
 
-export default function WorkPage() {
+export default async function WorkPage() {
   const today = getToday();
   const orders = getWorkOrders();
   const rules = getWorkRules();
   const devs = getSampleDevelopers();
   const devName = Object.fromEntries(devs.map((d) => [d.id, d.name]));
-  const team = getTeam();
-  const realTeam = team.source === "private_file";
+  const team = await getTeam();
+  const realTeam = team.source !== "demo";
   const nameForRole = (role: TeamRole) => team.members.filter((m) => m.role === role).map((m) => m.name).join(" or ");
 
   const open = orders.filter((o) => o.status !== "done");

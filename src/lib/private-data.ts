@@ -53,6 +53,11 @@ export interface LoadedRoster {
   skipped: number;
 }
 
+/** True when the private client file exists on this Mac (used to offer the one-time import). */
+export function hasPrivateRoster(): boolean {
+  return existsSync(join(DIR, "clients.json"));
+}
+
 /** Real client list, or null when private-data/clients.json is missing or unreadable. */
 export function loadPrivateRoster(): LoadedRoster | null {
   return parseRoster(readJson("clients.json"));

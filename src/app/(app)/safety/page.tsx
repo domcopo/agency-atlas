@@ -13,7 +13,9 @@ import type { Metadata } from "next";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getRosterSummary, getSafetyStatus } from "@/lib/data-source";
+import { getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { hasPrivateRoster } from "@/lib/private-data";
+import { ImportButton } from "@/components/forms/ImportButton";
 import { cn } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Data Safety" };
@@ -24,11 +26,14 @@ const connectionIcon = {
   conn_ghl_webhooks: Webhook,
 } as Record<string, typeof Database>;
 
-export default function SafetyPage() {
+export default async function SafetyPage() {
   const s = getSafetyStatus();
   const doneCount = s.checklist.filter((c) => c.done).length;
-  const roster = getRosterSummary();
-  const real = roster.source === "private_file";
+  const roster = await getRosterSummary();
+  const real = roster.source !== "demo";
+  const db = usesDatabase();
+  const member = db ? await getMember() : null;
+  const privateFile = hasPrivateRoster();
 
   return (
     <>
@@ -36,8 +41,8 @@ export default function SafetyPage() {
 
       <GlassCard className="space-y-4">
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted">GoHighLevel &amp; database</p>
-          <Pill>Not connected</Pill>
+          <p className="text-sm text-muted">GoHighLevel</p>
+          <Pill>Not connected (Phase 3)</Pill>
         </div>
         <div className="flex items-start gap-3 rounded-2xl border border-lime/30 bg-lime/8 p-3.5">
           <ShieldCheck aria-hidden className="mt-0.5 size-5 shrink-0 text-lime" />
@@ -55,10 +60,38 @@ export default function SafetyPage() {
         </div>
       </GlassCard>
 
+      <SectionTitle>Database</SectionTitle>
+      <GlassCard className="space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold">{db ? "Supabase · connected" : "Not connected"}</span>
+          <Pill color={db ? "teal" : "neutral"}>{db ? "Sign-in required" : "Local only"}</Pill>
+        </div>
+        {db && member && (
+          <p className="text-muted">
+            Signed in as <span className="text-ink">{member.name}</span> ({member.role}). Everything you see is filtered
+            by the database&apos;s security rules for your role.
+          </p>
+        )}
+        <ul className="space-y-1 text-xs text-muted">
+          <li>• Signed-out visitors and people not on the team get nothing (tested on a local copy, 34 checks).</li>
+          <li>• Owner: everything. Managers: read clients, log check-ins. Developers: nothing yet.</li>
+          <li>• No admin key in the app. Nothing can be deleted through the app.</li>
+        </ul>
+        {db && member?.role === "owner" && privateFile && (
+          <div className="space-y-2 border-t border-line pt-3">
+            <p className="text-xs text-muted">
+              Your private client file is still on this Mac. Import it once, check the numbers match, then ask Claude
+              to delete the file. Running it twice updates instead of duplicating.
+            </p>
+            <ImportButton />
+          </div>
+        )}
+      </GlassCard>
+
       <SectionTitle>Your client list</SectionTitle>
       <GlassCard className="space-y-2 text-sm">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold">{real ? "Real · private file on this Mac" : "Demo list (no private file found)"}</span>
+          <span className="font-semibold">{roster.source === "database" ? "Real · from your database" : real ? "Real · private file on this Mac" : "Demo list (no private file found)"}</span>
           <Pill color={real ? "teal" : "amber"}>{real ? "Loaded" : "Demo"}</Pill>
         </div>
         <p className="text-muted">
