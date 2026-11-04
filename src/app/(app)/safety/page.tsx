@@ -98,18 +98,27 @@ export default async function SafetyPage() {
           {roster.total} records loaded{roster.skipped > 0 ? `, ${roster.skipped} skipped because they failed checks` : ", none skipped"}.
           {" "}{roster.needsCheck} marked for you to confirm.
         </p>
-        <ul className="space-y-1 text-xs text-muted">
-          <li>• Kept in <code className="text-ink">private-data/</code>, which Git ignores, so it never reaches GitHub.</li>
-          <li>• A test fails if any real client name shows up in the app&apos;s code, docs or tests.</li>
-          <li>• Read only by the server on this Mac. Wi-Fi (phone) mode refuses to start while it exists.</li>
-          <li>• Not encrypted by the app: keep FileVault on.</li>
-        </ul>
+        {roster.source === "database" ? (
+          <ul className="space-y-1 text-xs text-muted">
+            <li>• Stored in your own Supabase project, read as the signed-in person so the security rules apply.</li>
+            <li>• A test fails if any real client name shows up in the app&apos;s code, docs or tests.</li>
+            <li>• Free Supabase plans have no automatic backups. Supabase Pro adds daily backups.</li>
+          </ul>
+        ) : (
+          <ul className="space-y-1 text-xs text-muted">
+            <li>• Kept in <code className="text-ink">private-data/</code>, which Git ignores, so it never reaches GitHub.</li>
+            <li>• A test fails if any real client name shows up in the app&apos;s code, docs or tests.</li>
+            <li>• Read only by the server on this Mac. Wi-Fi (phone) mode refuses to start while it exists.</li>
+            <li>• Not encrypted by the app: keep FileVault on.</li>
+          </ul>
+        )}
       </GlassCard>
 
       <SectionTitle>Source connections</SectionTitle>
       <div className="space-y-2.5">
         {s.connections.map((c) => {
           const Icon = connectionIcon[c.id] ?? Database;
+          const connected = c.id === "conn_supabase" && roster.source === "database";
           return (
             <GlassCard key={c.id} className="flex gap-3">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white/5 text-muted">
@@ -118,11 +127,11 @@ export default async function SafetyPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="font-semibold">{c.name}</p>
-                  <Pill>Not connected</Pill>
+                  {connected ? <Pill color="teal">Connected</Pill> : <Pill>Not connected</Pill>}
                 </div>
                 <p className="mt-1 text-xs text-muted">{c.note}</p>
                 <p className="mt-1.5 text-[11px] text-faint">
-                  Planned for Phase {c.plannedPhase} · Scopes: {c.scopes.length ? c.scopes.join(", ") : "none"}
+                  {connected ? "Phase 2 · sign-in required, no admin key" : <>Planned for Phase {c.plannedPhase} · Scopes: {c.scopes.length ? c.scopes.join(", ") : "none"}</>}
                 </p>
               </div>
             </GlassCard>
@@ -136,13 +145,17 @@ export default async function SafetyPage() {
           <Lock aria-hidden className="mt-0.5 size-4 shrink-0 text-violet" />
           <span>
             <span className="font-semibold">Runs on this computer only.</span>{" "}
-            <span className="text-muted">There&apos;s no sign-in yet, so real data must never leave this Mac.</span>
+            <span className="text-muted">
+              {roster.source === "database"
+                ? "Sign-in is required, but it is password-only for now (no two-factor yet), so keep it off the internet until hosting and MFA are set up."
+                : "There's no sign-in yet, so real data must never leave this Mac."}
+            </span>
           </span>
         </p>
         <p className="flex gap-2">
           <ShieldX aria-hidden className="mt-0.5 size-4 shrink-0 text-violet" />
           <span className="text-muted">
-            Phase 2 adds team sign-in with MFA and access rules enforced by the database (pay and bonus details owner-only), not by the screen.
+            Access rules are enforced by the database, not by the screen: owner sees everything, managers read clients and log check-ins, developers see nothing yet.
           </span>
         </p>
       </GlassCard>
