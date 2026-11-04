@@ -1,4 +1,4 @@
-import { AlertTriangle, BellRing, CalendarDays, Clock, Layers, ListChecks } from "lucide-react";
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, BellRing, CalendarDays, Clock, Layers, ListChecks } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
@@ -7,7 +7,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { EmptyState, Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getClientHealth, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getCheckInHistory, getClientHealth, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
@@ -35,6 +35,7 @@ export default async function ClientPage({ params }: Props) {
   const winBack = (await getWinBackList()).find((w) => w.client.id === c.id);
   const ci = health?.checkIn;
   const member = await getMember();
+  const history = await getCheckInHistory(c.dbId);
 
   return (
     <>
@@ -99,13 +100,13 @@ export default async function ClientPage({ params }: Props) {
               {health.factors.map((f) => (
                 <li key={f.label} className="flex justify-between gap-3">
                   <span className="text-muted">{f.label}</span>
-                  <span className={f.impact < 0 ? "shrink-0 font-semibold text-rose" : "shrink-0 text-faint"}>
-                    {f.impact < 0 ? f.impact : "—"}
+                  <span className={f.impact < 0 ? "shrink-0 font-semibold text-rose" : f.impact > 0 ? "shrink-0 font-semibold text-lime" : "shrink-0 text-faint"}>
+                    {f.impact < 0 ? f.impact : f.impact > 0 ? `+${f.impact}` : "—"}
                   </span>
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] text-faint">Starts at 100. Each risk takes points off. 75+ healthy, 50–74 watch, under 50 at risk.</p>
+            <p className="text-[11px] text-faint">Starts at 100. Each risk takes points off; a &ldquo;better&rdquo; check-in adds 10 back. 75+ healthy, 50–74 watch, under 50 at risk.</p>
           </GlassCard>
           {c.status !== "canceled" && c.status !== "incomplete_expired" && (
             <GlassCard className="mt-2.5">
@@ -116,6 +117,27 @@ export default async function ClientPage({ params }: Props) {
                   Logging check-ins turns on once the database is connected. For now, tell Claude the date.
                 </p>
               )}
+            </GlassCard>
+          )}
+          {history.length > 0 && (
+            <GlassCard className="mt-2.5">
+              <p className="mb-2 text-xs font-semibold text-muted">Recent check-ins</p>
+              <ul className="space-y-2 text-sm">
+                {history.map((h, i) => {
+                  const Icon = h.mood === "better" ? ArrowUpRight : h.mood === "worse" ? ArrowDownRight : ArrowRight;
+                  const tone = h.mood === "better" ? "text-lime" : h.mood === "worse" ? "text-rose" : "text-faint";
+                  return (
+                    <li key={`${h.date}-${i}`} className="flex gap-2">
+                      <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${tone}`} />
+                      <span className="min-w-0">
+                        <span className="font-semibold">{formatDate(h.date)}</span>
+                        {h.mood && <span className={`ml-1.5 text-xs ${tone}`}>{h.mood === "better" ? "Better" : h.mood === "worse" ? "Worse" : "Same"}</span>}
+                        {h.note && <span className="block break-words text-xs text-muted">{h.note}</span>}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             </GlassCard>
           )}
         </>

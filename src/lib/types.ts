@@ -269,6 +269,14 @@ export interface SafetyStatus {
 export type SubscriptionStatus = "active" | "paused" | "canceled" | "incomplete_expired";
 export type ClientTier = "high" | "mid" | "low";
 export type Service = "SEO" | "Ads" | "Website";
+/** "How are they doing?" picked on a check-in. Moves the health score. */
+export type CheckInMood = "better" | "same" | "worse";
+
+export interface CheckInEntry {
+  date: ISODate;
+  note: string | null;
+  mood: CheckInMood | null;
+}
 
 export interface RosterClient {
   /** Made from the name, e.g. "sam-lee". Used in page addresses. */
@@ -291,6 +299,8 @@ export interface RosterClient {
   endDate?: ISODate;
   /** Last time someone on the team checked in with them. */
   lastContact?: ISODate;
+  /** The most recent "how are they doing" answer, and when. */
+  lastMood?: { mood: CheckInMood; date: ISODate };
 }
 
 export type HealthLevel = "healthy" | "watch" | "at_risk";

@@ -117,11 +117,18 @@ export async function logCheckIn(_prev: { error?: string; ok?: boolean } | undef
   const slug = text(form, "slug", 90);
   const day = pastDate(text(form, "date", 10));
   const note = text(form, "note", 500);
+  const mood = text(form, "mood", 10);
   if (!/^[0-9a-f-]{36}$/.test(clientId)) return { error: "Unknown client." };
   if (!day) return { error: "Pick a date that isn't in the future." };
+  if (mood && mood !== "better" && mood !== "same" && mood !== "worse") return { error: "Pick better, same or worse." };
   const db = await createDatabaseClient();
-  const { error } = await db.from("check_ins").insert({ client_id: clientId, happened_on: day, note: note || null });
-  if (error) return { error: "Couldn't save the check-in." };
+  const { error } = await db.from("check_ins").insert({ client_id: clientId, happened_on: day, note: note || null, ...(mood ? { mood } : {}) });
+  if (error) {
+    console.warn(`Check-in refused: ${error.code}`);
+    // 42703 / PGRST204 = the mood column doesn't exist yet (0004 not run).
+    if (mood && (error.code === "42703" || error.code === "PGRST204")) return { error: "Saving how they're doing needs one more setup step (0004 SQL). Try again without picking one, or run it first." };
+    return { error: "Couldn't save the check-in." };
+  }
   revalidatePath(`/clients/${slug}`);
   revalidatePath("/clients");
   revalidatePath("/");

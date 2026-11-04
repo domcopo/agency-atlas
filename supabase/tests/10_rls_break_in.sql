@@ -112,6 +112,9 @@ select test.expect('select * from public.team_members', 1, 'manager sees only th
 select test.expect($$update public.clients set monthly_usd = 1$$, 0, 'manager cannot edit client amounts');
 select test.expect($$insert into public.clients (slug, name, monthly_usd, start_date, status) values ('x', 'X', 1, '2026-01-01', 'active')$$, -1, 'manager cannot add clients');
 select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01')$$, 1, 'manager logs a check-in');
+select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'worse')$$, 1, 'manager logs a check-in with how they are doing');
+select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'furious')$$, -2, 'unknown moods are rejected');
+select test.expect($$update public.check_ins set mood = 'better'$$, -1, 'a mood cannot be changed afterwards');
 select test.expect($$insert into public.check_ins (client_id, happened_on, logged_by) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'manager cannot log a check-in as someone else');
 select test.expect($$delete from public.check_ins$$, -1, 'manager cannot delete check-ins');
 select test.expect($$update public.team_members set role = 'owner'$$, -1, 'manager cannot promote themselves');

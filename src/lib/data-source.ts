@@ -36,6 +36,8 @@ import type {
   MonthlyPoint,
   Prospect,
   CheckIn,
+  CheckInEntry,
+  CheckInMood,
   ClientHealth,
   Detection,
   RosterClient,
@@ -86,16 +88,44 @@ function loadLocalRoster(): Roster {
   return { source: "demo", ...demo };
 }
 
+const MOODS: CheckInMood[] = ["better", "same", "worse"];
+const asMood = (v: unknown): CheckInMood | null => (MOODS.includes(v as CheckInMood) ? (v as CheckInMood) : null);
+
+type DbClient = Awaited<ReturnType<typeof createDatabaseClient>>;
+
+/** All check-ins, newest first. Works before and after the 0004 "mood" column exists. */
+async function readCheckIns(db: DbClient): Promise<{ client_id: string; happened_on: string; note: string | null; mood: CheckInMood | null }[]> {
+  const order = { ascending: false } as const;
+  const withMood = await db.from("check_ins").select("client_id, happened_on, note, mood").order("happened_on", order).order("created_at", order);
+  if (!withMood.error) return (withMood.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood) }));
+  const plain = await db.from("check_ins").select("client_id, happened_on, note").order("happened_on", order).order("created_at", order);
+  return (plain.data ?? []).map((r) => ({ ...r, mood: null }));
+}
+
+/** The latest check-ins for one client (database mode only). */
+export async function getCheckInHistory(clientDbId: string | undefined, limit = 6): Promise<CheckInEntry[]> {
+  if (!usesDatabase() || !clientDbId || !/^[0-9a-f-]{36}$/.test(clientDbId)) return [];
+  const db = await createDatabaseClient();
+  return (await readCheckIns(db))
+    .filter((r) => r.client_id === clientDbId)
+    .slice(0, limit)
+    .map((r) => ({ date: r.happened_on, note: r.note, mood: r.mood }));
+}
+
 /** Reads clients as the signed-in person. Row-level security decides what comes back. */
 async function loadDatabaseRoster(): Promise<Roster> {
   const db = await createDatabaseClient();
   const [clients, checkIns] = await Promise.all([
     db.from("clients").select("id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date"),
-    db.from("check_ins").select("client_id, happened_on").order("happened_on", { ascending: false }),
+    readCheckIns(db),
   ]);
   if (clients.error || !clients.data) return { source: "database", clients: [], skipped: 0 };
   const lastContact = new Map<string, string>();
-  for (const c of checkIns.data ?? []) if (!lastContact.has(c.client_id)) lastContact.set(c.client_id, c.happened_on);
+  const lastMood = new Map<string, { mood: CheckInMood; date: string }>();
+  for (const c of checkIns) {
+    if (!lastContact.has(c.client_id)) lastContact.set(c.client_id, c.happened_on);
+    if (c.mood && !lastMood.has(c.client_id)) lastMood.set(c.client_id, { mood: c.mood, date: c.happened_on });
+  }
   return {
     source: "database",
     skipped: 0,
@@ -111,6 +141,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
       followUp: r.follow_up ?? undefined,
       endDate: r.end_date ?? undefined,
       lastContact: lastContact.get(r.id),
+      lastMood: lastMood.get(r.id),
       services: (r.services ?? []) as RosterClient["services"],
     })),
   };
@@ -265,9 +296,12 @@ export function getClientHealth(c: RosterClient): ClientHealth | null {
   if (months < 2) factors.push({ label: "New client: the first 2 months need extra care", impact: -10 });
   if (c.followUp) factors.push({ label: `Open follow-up: ${c.followUp}`, impact: -10 });
   if (c.check) factors.push({ label: "Record needs checking", impact: -5 });
+  if (c.lastMood?.mood === "worse") factors.push({ label: `Last check-in (${c.lastMood.date}): things got worse`, impact: -20 });
+  if (c.lastMood?.mood === "better") factors.push({ label: `Last check-in (${c.lastMood.date}): things are getting better`, impact: 10 });
+  if (c.lastMood?.mood === "same") factors.push({ label: `Last check-in (${c.lastMood.date}): holding steady`, impact: 0 });
   if (months >= 12) factors.push({ label: `Long-term client (${months} months)`, impact: 0 });
-  factors.push({ label: "Lead results: not connected yet (Phase 3)", impact: 0 });
-  const score = Math.max(0, 100 + factors.reduce((n, f) => n + f.impact, 0));
+  factors.push({ label: "Lead results: not connected yet (client sub-accounts come later)", impact: 0 });
+  const score = Math.min(100, Math.max(0, 100 + factors.reduce((n, f) => n + f.impact, 0)));
   return { score, level: score >= 75 ? "healthy" : score >= 50 ? "watch" : "at_risk", factors, checkIn };
 }
 
@@ -701,3 +735,36 @@ export const getGhlSummary = cache(async (now: Date = new Date()): Promise<GhlSu
   }
   return s;
 });
+
+// ---------------------------------------------------------------------------
+// Service groups (Clients tab: SEO · Ads · Website)
+// ---------------------------------------------------------------------------
+
+export const SERVICE_GROUPS = [
+  { slug: "seo", service: "SEO", title: "SEO clients" },
+  { slug: "ads", service: "Ads", title: "Ads clients" },
+  { slug: "website", service: "Website", title: "Website clients" },
+  { slug: "none", service: null, title: "Service not set" },
+] as const;
+export type ServiceGroupSlug = (typeof SERVICE_GROUPS)[number]["slug"];
+
+/** Current clients (active or paused) in one service group. Clients with two services appear in both. */
+export async function getServiceGroup(slug: string) {
+  const group = SERVICE_GROUPS.find((g) => g.slug === slug);
+  if (!group) return null;
+  const clients = (await roster()).clients.filter(
+    (c) => (c.status === "active" || c.status === "paused") && (group.service ? c.services.includes(group.service) : c.services.length === 0),
+  );
+  const active = clients.filter((c) => c.status === "active");
+  return {
+    ...group,
+    clients,
+    activeCount: active.length,
+    pausedCount: clients.length - active.length,
+    activeMrr: active.reduce((n, c) => n + c.monthlyUsd, 0),
+  };
+}
+
+export async function getServiceGroups() {
+  return Promise.all(SERVICE_GROUPS.map(async (g) => (await getServiceGroup(g.slug))!));
+}

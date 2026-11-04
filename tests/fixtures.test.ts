@@ -384,6 +384,19 @@ describe("check-ins, health and win-backs", () => {
     expect(getClientHealth({ ...base, status: "canceled" })).toBeNull();
   });
 
+  it("a check-in's mood moves health: worse -20, better +10, never above 100", () => {
+    const steady = getClientHealth({ ...base, lastContact: "2026-10-31", lastMood: { mood: "same", date: "2026-10-31" } })!;
+    expect(steady.score).toBe(100);
+    const worse = getClientHealth({ ...base, lastContact: "2026-10-31", lastMood: { mood: "worse", date: "2026-10-31" } })!;
+    expect(worse.score).toBe(80);
+    expect(worse.factors.some((f) => f.impact === -20 && /got worse/.test(f.label))).toBe(true);
+    const better = getClientHealth({ ...base, lastContact: "2026-10-31", lastMood: { mood: "better", date: "2026-10-31" } })!;
+    expect(better.score).toBe(100); // capped
+    const betterButPaused = getClientHealth({ ...base, status: "paused", lastMood: { mood: "better", date: "2026-10-31" } })!;
+    const paused = getClientHealth({ ...base, status: "paused" })!;
+    expect(betterButPaused.score).toBe(paused.score + 10);
+  });
+
   it("win-back list is only paused clients, and messages are copy-only text", () => {
     for (const w of winBackNow) {
       expect(w.client.status).toBe("paused");

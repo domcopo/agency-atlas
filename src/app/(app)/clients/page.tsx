@@ -1,4 +1,4 @@
-import { BellRing, HeartPulse, RotateCcw } from "lucide-react";
+import { BellRing, ChevronRight, HeartPulse, Layers, RotateCcw } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CopyButton } from "@/components/cards/CopyButton";
@@ -6,7 +6,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { CHECK_IN_DAYS, getClientHealth, getRoster, getRosterSummary, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { CHECK_IN_DAYS, getClientHealth, getRoster, getRosterSummary, getServiceGroups, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
 
@@ -29,6 +29,7 @@ export default async function ClientsPage() {
     .sort((a, b) => (a.h!.checkIn.due ?? "").localeCompare(b.h!.checkIn.due ?? ""));
   const neverLogged = withHealth.filter(({ c, h }) => c.status === "active" && h?.checkIn.state === "never_logged").length;
   const winBack = await getWinBackList();
+  const serviceGroups = await getServiceGroups();
 
   return (
     <>
@@ -52,6 +53,29 @@ export default async function ClientsPage() {
           <p className="text-[11px] text-muted">Avg months</p>
         </div>
       </GlassCard>
+
+      <SectionTitle aside={<Layers aria-hidden className="size-4 text-faint" />}>By service</SectionTitle>
+      <div className="grid grid-cols-2 gap-2.5">
+        {serviceGroups
+          .filter((g) => g.slug !== "none" || g.clients.length > 0)
+          .map((g) => (
+            <Link
+              key={g.slug}
+              href={`/clients/service/${g.slug}`}
+              className="pressable glass flex min-h-11 items-center justify-between gap-2 rounded-2xl p-3"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{g.service ?? "Not set"}</span>
+                <span className="block text-[11px] text-muted">
+                  {g.activeCount} active{g.pausedCount ? ` · ${g.pausedCount} paused` : ""}
+                </span>
+                <span className="block text-[11px] text-faint">{formatUsdExact(g.activeMrr)}/mo</span>
+              </span>
+              <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" />
+            </Link>
+          ))}
+      </div>
+      <p className="mt-1.5 px-1 text-[11px] text-faint">Clients with more than one service show in each group.</p>
 
       <SectionTitle aside={<HeartPulse aria-hidden className="size-4 text-faint" />}>Client health</SectionTitle>
       <GlassCard className="grid grid-cols-3 gap-2 text-center">
