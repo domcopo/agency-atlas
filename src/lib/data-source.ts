@@ -20,7 +20,7 @@ import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
-import { createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
+import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
 import { cache } from "react";
 import type {
   AtlasQuestion,
@@ -66,6 +66,9 @@ function today(): string {
 
 /** The signed-in team member (once per request), or null. */
 export const getMember = cache(getCurrentMember);
+
+/** Whether the signed-in person has an authenticator app set up. */
+export const getTwoFactorStatus = cache(getTwoFactorState);
 
 // ---------------------------------------------------------------------------
 // Client roster

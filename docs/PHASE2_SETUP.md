@@ -81,6 +81,24 @@ Claude restarts the app. Then you:
 3. Check the Clients tab matches what you expect (33 clients, $5,445/mo active).
 4. Ask Claude to delete the private file from this Mac. Your data now lives in Supabase.
 
+## 7. Turn on two-factor (required)
+
+After you sign in, the app asks for a second step before it opens.
+
+1. Install an authenticator app on your phone: Google Authenticator, Authy, 1Password
+   or Apple Passwords (built into the iPhone).
+2. In the app, tap **Set up two-factor**, scan the QR code with your authenticator app,
+   then type the 6-digit code it shows and tap **Turn on two-factor**.
+3. **Then** lock it in at the database level: Supabase → **SQL Editor** → **New query**,
+   paste everything from `supabase/migrations/0002_require_two_factor.sql`, click **Run**.
+   Do this only after step 2 works. After this, a stolen password alone sees nothing,
+   even outside the app.
+
+From now on, each sign-in = password + the current code from your phone.
+
+**Lost your phone?** In Supabase: **Authentication** → **Users** → your user → remove the
+authenticator ("MFA factor"). Then sign in and set it up again on the new phone.
+
 ## Recommended before relying on it daily
 
 - **Supabase Pro ($25/month)** for daily backups. Free projects also pause after a week

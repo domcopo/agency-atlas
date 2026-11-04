@@ -24,3 +24,11 @@ as $$
   select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
 $$;
 grant execute on function auth.uid() to anon, authenticated;
+
+-- auth.jwt(): the whole sign-in token (we read its "aal" two-factor level).
+create function auth.jwt() returns jsonb
+language sql stable
+as $$
+  select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb
+$$;
+grant execute on function auth.jwt() to anon, authenticated;

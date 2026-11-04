@@ -225,6 +225,22 @@ describe("database safety (Phase 2)", () => {
     expect(findMatches([/NEXT_PUBLIC_SUPABASE/])).toEqual([]);
   });
 
+  it("the sign-in gate requires two-factor (aal2) before any screen", () => {
+    const proxy = readFileSync(join(ROOT, "src/proxy.ts"), "utf8");
+    expect(proxy).toMatch(/aal\s*===\s*"aal2"/);
+    expect(proxy).toMatch(/redirectTo\("\/mfa"/);
+  });
+
+  it("every migrated table also has a database-level two-factor rule", () => {
+    const sql = readdirSync(join(ROOT, "supabase/migrations"))
+      .map((f) => readFileSync(join(ROOT, "supabase/migrations", f), "utf8"))
+      .join("\n");
+    const tables = [...sql.matchAll(/create table public\.(\w+)/g)].map((m) => m[1] ?? "");
+    const guarded = new Set([...sql.matchAll(/on public\.(\w+) as restrictive[\s\S]*?'aal2'/g)].map((m) => m[1] ?? ""));
+    expect(tables.length).toBeGreaterThan(0);
+    expect(tables.filter((t) => !guarded.has(t))).toEqual([]);
+  });
+
   it("database writes happen only in the actions file", () => {
     const writers = contents
       .filter(({ text }) => /\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.(insert|update|upsert)\(/.test(text))

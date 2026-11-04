@@ -29,11 +29,23 @@ export async function proxy(request: NextRequest) {
   // getClaims() checks the token's signature; it doesn't just trust the cookie.
   const { data } = await db.auth.getClaims();
   const signedIn = Boolean(data?.claims?.sub);
-  const onLogin = request.nextUrl.pathname === "/login";
+  // "aal2" means this session passed two-factor; "aal1" means password only.
+  const twoFactorDone = data?.claims?.aal === "aal2";
+  const path = request.nextUrl.pathname;
+  const onLogin = path === "/login";
+  const onTwoFactor = path === "/mfa";
 
-  if (!signedIn && !onLogin) return NextResponse.redirect(new URL("/login", request.url));
-  if (signedIn && onLogin) return NextResponse.redirect(new URL("/", request.url));
+  if (!signedIn) return onLogin ? response : redirectTo("/login", request, response);
+  if (!twoFactorDone) return onTwoFactor ? response : redirectTo("/mfa", request, response);
+  if (onLogin || onTwoFactor) return redirectTo("/", request, response);
   return response;
+}
+
+/** Redirect while keeping any refreshed sign-in cookies. */
+function redirectTo(path: string, request: NextRequest, from: NextResponse) {
+  const to = NextResponse.redirect(new URL(path, request.url));
+  for (const c of from.cookies.getAll()) to.cookies.set(c);
+  return to;
 }
 
 export const config = {

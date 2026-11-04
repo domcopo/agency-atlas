@@ -78,7 +78,7 @@ commit;
 -- ---------------------------------------------------------------------------
 begin;
 set local role authenticated;
-set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4"}';
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
 select test.expect('select * from public.clients', 0, 'stranger sees no clients');
 select test.expect('select * from public.team_members', 0, 'stranger sees no team');
 select test.expect('select * from public.staff', 0, 'stranger sees no staff');
@@ -91,7 +91,7 @@ commit;
 -- ---------------------------------------------------------------------------
 begin;
 set local role authenticated;
-set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3"}';
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
 select test.expect('select * from public.clients', 0, 'developer sees no client records');
 select test.expect('select * from public.team_members', 1, 'developer sees only their own team row');
 select test.expect($$insert into public.atlas_answers (question_key, status) values ('k', 'skipped')$$, -1, 'developer cannot answer Atlas asks');
@@ -102,7 +102,7 @@ commit;
 -- ---------------------------------------------------------------------------
 begin;
 set local role authenticated;
-set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2"}';
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
 select test.expect('select * from public.clients', 1, 'manager reads clients');
 select test.expect('select * from public.team_members', 1, 'manager sees only their own team row');
 select test.expect($$update public.clients set monthly_usd = 1$$, 0, 'manager cannot edit client amounts');
@@ -118,7 +118,7 @@ commit;
 -- ---------------------------------------------------------------------------
 begin;
 set local role authenticated;
-set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1"}';
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
 select test.expect('select * from public.team_members', 3, 'owner sees the whole team');
 select test.expect($$update public.clients set services = '{SEO,Ads}' where slug = 'pat-example'$$, 1, 'owner edits a client');
 select test.expect($$update public.clients set services = '{Hacking}' where slug = 'pat-example'$$, -2, 'unknown services are rejected');
@@ -131,7 +131,28 @@ select test.expect($$insert into public.team_members (user_id, display_name, rol
 commit;
 
 -- ---------------------------------------------------------------------------
--- 6. Every table has RLS on, and anon has no table permissions at all.
+-- 6. Password only (no two-factor yet): even the owner gets nothing.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.clients', 0, 'owner without two-factor sees no clients');
+select test.expect('select * from public.team_members', 0, 'owner without two-factor sees no team');
+select test.expect('select * from public.staff', 0, 'owner without two-factor sees no staff');
+select test.expect('select * from public.check_ins', 0, 'owner without two-factor sees no check-ins');
+select test.expect($$update public.clients set monthly_usd = 1$$, 0, 'owner without two-factor cannot edit clients');
+select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01')$$, -1, 'owner without two-factor cannot log a check-in');
+select test.expect($$insert into public.atlas_answers (question_key, status) values ('k', 'skipped')$$, -1, 'owner without two-factor cannot answer Atlas asks');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2"}';
+select test.expect('select * from public.clients', 0, 'manager with no two-factor level at all sees no clients');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
 declare bad text;
@@ -147,6 +168,18 @@ begin
   where grantee = 'anon' and table_schema = 'public';
   if bad is not null then raise exception 'FAILED: signed-out role still has: %', bad; end if;
   raise notice 'ok: signed-out role has no table permissions';
+
+  -- Any NEW table must also get a two-factor rule, or this fails.
+  select string_agg(c.relname, ', ') into bad
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relkind = 'r'
+    and not exists (
+      select 1 from pg_policies p
+      where p.schemaname = 'public' and p.tablename = c.relname
+        and p.permissive = 'RESTRICTIVE' and p.qual like '%aal2%'
+    );
+  if bad is not null then raise exception 'FAILED: no two-factor rule on: %', bad; end if;
+  raise notice 'ok: every table requires two-factor';
 end;
 $$;
 

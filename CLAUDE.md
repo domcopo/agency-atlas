@@ -9,7 +9,8 @@ Phase 2 rules:
 - All database writes live in `src/app/actions.ts` (validated, run as the signed-in user). No deletes.
 - Schema + RLS live in `supabase/migrations/`. The user applies them via the SQL Editor; never `supabase db push`/`link` (denied).
 - `npm run test:rls` runs the break-in tests on a throwaway local Postgres in Docker. Keep them passing; add a test for every new table/policy.
-- Setup steps for the user: `docs/PHASE2_SETUP.md`.
+- Setup steps for the user: `docs/PHASE2_SETUP.md`. Next phases: `docs/ROADMAP.md`.
+- Two-factor is required: `src/proxy.ts` sends any session below `aal2` to `/mfa`, and `0002_require_two_factor.sql` adds a restrictive `aal2` rule to every table. Every new table needs one too (tests check).
 - Status (2026-11-04): connected to the user's project; real list imported (33 clients, 7 team). `private-data/` was moved to the user's Trash, so the database is now the only live copy. Sign-in is password-only (no MFA yet). Free plan = no automatic backups.
 
 ## Non-negotiable rules

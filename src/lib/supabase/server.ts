@@ -78,6 +78,18 @@ export async function createDatabaseClient() {
   });
 }
 
+/**
+ * Two-factor status for the signed-in person: "enabled" (an authenticator app is set
+ * up), "pending" (setup started, not confirmed) or "none".
+ */
+export async function getTwoFactorState(): Promise<"enabled" | "pending" | "none"> {
+  if (!isDatabaseConfigured()) return "none";
+  const db = await createDatabaseClient();
+  const { data } = await db.auth.mfa.listFactors();
+  if (data?.totp.length) return "enabled";
+  return data?.all.some((f) => f.factor_type === "totp") ? "pending" : "none";
+}
+
 /** The signed-in person's id and role, or null. Verified by the database, not trusted from the browser. */
 export async function getCurrentMember(): Promise<{ userId: string; name: string; role: "owner" | "manager" | "developer" } | null> {
   if (!isDatabaseConfigured()) return null;

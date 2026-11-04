@@ -63,6 +63,48 @@ export async function signOut() {
 }
 
 // ---------------------------------------------------------------------------
+// Two-factor sign-in (authenticator app, 6-digit codes)
+// ---------------------------------------------------------------------------
+
+/** Starts authenticator setup. Returns the QR code and the typed-in key, shown once. */
+export async function startTwoFactor(): Promise<{ error?: string; qr?: string; secret?: string }> {
+  if (!isDatabaseConfigured()) return { error: "The database isn't connected yet." };
+  const db = await createDatabaseClient();
+  const { data: claims } = await db.auth.getClaims();
+  if (!claims?.claims?.sub) return { error: "Sign in first." };
+  const { data: list } = await db.auth.mfa.listFactors();
+  if (list?.totp.length) return { error: "Two-factor is already set up. Enter a code from your app." };
+  // Clear any half-finished setup so the new QR code is the only one that works.
+  for (const f of list?.all ?? []) {
+    if (f.factor_type === "totp" && f.status === "unverified") await db.auth.mfa.unenroll({ factorId: f.id });
+  }
+  const { data, error } = await db.auth.mfa.enroll({ factorType: "totp", friendlyName: "Agency Atlas", issuer: "Agency Atlas" });
+  if (error || !data) {
+    console.warn(`Two-factor setup refused: ${error?.code ?? "no code"}`);
+    return { error: "Couldn't start setup. Try again in a minute." };
+  }
+  return { qr: data.totp.qr_code, secret: data.totp.secret };
+}
+
+/** Checks a 6-digit code. Finishes setup the first time; afterwards it's the second sign-in step. */
+export async function verifyTwoFactor(_prev: { error?: string } | undefined, form: FormData): Promise<{ error?: string }> {
+  if (!isDatabaseConfigured()) return { error: "The database isn't connected yet." };
+  const code = text(form, "code", 12).replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) return { error: "Enter the 6-digit code from your authenticator app." };
+  const db = await createDatabaseClient();
+  const { data: list } = await db.auth.mfa.listFactors();
+  // The factor is chosen on the server from the signed-in person's own list, never from the form.
+  const factor = list?.totp[0] ?? list?.all.find((f) => f.factor_type === "totp" && f.status === "unverified");
+  if (!factor) return { error: "Set up two-factor first." };
+  const { error } = await db.auth.mfa.challengeAndVerify({ factorId: factor.id, code });
+  if (error) {
+    console.warn(`Two-factor code refused: ${error.code ?? "no code"} (status ${error.status ?? "?"})`);
+    return { error: "That code didn't work. Codes change every 30 seconds, so use the newest one." };
+  }
+  redirect("/");
+}
+
+// ---------------------------------------------------------------------------
 // Check-ins
 // ---------------------------------------------------------------------------
 
