@@ -12,6 +12,8 @@ import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/l
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getAiStatus, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
+import { setClientServices } from "@/app/actions";
+import { planLabel } from "@/lib/ops";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { ActionForm } from "@/components/forms/ActionForm";
 import { Timeline } from "@/components/cards/Timeline";
@@ -97,6 +99,7 @@ export default async function ClientPage({ params }: Props) {
             ready={Boolean(ops?.ready)}
             today={today}
             ghl={c.ghl}
+            plan={planLabel(c)}
           />
         </div>
       )}
@@ -177,9 +180,34 @@ export default async function ClientPage({ params }: Props) {
               </Pill>
             ))
           ) : (
-            <span className="text-muted">Services not set yet (SEO, Ads, Website). Answer it in Atlas asks on Home.</span>
+            <span className="text-muted">Services not set yet.</span>
           )}
         </div>
+        {member?.role === "owner" && c.dbId && (
+          <details>
+            <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit plan</summary>
+            <form action={setClientServices} className="mt-1.5 space-y-2">
+              <input type="hidden" name="clientId" value={c.dbId} />
+              <input type="hidden" name="slug" value={c.id} />
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["Website", "Website build"],
+                  ["SEO", "SEO"],
+                  ["Ads", "Google Ads"],
+                ] as const).map(([v, label]) => (
+                  <label key={v} className="flex min-h-10 items-center gap-2 rounded-xl border border-line bg-white/5 px-3 text-sm">
+                    <input type="checkbox" name="services" value={v} defaultChecked={c.services.includes(v)} className="size-4 accent-violet-500" />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <button type="submit" className="pressable min-h-10 rounded-xl bg-violet-deep px-4 text-xs font-semibold">
+                Save plan
+              </button>
+              <p className="text-[11px] text-faint">Monthly amount comes from your client list. Saved in this app only.</p>
+            </form>
+          </details>
+        )}
       </GlassCard>
 
       {health && ci && (

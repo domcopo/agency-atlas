@@ -42,6 +42,7 @@ import {
   getCoachHints,
   getDetections,
   getDeveloperWork,
+  getCompletions,
   getContactLog,
   getGhlSummary,
   getMissionControl,
@@ -107,6 +108,9 @@ export default async function MissionControlPage() {
     getDetections(),
     getAtlasQuestions(3),
   ]);
+  const completions = showsSamples() ? [] : await getCompletions();
+  const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
+  const doneToday = completions.filter((x) => localDay(x.at) === localDay(new Date().toISOString())).length;
   const prospects = getProspects();
   const prospectById = Object.fromEntries(prospects.map((p) => [p.id, p]));
   const toWork = getProspectsToWork();
@@ -398,7 +402,7 @@ export default async function MissionControlPage() {
 
       {!samples && (
         <section aria-label="Today's priorities">
-          <SectionTitle aside={ops.priorities.length ? `${ops.priorities.filter((p) => p.when === "overdue").length} overdue` : undefined}>
+          <SectionTitle aside={`${doneToday} done today · ${ops.priorities.filter((p) => p.when === "overdue").length} overdue`}>
             Today&apos;s priorities
           </SectionTitle>
           {ops.ready ? (

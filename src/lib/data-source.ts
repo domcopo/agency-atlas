@@ -198,6 +198,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
       followUp: r.follow_up ?? undefined,
       endDate: r.end_date ?? undefined,
       lastContact: newest(lastContact.get(r.id), timesByClient.get(r.id)),
+      lastLogged: lastContact.get(r.id),
       ghl: timesByClient.get(r.id),
       lastMood: lastMood.get(r.id),
       ownerId: r.owner_staff_id ?? undefined,
@@ -628,6 +629,41 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         action,
       } as PriorityItem;
     });
+});
+
+export interface Completion {
+  at: string;
+  summary: string;
+  client: { slug: string; name: string } | null;
+  /** Credited to the item's owner, or for reminders, the client's owner. */
+  ownerId: string | null;
+}
+
+/** Everything marked done in the last 7 days (from the insert-only history), newest first. */
+export const getCompletions = cache(async (): Promise<Completion[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const { data, error } = await db
+    .from("activity")
+    .select("at, summary, client_id, action_id")
+    .eq("kind", "action_done")
+    .gte("at", since)
+    .order("at", { ascending: false })
+    .limit(500);
+  if (error) return [];
+  const [{ clients }, { actions }] = await Promise.all([roster(), getActions()]);
+  const byDbId = new Map(clients.map((c) => [c.dbId, c]));
+  const actionOwner = new Map(actions.map((a) => [a.id, a.ownerId]));
+  return (data ?? []).map((r) => {
+    const c = r.client_id ? byDbId.get(r.client_id) : undefined;
+    return {
+      at: r.at,
+      summary: String(r.summary ?? "").replace(/^Done: /, ""),
+      client: c ? { slug: c.id, name: c.name } : null,
+      ownerId: (r.action_id ? actionOwner.get(r.action_id) : undefined) ?? c?.ownerId ?? null,
+    };
+  });
 });
 
 /** Owner's matching screen: each current client with its GoHighLevel contact match or suggestions. */

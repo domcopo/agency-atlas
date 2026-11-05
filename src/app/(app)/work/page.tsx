@@ -4,7 +4,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getDeveloperWork, getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { getCompletions, getDeveloperWork, getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
 import { myWork, teamLoad } from "@/lib/ops";
 import { cn } from "@/lib/format";
@@ -42,7 +42,9 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const whoRaw = (await searchParams).who ?? member?.staffId ?? "all";
   const who = whoRaw === "none" || staffList.some((m) => m.id === whoRaw) ? whoRaw : "all";
   const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
-  const load = teamLoad(staffList, ops.clients, ops.actions, ops.today);
+  const completions = await getCompletions();
+  const load = teamLoad(staffList, ops.clients, ops.actions, ops.today, completions);
+  const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
   const orders = getWorkOrders();
   const rules = getWorkRules();
   const devs = getSampleDevelopers();
@@ -82,7 +84,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
         )}
       </div>
 
-      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} />}
+      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} done={doneForView} />}
 
       {samples && (
         <>

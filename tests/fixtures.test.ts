@@ -766,3 +766,42 @@ describe("reply flags from GoHighLevel times", () => {
     expect(h?.reasons).toContain("3 messages from us with no reply: try a call");
   });
 });
+
+describe("plans, reminder Done, completions", () => {
+  const today = "2026-11-10";
+  const c = {
+    id: "lee-sample", dbId: "db-lee", name: "Lee Sample (fictional)", monthlyUsd: 750, startDate: "2026-01-05", status: "active",
+    listedIn: [], services: ["SEO", "Ads"], followUp: "Review ad results (sample)", lastContact: "2026-11-09",
+  } as import("@/lib/types").RosterClient;
+  const done = (title: string) =>
+    ({ id: "x1", kind: "follow_up", title, notes: null, priority: "normal", status: "done", dueOn: null, doneAt: "2026-11-10T10:00:00Z", createdAt: "2026-11-10T10:00:00Z", ownerId: null, ownerName: null, client: { slug: c.id, dbId: "db-lee", name: c.name }, leadGhlId: null }) as import("@/lib/types").ClientAction;
+  const ci = { cadenceDays: 14, state: "on_track" as const, last: "2026-11-09", due: "2026-11-23" };
+
+  it("labels plans in plain words", async () => {
+    const { planLabel } = await import("@/lib/ops");
+    expect(planLabel(c)).toBe("SEO + Google Ads · $750/mo");
+    expect(planLabel({ ...c, services: ["Website"], monthlyUsd: 1200 })).toBe("Website build · $1,200/mo");
+    expect(planLabel({ ...c, services: [] })).toBe("Services not set · $750/mo");
+  });
+
+  it("a finished follow-up note stops being a reminder", async () => {
+    const { healthSummary, noteDone } = await import("@/lib/ops");
+    expect(healthSummary(c, ci, [], today)?.reasons).toContain("Your note: Review ad results (sample)");
+    expect(noteDone(c, [done("Review ad results (sample)")])).toBe(true);
+    expect(healthSummary(c, ci, [done("Review ad results (sample)")], today)?.reasons ?? []).not.toContain("Your note: Review ad results (sample)");
+  });
+
+  it("logging a contact after the client reached out clears 'reply'", async () => {
+    const { waitingDays } = await import("@/lib/ops");
+    const ghl = { lastInboundAt: "2026-11-07T15:00:00Z", lastOutboundAt: null, lastCallAt: null, lastCallSeconds: null, lastChannel: "text", lastDirection: "inbound" as const, unansweredOutbound: 0, syncedAt: "x" };
+    expect(waitingDays({ ...c, ghl, lastLogged: "2026-11-01" }, today)).toBe(3);
+    expect(waitingDays({ ...c, ghl, lastLogged: "2026-11-07" }, today)).toBeNull();
+  });
+
+  it("credits completions per person in team load", async () => {
+    const { teamLoad } = await import("@/lib/ops");
+    const load = teamLoad([{ id: "p1", name: "Person (test)" }], [], [], today, [{ ownerId: "p1" }, { ownerId: "p1" }, { ownerId: null }]);
+    expect(load.people[0]?.done7).toBe(2);
+    expect(load.unowned.done7).toBe(1);
+  });
+});

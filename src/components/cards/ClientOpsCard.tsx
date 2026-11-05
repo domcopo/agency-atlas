@@ -23,6 +23,7 @@ export function ClientOpsCard({
   ready,
   today,
   ghl,
+  plan,
 }: {
   clientDbId?: string;
   slug: string;
@@ -38,6 +39,8 @@ export function ClientOpsCard({
   today: string;
   /** Call/message times from GoHighLevel (no message text). */
   ghl?: GhlContactTimes;
+  /** "SEO + Google Ads · $750/mo" */
+  plan?: string;
 }) {
   const day = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10)) : "none");
   const tone = health ? healthTone[health.state] : null;
@@ -78,6 +81,8 @@ export function ClientOpsCard({
           </span>
         )}
       </div>
+
+      {plan && <p className="text-sm font-semibold">{plan}</p>}
 
       {health && health.reasons.length > 0 && health.state !== "healthy" && (
         <ul className="space-y-0.5 text-xs text-muted">

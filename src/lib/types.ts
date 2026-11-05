@@ -310,6 +310,8 @@ export interface RosterClient {
   ownerName?: string;
   /** Call/message TIMES from GoHighLevel (0008), for a confirmed contact match. Never message text. */
   ghl?: GhlContactTimes;
+  /** Newest contact the TEAM logged (not GoHighLevel). Used to tell if a waiting client got a reply. */
+  lastLogged?: ISODate;
 }
 
 export interface GhlContactTimes {
@@ -665,6 +667,10 @@ export interface PriorityItem {
   action?: ClientAction;
   /** Present for flags about one client (so "Add next action" can prefill it). */
   clientSlug?: string;
+  /** The client's plan in a few words, e.g. "SEO + Google Ads · $750/mo". */
+  plan?: string;
+  /** For rule-based reminders: what "Done" means (log a contact, or finish your note). */
+  flagKind?: "contact" | "note";
 }
 
 /** AI briefing, operations format (version 2): a short ranked list, not paragraphs. */

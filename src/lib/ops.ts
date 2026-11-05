@@ -35,11 +35,25 @@ const WHEN_RANK = { overdue: 0, today: 1, upcoming: 2, none: 3 } as const;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const usd = (n: number) => `$${n.toLocaleString("en-US")}`;
 
+/** "SEO + Google Ads · $750/mo" (services + the client's total monthly). */
+export function planLabel(c: RosterClient): string {
+  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
+  const services = c.services.length ? c.services.map((s) => names[s] ?? s).join(" + ") : "Services not set";
+  return `${services} · $${c.monthlyUsd.toLocaleString("en-US")}/mo`;
+}
+
+/** True when the client's imported follow-up note was already marked done (saved as a completed action). */
+export function noteDone(c: RosterClient, actions: ClientAction[]): boolean {
+  return Boolean(c.followUp && actions.some((a) => a.client?.dbId === c.dbId && a.status === "done" && a.title === c.followUp));
+}
+
 /** Days a client has been waiting for our reply in GoHighLevel (null = not waiting). */
 export function waitingDays(c: RosterClient, today: string): number | null {
   const g = c.ghl;
   if (!g?.lastInboundAt) return null;
   if (g.lastOutboundAt && g.lastOutboundAt > g.lastInboundAt) return null;
+  // The team logged a contact on or after the day they reached out: answered.
+  if (c.lastLogged && c.lastLogged >= g.lastInboundAt.slice(0, 10)) return null;
   return daysBetween(g.lastInboundAt.slice(0, 10), today);
 }
 
@@ -110,7 +124,7 @@ export function healthSummary(c: RosterClient, checkIn: CheckIn, actions: Client
     attention.push(`Follow-up overdue: ${a.title}`);
   for (const i of issues) attention.push(`Open issue: ${i.title}`);
   if (mine.some((a) => a.status === "waiting")) attention.push("Waiting on the client");
-  if (c.followUp) attention.push(`Your note: ${c.followUp}`);
+  if (c.followUp && !noteDone(c, actions)) attention.push(`Your note: ${c.followUp}`);
   if (c.check) attention.push("Record needs checking");
   if (attention.length) return { state: "needs_attention", reasons: attention };
 
@@ -146,6 +160,7 @@ export function buildPriorities(input: {
 }): PriorityItem[] {
   const { clients, actions, health, checkIns, today, leadNames, newLeadsWithoutAction } = input;
   const items: PriorityItem[] = [];
+  const planOf = new Map(clients.map((c) => [c.id, planLabel(c)]));
 
   for (const a of actions.filter((x) => x.status !== "done")) {
     const when = dueWhen(a.dueOn, today);
@@ -162,6 +177,7 @@ export function buildPriorities(input: {
       when,
       priority: a.priority,
       action: a,
+      plan: a.client ? planOf.get(a.client.slug) : undefined,
     });
   }
 
@@ -169,17 +185,19 @@ export function buildPriorities(input: {
     if (openActions(actions, c.dbId).length) continue; // its own action already covers it
     const h = health.get(c.id);
     const ci = checkIns.get(c.id);
-    const base = { href: `/clients/${c.id}`, ownerName: c.ownerName ?? null, ownerId: c.ownerId ?? null, dueOn: null, clientSlug: c.id };
+    const base = { href: `/clients/${c.id}`, ownerName: c.ownerName ?? null, ownerId: c.ownerId ?? null, dueOn: null, clientSlug: c.id, plan: planLabel(c), flagKind: "contact" as const };
+    // Contacted in the last week: an at-risk reason like "paused" isn't a new to-do every day.
+    const recentlyContacted = Boolean(c.lastContact && daysBetween(c.lastContact, today) < 7);
     const isNew = daysBetween(c.startDate, today) <= OPS_RULES.newClientDays && c.startDate <= today;
     const wait = waitingDays(c, today);
     if (wait !== null && wait >= OPS_RULES.replyWithinDays) {
       items.push({ ...base, id: `f_reply_${c.id}`, title: `Reply to ${c.name}`, reason: `They reached out ${wait} days ago; no reply yet`, when: "overdue", priority: "high" });
-    } else if (h?.state === "at_risk") {
+    } else if (h?.state === "at_risk" && !recentlyContacted) {
       items.push({ ...base, id: `f_risk_${c.id}`, title: `Check on ${c.name}`, reason: `At risk: ${h.reasons[0]}`, when: "today", priority: "high" });
     } else if (isNew && !c.lastContact) {
       items.push({ ...base, id: `f_new_${c.id}`, title: `First-month check-in: ${c.name}`, reason: `Started ${c.startDate}; no contact logged yet`, when: "today", priority: "high" });
-    } else if (c.followUp) {
-      items.push({ ...base, id: `f_note_${c.id}`, title: `Follow up: ${c.name}`, reason: `Your note: ${c.followUp}`, when: "today", priority: "normal" });
+    } else if (c.followUp && !noteDone(c, actions)) {
+      items.push({ ...base, flagKind: "note", id: `f_note_${c.id}`, title: `Follow up: ${c.name}`, reason: `Your note: ${c.followUp}`, when: "today", priority: "normal" });
     } else if (ci?.state === "overdue" && ci.last) {
       items.push({ ...base, id: `f_ci_${c.id}`, title: `Check in with ${c.name}`, reason: `Last contact ${daysBetween(ci.last, today)} days ago (every ${ci.cadenceDays} days)`, when: "overdue", priority: "normal" });
     }
@@ -225,7 +243,14 @@ export function myWork(items: PriorityItem[], ownerId: string | null | undefined
 }
 
 /** Per-person load for managers: open items, overdue, clients owned. */
-export function teamLoad(staff: { id: string; name: string }[], clients: RosterClient[], actions: ClientAction[], today: string) {
+export function teamLoad(
+  staff: { id: string; name: string }[],
+  clients: RosterClient[],
+  actions: ClientAction[],
+  today: string,
+  /** Things marked done in the last 7 days, credited to an owner (null = no owner). */
+  done: { ownerId: string | null }[] = [],
+) {
   const open = actions.filter((a) => a.status !== "done");
   const row = (ownerId: string | null) => {
     const mine = open.filter((a) => (a.ownerId ?? null) === ownerId);
@@ -233,6 +258,7 @@ export function teamLoad(staff: { id: string; name: string }[], clients: RosterC
       open: mine.length,
       overdue: mine.filter((a) => a.dueOn !== null && a.dueOn < today).length,
       clients: ownerId ? clients.filter((c) => c.status === "active" && c.ownerId === ownerId).length : clients.filter((c) => c.status === "active" && !c.ownerId).length,
+      done7: done.filter((d) => (d.ownerId ?? null) === ownerId).length,
     };
   };
   return { people: staff.map((m) => ({ ...m, ...row(m.id) })), unowned: row(null) };

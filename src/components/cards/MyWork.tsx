@@ -22,11 +22,17 @@ export function MyWork({
   load,
   canEdit,
   personal = false,
+  done = [],
 }: {
   who: string;
   staff: { id: string; name: string }[];
   buckets: Record<WorkBucket, PriorityItem[]>;
-  load: { people: { id: string; name: string; open: number; overdue: number; clients: number }[]; unowned: { open: number; overdue: number; clients: number } };
+  load: {
+    people: { id: string; name: string; open: number; overdue: number; clients: number; done7?: number }[];
+    unowned: { open: number; overdue: number; clients: number; done7?: number };
+  };
+  /** Marked done in the last 7 days, for this view's person (or everyone). */
+  done?: { at: string; summary: string; client: { slug: string; name: string } | null }[];
   canEdit: boolean;
   /** A developer's own view: no person picker, no team load, status-only buttons. */
   personal?: boolean;
@@ -84,10 +90,30 @@ export function MyWork({
         ))
       )}
 
+      {done.length > 0 && (
+        <details className="glass mt-2.5 rounded-3xl">
+          <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold">
+            Done this week <span className="text-xs font-normal text-lime">{done.length}</span>
+          </summary>
+          <ul className="divide-y divide-line border-t border-line text-sm">
+            {done.slice(0, 30).map((d, i) => (
+              <li key={`${d.at}-${i}`} className="flex items-start justify-between gap-3 px-4 py-2.5">
+                <span className="min-w-0">
+                  {d.client ? <a href={`/clients/${d.client.slug}`} className="font-semibold hover:underline">{d.client.name}</a> : null}
+                  {d.client ? ": " : ""}
+                  <span className="text-muted">{d.summary}</span>
+                </span>
+                <span className="shrink-0 text-[11px] text-faint">{new Date(d.at).toLocaleDateString("en-US", { weekday: "short" })}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {!personal && (
       <details className="glass mt-2.5 rounded-3xl">
         <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold">
-          Team load <span className="text-xs font-normal text-muted">open · overdue · clients</span>
+          Team load <span className="text-xs font-normal text-muted">open · overdue · clients · done 7d</span>
         </summary>
         <ul className="divide-y divide-line border-t border-line text-sm">
           {[...load.people.map((p) => ({ key: p.id, label: p.name, ...p })), { key: "none", label: "No owner", ...load.unowned }].map((p) => (
@@ -95,7 +121,8 @@ export function MyWork({
               <a href={`/work?who=${p.key}#my-work`} className="pressable flex items-center justify-between gap-3 px-4 py-2.5">
                 <span className={p.key === "none" && (p.open || p.clients) ? "text-amber" : ""}>{p.label}</span>
                 <span className="shrink-0 text-xs text-muted">
-                  {p.open} · <span className={p.overdue ? "font-semibold text-rose" : ""}>{p.overdue}</span> · {p.clients}
+                  {p.open} · <span className={p.overdue ? "font-semibold text-rose" : ""}>{p.overdue}</span> · {p.clients} ·{" "}
+                  <span className={p.done7 ? "text-lime" : ""}>{p.done7 ?? 0}</span>
                 </span>
               </a>
             </li>

@@ -307,6 +307,46 @@ export async function createLeadAction(_prev: { error?: string; ok?: boolean } |
   return { ok: true };
 }
 
+/**
+ * "Done" on an automatic reminder from Today's priorities. It records what happened,
+ * so the reminder clears on its own:
+ * - contact reminders (check in, reply, first-month check-in): logs a contact today;
+ * - your imported follow-up note: saves it as a completed action.
+ * Both also go into the client's history (activity).
+ */
+export async function completeReminder(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const slug = text(form, "slug", 90);
+  const kind = text(form, "kind", 10);
+  const title = text(form, "title", 120);
+  if (kind !== "contact" && kind !== "note") return;
+  const client = (await getRoster()).find((c) => c.id === slug);
+  if (!client?.dbId) return;
+  const db = await createDatabaseClient();
+  if (kind === "contact") {
+    const { error } = await db.from("check_ins").insert({ client_id: client.dbId, happened_on: localToday(), note: `Done from Today's priorities: ${title}`.slice(0, 500) });
+    if (error) {
+      console.warn(`Reminder done refused: ${error.code}`);
+      return;
+    }
+    await logActivity(db, { client_id: client.dbId, kind: "action_done", summary: `Done: ${title}` });
+  } else {
+    if (!client.followUp) return;
+    const { data, error } = await db
+      .from("actions")
+      .insert({ client_id: client.dbId, kind: "follow_up", title: client.followUp.slice(0, 120), owner_staff_id: client.ownerId ?? null, status: "done", done_at: new Date().toISOString() })
+      .select("id")
+      .single();
+    if (error || !data) {
+      console.warn(`Note done refused: ${error?.code}`);
+      return;
+    }
+    await logActivity(db, { client_id: client.dbId, action_id: data.id, kind: "action_done", summary: `Done: ${client.followUp}` });
+  }
+  refreshOps(slug);
+}
+
 /** "Make it a next action" from an AI suggestion: a person taps it; the AI never does. */
 export async function addSuggestedAction(form: FormData) {
   const me = await getCurrentMember();
@@ -397,6 +437,24 @@ export async function updateAction(form: FormData) {
     return;
   }
   await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
+  refreshOps(text(form, "slug", 90));
+}
+
+/** Which services a client buys (owner only; the database enforces this too). */
+export async function setClientServices(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return;
+  const picked = SERVICES.filter((sv) => form.getAll("services").includes(sv));
+  const db = await createDatabaseClient();
+  const { error } = await db.from("clients").update({ services: picked }).eq("id", clientId);
+  if (error) {
+    console.warn(`Services change refused: ${error.code}`);
+    return;
+  }
+  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `Plan set to: ${picked.map((p) => names[p]).join(" + ") || "no services"}` });
   refreshOps(text(form, "slug", 90));
 }
 

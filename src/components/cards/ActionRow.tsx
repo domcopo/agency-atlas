@@ -4,7 +4,7 @@
 
 import { ArrowRight, Check, CalendarClock, UserRound } from "lucide-react";
 import Link from "next/link";
-import { updateAction } from "@/app/actions";
+import { completeReminder, updateAction } from "@/app/actions";
 import { cn } from "@/lib/format";
 import type { ActionPriority, PriorityItem } from "@/lib/types";
 
@@ -46,6 +46,7 @@ export function ActionRow({
             {item.title}
           </Link>
           <p className={cn("mt-0.5 text-xs", whenTone[item.when])}>{item.reason}</p>
+          {item.plan && <p className="mt-0.5 text-[11px] text-faint">{item.plan}</p>}
           {a?.notes && <p className="mt-0.5 line-clamp-2 break-words text-xs text-muted">{a.notes}</p>}
           <p className="mt-1 flex items-center gap-1 text-[11px]">
             <UserRound aria-hidden className="size-3 text-faint" />
@@ -138,6 +139,16 @@ export function ActionRow({
 
       {!a && item.clientSlug && (
         <div className="flex flex-wrap gap-1.5 pl-[18px]">
+          {canEdit && item.flagKind && (
+            <form action={completeReminder}>
+              <input type="hidden" name="slug" value={item.clientSlug} />
+              <input type="hidden" name="kind" value={item.flagKind} />
+              <input type="hidden" name="title" value={item.title} />
+              <button type="submit" className={cn(btn, "border-lime/40 text-lime")} title={item.flagKind === "contact" ? "Logs a contact today" : "Saves your note as done"}>
+                <Check aria-hidden className="size-3.5" /> Done
+              </button>
+            </form>
+          )}
           <Link href={`/clients/${item.clientSlug}#next`} className={cn(btn, "border-violet/40 text-violet")}>
             Add next action <ArrowRight aria-hidden className="size-3.5" />
           </Link>
