@@ -6,7 +6,8 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { CHECK_IN_DAYS, getClientHealth, getRoster, getRosterSummary, getServiceGroups, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { CHECK_IN_DAYS, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
+import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
 
@@ -30,6 +31,13 @@ export default async function ClientsPage() {
   const neverLogged = withHealth.filter(({ c, h }) => c.status === "active" && h?.checkIn.state === "never_logged").length;
   const winBack = await getWinBackList();
   const serviceGroups = await getServiceGroups();
+  const ops = await getOps();
+  const member = usesDatabase() ? await getMember() : null;
+  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const noNextIds = new Set(ops.gaps.noNextAction.map((c) => c.id));
+  const gapClients = ops.clients
+    .filter((c) => c.status === "active" && (!c.ownerId || noNextIds.has(c.id)))
+    .sort((a, b) => Number(Boolean(a.ownerId)) - Number(Boolean(b.ownerId)) || b.monthlyUsd - a.monthlyUsd);
 
   return (
     <>
@@ -53,6 +61,13 @@ export default async function ClientsPage() {
           <p className="text-[11px] text-muted">Avg months</p>
         </div>
       </GlassCard>
+
+      {ops.ready && (
+        <section id="owners" className="scroll-mt-16">
+          <SectionTitle aside={`${ops.gaps.noOwner.length} no owner · ${ops.gaps.noNextAction.length} no next action`}>Owners &amp; next steps</SectionTitle>
+          <OwnerGaps clients={gapClients} noNextIds={noNextIds} staff={staff} canSetOwner={member?.role === "owner"} />
+        </section>
+      )}
 
       <SectionTitle aside={<Layers aria-hidden className="size-4 text-faint" />}>By service</SectionTitle>
       <div className="grid grid-cols-2 gap-2.5">

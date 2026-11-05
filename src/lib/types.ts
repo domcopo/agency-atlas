@@ -272,10 +272,14 @@ export type Service = "SEO" | "Ads" | "Website";
 /** "How are they doing?" picked on a check-in. Moves the health score. */
 export type CheckInMood = "better" | "same" | "worse";
 
+export type ContactKind = "check_in" | "call" | "message" | "email" | "meeting" | "note";
+
 export interface CheckInEntry {
   date: ISODate;
   note: string | null;
   mood: CheckInMood | null;
+  /** What kind of contact it was (before 0006: always "check_in"). */
+  kind?: ContactKind;
 }
 
 export interface RosterClient {
@@ -301,6 +305,9 @@ export interface RosterClient {
   lastContact?: ISODate;
   /** The most recent "how are they doing" answer, and when. */
   lastMood?: { mood: CheckInMood; date: ISODate };
+  /** Team member (staff) who owns this client. */
+  ownerId?: string;
+  ownerName?: string;
 }
 
 export type HealthLevel = "healthy" | "watch" | "at_risk";
@@ -593,4 +600,55 @@ export interface ClientProfile {
   nextStep: string;
   questionsToAsk: string[];
   draftCheckIn: string;
+}
+
+// ---------------------------------------------------------------------------
+// Owners, next actions and issues (0006). One simple list for both.
+// ---------------------------------------------------------------------------
+
+export type ActionKind = "follow_up" | "issue";
+export type ActionPriority = "critical" | "high" | "normal" | "low";
+export type ActionStatus = "open" | "in_progress" | "waiting" | "done";
+
+export interface ClientAction {
+  id: string;
+  kind: ActionKind;
+  title: string;
+  notes: string | null;
+  priority: ActionPriority;
+  status: ActionStatus;
+  dueOn: ISODate | null;
+  doneAt: string | null;
+  createdAt: string;
+  ownerId: string | null;
+  ownerName: string | null;
+  /** Client slug + name (when tied to a client). */
+  client: { slug: string; dbId: string; name: string } | null;
+  leadGhlId: string | null;
+}
+
+/** The one health word shown for a client. Reasons explain it. */
+export type HealthState = "healthy" | "needs_attention" | "at_risk" | "opportunity";
+
+export interface HealthSummary {
+  state: HealthState;
+  /** Plain-English reasons, most important first. */
+  reasons: string[];
+}
+
+/** One line on "Today's priorities" / My Work. Either a real action, or a rule-based flag. */
+export interface PriorityItem {
+  id: string;
+  title: string;
+  reason: string;
+  href: string;
+  ownerName: string | null;
+  dueOn: ISODate | null;
+  /** "overdue" sorts first, then "today", then the rest. */
+  when: "overdue" | "today" | "upcoming" | "none";
+  priority: ActionPriority;
+  /** Present when this is a saved action (so Done / Reschedule / Assign work). */
+  action?: ClientAction;
+  /** Present for flags about one client (so "Add next action" can prefill it). */
+  clientSlug?: string;
 }

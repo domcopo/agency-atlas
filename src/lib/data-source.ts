@@ -19,6 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
+import { buildPriorities, healthSummary, opportunities, ownershipGaps } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
@@ -40,7 +41,11 @@ import type {
   CheckIn,
   CheckInEntry,
   CheckInMood,
+  ClientAction,
   ClientHealth,
+  ContactKind,
+  HealthSummary,
+  PriorityItem,
   Detection,
   RosterClient,
   RosterSource,
@@ -107,14 +112,21 @@ const asMood = (v: unknown): CheckInMood | null => (MOODS.includes(v as CheckInM
 
 type DbClient = Awaited<ReturnType<typeof createDatabaseClient>>;
 
-/** All check-ins, newest first. Works before and after the 0004 "mood" column exists. */
-async function readCheckIns(db: DbClient): Promise<{ client_id: string; happened_on: string; note: string | null; mood: CheckInMood | null }[]> {
+const KINDS: ContactKind[] = ["check_in", "call", "message", "email", "meeting", "note"];
+const asKind = (v: unknown): ContactKind => (KINDS.includes(v as ContactKind) ? (v as ContactKind) : "check_in");
+
+type CheckInRow = { client_id: string; happened_on: string; note: string | null; mood: CheckInMood | null; kind: ContactKind };
+
+/** All check-ins, newest first. Works before and after the 0004 "mood" and 0006 "kind" columns exist. */
+const readCheckIns = cache(async (db: DbClient): Promise<CheckInRow[]> => {
   const order = { ascending: false } as const;
+  const full = await db.from("check_ins").select("client_id, happened_on, note, mood, kind").order("happened_on", order).order("created_at", order);
+  if (!full.error) return (full.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood), kind: asKind(r.kind) }));
   const withMood = await db.from("check_ins").select("client_id, happened_on, note, mood").order("happened_on", order).order("created_at", order);
-  if (!withMood.error) return (withMood.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood) }));
+  if (!withMood.error) return (withMood.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood), kind: "check_in" as const }));
   const plain = await db.from("check_ins").select("client_id, happened_on, note").order("happened_on", order).order("created_at", order);
-  return (plain.data ?? []).map((r) => ({ ...r, mood: null }));
-}
+  return (plain.data ?? []).map((r) => ({ ...r, mood: null, kind: "check_in" as const }));
+});
 
 /** The latest check-ins for one client (database mode only). */
 export async function getCheckInHistory(clientDbId: string | undefined, limit = 6): Promise<CheckInEntry[]> {
@@ -123,16 +135,23 @@ export async function getCheckInHistory(clientDbId: string | undefined, limit = 
   return (await readCheckIns(db))
     .filter((r) => r.client_id === clientDbId)
     .slice(0, limit)
-    .map((r) => ({ date: r.happened_on, note: r.note, mood: r.mood }));
+    .map((r) => ({ date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind }));
 }
 
 /** Reads clients as the signed-in person. Row-level security decides what comes back. */
 async function loadDatabaseRoster(): Promise<Roster> {
   const db = await createDatabaseClient();
-  const [clients, checkIns] = await Promise.all([
-    db.from("clients").select("id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date"),
+  const cols = "id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date";
+  const [withOwner, checkIns, staff] = await Promise.all([
+    db.from("clients").select(`${cols}, owner_staff_id`),
     readCheckIns(db),
+    db.from("staff").select("id, name"),
   ]);
+  // Before 0006 there is no owner column: read without it.
+  const clients = withOwner.error
+    ? await db.from("clients").select(cols).then((r) => ({ ...r, data: r.data?.map((c) => ({ ...c, owner_staff_id: null as string | null })) ?? null }))
+    : withOwner;
+  const staffName = new Map((staff.data ?? []).map((m) => [m.id as string, m.name as string]));
   if (clients.error || !clients.data) return { source: "database", clients: [], skipped: 0 };
   const lastContact = new Map<string, string>();
   const lastMood = new Map<string, { mood: CheckInMood; date: string }>();
@@ -156,6 +175,8 @@ async function loadDatabaseRoster(): Promise<Roster> {
       endDate: r.end_date ?? undefined,
       lastContact: lastContact.get(r.id),
       lastMood: lastMood.get(r.id),
+      ownerId: r.owner_staff_id ?? undefined,
+      ownerName: r.owner_staff_id ? staffName.get(r.owner_staff_id) : undefined,
       services: (r.services ?? []) as RosterClient["services"],
     })),
   };
@@ -392,6 +413,90 @@ export async function getMissionControl(): Promise<MissionControlData> {
 }
 
 // ---------------------------------------------------------------------------
+// Owners, next actions and issues (0006). Rules live in src/lib/ops.ts.
+// ---------------------------------------------------------------------------
+
+const ACTION_COLS = "id, client_id, lead_ghl_id, kind, title, notes, owner_staff_id, priority, status, due_on, done_at, created_at";
+
+/** All actions (open and done), read as the signed-in person. ready=false before 0006 is run. */
+export const getActions = cache(async (): Promise<{ ready: boolean; actions: ClientAction[] }> => {
+  if (!usesDatabase()) return { ready: false, actions: [] };
+  const db = await createDatabaseClient();
+  const [res, team] = await Promise.all([
+    db.from("actions").select(ACTION_COLS).order("created_at", { ascending: false }).limit(2000),
+    getTeam(),
+  ]);
+  if (res.error) return { ready: false, actions: [] };
+  const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
+  const staffName = new Map(team.members.map((m) => [m.id, m.name]));
+  return {
+    ready: true,
+    actions: (res.data ?? []).map((r) => {
+      const c = r.client_id ? byDbId.get(r.client_id) : undefined;
+      return {
+        id: r.id,
+        kind: r.kind,
+        title: r.title,
+        notes: r.notes,
+        priority: r.priority,
+        status: r.status,
+        dueOn: r.due_on,
+        doneAt: r.done_at,
+        createdAt: r.created_at,
+        ownerId: r.owner_staff_id,
+        ownerName: r.owner_staff_id ? (staffName.get(r.owner_staff_id) ?? null) : null,
+        client: c?.dbId ? { slug: c.id, dbId: c.dbId, name: c.name } : null,
+        leadGhlId: r.lead_ghl_id,
+      } as ClientAction;
+    }),
+  };
+});
+
+/** Health, flags and priorities for everyone, computed once per request. */
+export const getOps = cache(async () => {
+  const clients = (await roster()).clients;
+  const { ready, actions } = await getActions();
+  const t = today();
+  const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
+  const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
+  const priorities: PriorityItem[] = ready ? buildPriorities({ clients, actions, health, checkIns, today: t }) : [];
+  const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
+  for (const h of health.values()) if (h) counts[h.state]++;
+  return { ready, clients, actions, health, checkIns, priorities, counts, gaps: ownershipGaps(clients, actions), today: t };
+});
+
+/** One client's health word + reasons, and its open and recent items. */
+export async function getClientOps(slug: string) {
+  const ops = await getOps();
+  const c = ops.clients.find((x) => x.id === slug);
+  if (!c) return null;
+  const mine = ops.actions.filter((a) => a.client?.slug === slug);
+  return {
+    ready: ops.ready,
+    health: ops.health.get(slug) ?? null,
+    open: mine.filter((a) => a.status !== "done"),
+    done: mine.filter((a) => a.status === "done").slice(0, 5),
+    priorities: ops.priorities.filter((p) => p.clientSlug === slug || p.action?.client?.slug === slug),
+  };
+}
+
+/** Recent contacts across all clients (calls, messages, check-ins...), newest first. */
+export async function getContactLog(days = 14, limit = 6) {
+  if (!usesDatabase()) return { count: 0, recent: [] as { date: string; kind: ContactKind; note: string | null; client: { slug: string; name: string } | null }[] };
+  const db = await createDatabaseClient();
+  const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
+  const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const rows = (await readCheckIns(db)).filter((r) => r.happened_on >= since);
+  return {
+    count: rows.length,
+    recent: rows.slice(0, limit).map((r) => {
+      const c = byDbId.get(r.client_id);
+      return { date: r.happened_on, kind: r.kind, note: r.note, client: c ? { slug: c.id, name: c.name } : null };
+    }),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Client detection radar — simple, explainable rules for now. Later an AI may
 // suggest items too, but only as cited suggestions a person reviews.
 // ---------------------------------------------------------------------------
@@ -403,43 +508,30 @@ export async function getDetections(): Promise<Detection[]> {
   const real = (await roster()).source !== "demo";
   const out: Detection[] = [];
 
-  // Real list: owner's follow-up notes (amber).
-  for (const c of clients.filter((x) => x.followUp && x.status !== "canceled")) {
-    out.push({ id: `d_fu_${c.id}`, kind: "attention", title: `Follow up: ${c.name}`, why: c.followUp!, closeness: 0.85, confidence: 0.95, href: `/clients/${c.id}`, isSynthetic: !real });
+  // One blip per client, by its health word (red = at risk, amber = needs attention).
+  const ops = await getOps();
+  for (const c of clients) {
+    const h = ops.health.get(c.id);
+    if (!h || h.state === "healthy" || h.state === "opportunity") continue;
+    const risk = h.state === "at_risk";
+    out.push({
+      id: `d_${h.state}_${c.id}`,
+      kind: risk ? "problem" : "attention",
+      title: `${risk ? "At risk" : "Needs attention"}: ${c.name}`,
+      why: h.reasons.slice(0, 3).join(". ") + ".",
+      // More reasons and more money = closer to the center.
+      closeness: clamp((risk ? 0.6 : 0.3) + h.reasons.length * 0.08 + Math.min(c.monthlyUsd, 1000) / 5000),
+      confidence: risk ? 0.85 : 0.7,
+      href: `/clients/${c.id}`,
+      isSynthetic: !real,
+    });
   }
-  // Real list: paused clients are money on hold (red).
-  for (const c of clients.filter((x) => x.status === "paused")) {
-    out.push({ id: `d_pause_${c.id}`, kind: "problem", title: `${c.name} is paused`, why: `$${c.monthlyUsd.toLocaleString("en-US")}/mo on hold. A check-in call could win them back.`, closeness: 0.7, confidence: 0.9, href: `/clients/${c.id}`, isSynthetic: !real });
+  // Opportunities (green): any active client with an upsell or referral idea.
+  for (const c of clients) {
+    const ideas = opportunities(c, today());
+    if (!ideas.length) continue;
+    out.push({ id: `d_opp_${c.id}`, kind: "opportunity", title: `Opportunity: ${c.name}`, why: ideas.join(". ") + ".", closeness: clamp(0.25 + monthsBetween(c.startDate, today()) / 24), confidence: 0.45, href: `/clients/${c.id}`, isSynthetic: !real });
   }
-  // Real list: records the two lists disagreed on (amber, one blip).
-  const toCheck = clients.filter((c) => c.check).length;
-  if (toCheck > 0)
-    out.push({ id: "d_check", kind: "attention", title: `${toCheck} client records need checking`, why: "Your two client lists disagreed on these. Confirm them once.", closeness: 0.35, confidence: 1, href: "/clients", isSynthetic: !real });
-  // Real list: active clients under $150 with no SEO yet → SEO upsell (green).
-  for (const c of clients.filter((x) => x.status === "active" && x.monthlyUsd < 150 && !x.services.includes("SEO"))) {
-    const months = monthsBetween(c.startDate, today());
-    out.push({ id: `d_up_${c.id}`, kind: "opportunity", title: `SEO upsell: ${c.name}`, why: `Pays $${c.monthlyUsd.toLocaleString("en-US")}/mo; SEO plans start at $150. With you ${months} months, so trust is ${months >= 6 ? "built" : "still building"}.`, closeness: clamp(0.25 + months / 24), confidence: 0.45, href: `/clients/${c.id}`, isSynthetic: !real });
-  }
-  // Real list: SEO clients not running ads (green, one blip).
-  const seoNoAds = clients.filter((c) => c.status === "active" && c.services.includes("SEO") && !c.services.includes("Ads")).length;
-  if (seoNoAds > 0)
-    out.push({ id: "d_ads", kind: "opportunity", title: `Ads upsell: ${seoNoAds} SEO clients`, why: "They already trust you with SEO and don't run ads with you yet.", closeness: 0.3, confidence: 0.35, href: "/clients", isSynthetic: !real });
-
-  // Real list: health and check-ins.
-  const live = clients.filter((c) => c.status === "active");
-  for (const c of live) {
-    const h = getClientHealth(c);
-    if (h?.level === "at_risk")
-      out.push({ id: `d_risk_${c.id}`, kind: "problem", title: `At risk: ${c.name}`, why: `Health ${h.score}/100. ${h.factors.filter((f) => f.impact < 0).map((f) => f.label).join(". ")}.`, closeness: 0.8, confidence: 0.7, href: `/clients/${c.id}`, isSynthetic: !real });
-    if (h?.checkIn.state === "overdue")
-      out.push({ id: `d_ci_${c.id}`, kind: "attention", title: `Check in: ${c.name}`, why: `Due ${h.checkIn.due}. Check in every ${h.checkIn.cadenceDays} days.`, closeness: 0.75, confidence: 0.9, href: `/clients/${c.id}`, isSynthetic: !real });
-  }
-  const neverLogged = live.filter((c) => !c.lastContact).length;
-  if (neverLogged > 0)
-    out.push({ id: "d_ci_unknown", kind: "attention", title: `${neverLogged} clients have no check-in logged`, why: "Log the last time you talked so reminders can start. Open a client, or answer Atlas asks.", closeness: 0.4, confidence: 0.9, href: "/clients#checkins", isSynthetic: !real });
-  const onboarding = live.filter((c) => daysBetween(c.startDate, today()) <= 30).length;
-  if (onboarding > 0)
-    out.push({ id: "d_onboard", kind: "attention", title: `${onboarding} new clients in their first month`, why: "Make sure onboarding and the first work orders are moving.", closeness: 0.6, confidence: 0.7, href: "/clients", isSynthetic: !real });
   if ((await roster()).skipped > 0)
     out.push({ id: "d_skip", kind: "problem", title: `${(await roster()).skipped} client records couldn't be read`, why: "They were left out. Check the private client file.", closeness: 0.95, confidence: 1, href: "/safety", isSynthetic: false });
 
@@ -880,7 +972,7 @@ export async function getRecentCheckInsByClient(perClient = 3): Promise<Map<stri
   const db = await createDatabaseClient();
   for (const r of await readCheckIns(db)) {
     const list = out.get(r.client_id) ?? [];
-    if (list.length < perClient) list.push({ date: r.happened_on, note: r.note, mood: r.mood });
+    if (list.length < perClient) list.push({ date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind });
     out.set(r.client_id, list);
   }
   return out;

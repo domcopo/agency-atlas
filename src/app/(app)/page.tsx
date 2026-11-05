@@ -25,6 +25,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { HomeTabs } from "@/components/cards/HomeTabs";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard } from "@/components/cards/ProspectCard";
+import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
@@ -36,8 +37,11 @@ import {
   getConversations,
   getCoachHints,
   getDetections,
+  getContactLog,
   getGhlSummary,
   getMissionControl,
+  getOps,
+  getTeam,
   getProspects,
   getProspectsToWork,
   getRosterSummary,
@@ -84,6 +88,14 @@ export default async function MissionControlPage() {
   const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady);
   const samples = showsSamples();
   const ghl = await getGhlSummary();
+  const ops = await getOps();
+  const contacts = await getContactLog(14, 5);
+  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const canWork = Boolean(member && member.role !== "developer");
+  const openIssues = ops.actions
+    .filter((a) => a.kind === "issue" && a.status !== "done")
+    .sort((x, y) => (x.priority === y.priority ? (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999") : ["critical", "high", "normal", "low"].indexOf(x.priority) - ["critical", "high", "normal", "low"].indexOf(y.priority)));
+  const kindWord = { check_in: "Check-in", call: "Call", message: "Message", email: "Email", meeting: "Meeting", note: "Note" } as const;
   const briefingIsToday = Boolean(briefing && new Date(briefing.createdAt).toDateString() === new Date().toDateString());
 
   const resultsTab = {
@@ -257,7 +269,73 @@ export default async function MissionControlPage() {
     ),
   };
 
-  const tabs = samples ? [resultsTab, casesTab, leadsTab, chatsTab] : [resultsTab, pipelineTab];
+  // Cases = open client issues (real).
+  const issuesTab = {
+    id: "issues",
+    label: "Cases",
+    icon: <Sprout aria-hidden />,
+    stat: ops.ready ? String(openIssues.length) : "–",
+    statLabel: ops.ready ? "open client issues" : "issues not set up yet",
+    attention: openIssues.some((i) => i.priority === "critical" || (i.dueOn !== null && i.dueOn < ops.today)),
+    panel: (
+      <div className="glass overflow-hidden rounded-3xl">
+        {openIssues.length ? (
+          <ul className="divide-y divide-line">
+            {openIssues.slice(0, 5).map((i) => (
+              <li key={i.id}>
+                <Link href={i.client ? `/clients/${i.client.slug}#next` : "/"} className="pressable flex items-start gap-2.5 px-4 py-3 hover:bg-white/[0.03]">
+                  <span className={`mt-1.5 size-2 shrink-0 rounded-full ${priorityTone[i.priority].dot}`} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">{i.client ? `${i.client.name}: ` : ""}{i.title}</span>
+                    <span className="block text-xs text-muted">
+                      {i.status === "in_progress" ? "In progress" : i.status === "waiting" ? "Waiting" : "Open"} · {i.ownerName ?? "no owner"}
+                      {i.dueOn ? ` · due ${i.dueOn}` : ""}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-4 py-3 text-sm text-muted">
+            {ops.ready ? "No open issues. Open one from a client's page when something breaks." : "Run the 0006 setup step to start tracking issues."}
+          </p>
+        )}
+      </div>
+    ),
+  };
+
+  // Chats = the communication log your team records (real). GoHighLevel messages come later.
+  const contactsTab = {
+    id: "contacts",
+    label: "Chats",
+    icon: <MessagesSquare aria-hidden />,
+    stat: String(contacts.count),
+    statLabel: "contacts logged (14 days)",
+    panel: (
+      <div className="glass overflow-hidden rounded-3xl">
+        {contacts.recent.length ? (
+          <ul className="divide-y divide-line">
+            {contacts.recent.map((r, i) => (
+              <li key={`${r.date}-${i}`}>
+                <Link href={r.client ? `/clients/${r.client.slug}` : "/clients"} className="pressable block px-4 py-3 hover:bg-white/[0.03]">
+                  <span className="block text-sm font-semibold">
+                    {r.client?.name ?? "Client"} <span className="font-normal text-muted">· {kindWord[r.kind]} · {formatShortDate(`${r.date}T12:00:00Z`)}</span>
+                  </span>
+                  {r.note && <span className="mt-0.5 line-clamp-2 block break-words text-xs text-muted">{r.note}</span>}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-4 py-3 text-sm text-muted">No contacts logged in the last 14 days. Log calls, messages and check-ins on a client&apos;s page.</p>
+        )}
+        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">Logged by your team. GoHighLevel messages aren&apos;t connected.</p>
+      </div>
+    ),
+  };
+
+  const tabs = samples ? [resultsTab, casesTab, leadsTab, chatsTab] : [resultsTab, issuesTab, pipelineTab, contactsTab];
 
   return (
     <>
@@ -287,8 +365,30 @@ export default async function MissionControlPage() {
       <HomeTabs tabs={tabs} />
 
       <div className="mt-3">
-        <DetectionRadar detections={await getDetections()} coachSignature={coach.radar.signature} />
+        <DetectionRadar detections={await getDetections()} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />
       </div>
+
+      {!samples && (
+        <section aria-label="Today's priorities">
+          <SectionTitle aside={ops.priorities.length ? `${ops.priorities.filter((p) => p.when === "overdue").length} overdue` : undefined}>
+            Today&apos;s priorities
+          </SectionTitle>
+          {ops.ready ? (
+            <PriorityList
+              items={ops.priorities}
+              staff={staff}
+              canEdit={canWork}
+              limit={5}
+              empty="Nothing needs action right now."
+            />
+          ) : (
+            <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">
+              Owners and next actions turn on after one setup step: run{" "}
+              <span className="font-mono text-xs">0006_owners_and_next_actions.sql</span> in Supabase.
+            </p>
+          )}
+        </section>
+      )}
 
       {(canUseAi || briefing) && (
         <>
@@ -320,39 +420,43 @@ export default async function MissionControlPage() {
         </>
       )}
 
-      <SectionTitle>Recent activity</SectionTitle>
-      <ol className="glass divide-y divide-line rounded-3xl">
-        {data.activity.slice(0, 5).map((item) => {
-          const { icon: Icon, color } = activityIcon[item.kind];
-          const body = (
-            <>
-              <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${color}`}>
-                <Icon aria-hidden className="size-4.5" />
-              </span>
-              <p className="min-w-0 flex-1 text-sm">{item.title}</p>
-              {!item.isSynthetic && real && <Pill color="teal">Real</Pill>}
-              <time dateTime={item.at} className="shrink-0 text-xs text-faint">
-                {formatShortDate(item.at)}
-              </time>
-            </>
-          );
-          return (
-            <li key={item.id}>
-              {item.href ? (
-                <Link href={item.href} className="pressable flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03]">
-                  {body}
-                </Link>
-              ) : (
-                <div className="flex items-center gap-3 px-4 py-3">{body}</div>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-      <p className="mt-2 flex items-center gap-1 px-1 text-[11px] text-faint">
-        <TrendingUp aria-hidden className="size-3" />{" "}
-        {samples ? "Real items come from your client list; others are samples." : "From your client list."}
-      </p>
+      {samples && (
+        <>
+          <SectionTitle>Recent activity</SectionTitle>
+          <ol className="glass divide-y divide-line rounded-3xl">
+            {data.activity.slice(0, 5).map((item) => {
+              const { icon: Icon, color } = activityIcon[item.kind];
+              const body = (
+                <>
+                  <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${color}`}>
+                    <Icon aria-hidden className="size-4.5" />
+                  </span>
+                  <p className="min-w-0 flex-1 text-sm">{item.title}</p>
+                  {!item.isSynthetic && real && <Pill color="teal">Real</Pill>}
+                  <time dateTime={item.at} className="shrink-0 text-xs text-faint">
+                    {formatShortDate(item.at)}
+                  </time>
+                </>
+              );
+              return (
+                <li key={item.id}>
+                  {item.href ? (
+                    <Link href={item.href} className="pressable flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03]">
+                      {body}
+                    </Link>
+                  ) : (
+                    <div className="flex items-center gap-3 px-4 py-3">{body}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+          <p className="mt-2 flex items-center gap-1 px-1 text-[11px] text-faint">
+            <TrendingUp aria-hidden className="size-3" />{" "}
+            {samples ? "Real items come from your client list; others are samples." : "From your client list."}
+          </p>
+        </>
+      )}
     </>
   );
 }

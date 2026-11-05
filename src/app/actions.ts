@@ -45,6 +45,21 @@ function pastDate(value: string): string | null {
   return value >= "2020-01-01" && value <= localToday() ? value : null;
 }
 
+/** A real calendar date for a due date (past allowed, so overdue items can be logged). */
+function anyDate(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const d = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== value) return null;
+  return value >= "2020-01-02" && value <= "2100-01-01" ? value : null;
+}
+
+const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
+const PRIORITIES = ["critical", "high", "normal", "low"] as const;
+const STATUSES = ["open", "in_progress", "waiting", "done"] as const;
+const CONTACT_KINDS = ["check_in", "call", "message", "email", "meeting", "note"] as const;
+const oneOf = <T extends string>(list: readonly T[], v: string): T | null => (list.includes(v as T) ? (v as T) : null);
+const MISSING_TABLE = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
+
 // ---------------------------------------------------------------------------
 // Sign in / out
 // ---------------------------------------------------------------------------
@@ -129,21 +144,190 @@ export async function logCheckIn(_prev: { error?: string; ok?: boolean } | undef
   const day = pastDate(text(form, "date", 10));
   const note = text(form, "note", 500);
   const mood = text(form, "mood", 10);
+  const kind = oneOf(CONTACT_KINDS, text(form, "kind", 12)) ?? "check_in";
+  const nextTitle = text(form, "nextTitle", 120);
+  const nextDue = text(form, "nextDue", 10);
   if (!/^[0-9a-f-]{36}$/.test(clientId)) return { error: "Unknown client." };
+  if (nextDue && !anyDate(nextDue)) return { error: "Pick a real due date for the next action." };
   if (!day) return { error: "Pick a date that isn't in the future." };
   if (mood && mood !== "better" && mood !== "same" && mood !== "worse") return { error: "Pick better, same or worse." };
   const db = await createDatabaseClient();
-  const { error } = await db.from("check_ins").insert({ client_id: clientId, happened_on: day, note: note || null, ...(mood ? { mood } : {}) });
+  const { error } = await db.from("check_ins").insert({
+    client_id: clientId,
+    happened_on: day,
+    note: note || null,
+    ...(mood ? { mood } : {}),
+    ...(kind !== "check_in" ? { kind } : {}),
+  });
   if (error) {
     console.warn(`Check-in refused: ${error.code}`);
     // 42703 / PGRST204 = the mood column doesn't exist yet (0004 not run).
     if (mood && (error.code === "42703" || error.code === "PGRST204")) return { error: "Saving how they're doing needs one more setup step (0004 SQL). Try again without picking one, or run it first." };
+    if (kind !== "check_in" && MISSING_TABLE.has(error.code ?? "")) return { error: "Saving the contact type needs one more setup step (0006 SQL). Pick \"Check-in\" or run it first." };
     return { error: "Couldn't save the check-in." };
+  }
+  // A commitment from this conversation becomes a next action (same owner as the client).
+  if (nextTitle) {
+    const { data: client } = await db.from("clients").select("owner_staff_id").eq("id", clientId).maybeSingle();
+    const saved = await saveAction(db, {
+      client_id: clientId,
+      kind: "follow_up",
+      title: nextTitle,
+      owner_staff_id: (client as { owner_staff_id?: string | null } | null)?.owner_staff_id ?? null,
+      due_on: nextDue ? anyDate(nextDue) : null,
+      priority: "normal",
+    });
+    if (saved.error) return { error: `Contact saved, but the next action wasn't: ${saved.error}` };
   }
   revalidatePath(`/clients/${slug}`);
   revalidatePath("/clients");
   revalidatePath("/");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Owners and next actions (0006). Owner and managers work actions; only the
+// owner sets who owns a client. Every change is also written to the activity
+// history (insert-only) so each client has a timeline.
+// ---------------------------------------------------------------------------
+
+type Db = Awaited<ReturnType<typeof createDatabaseClient>>;
+
+async function staffExists(db: Db, id: string): Promise<string | null> {
+  if (!isUuid(id)) return null;
+  const { data } = await db.from("staff").select("name").eq("id", id).maybeSingle();
+  return (data as { name?: string } | null)?.name ?? null;
+}
+
+async function logActivity(db: Db, row: { client_id: string | null; action_id?: string | null; kind: string; summary: string }) {
+  const { error } = await db.from("activity").insert({ ...row, summary: row.summary.slice(0, 200) });
+  if (error) console.warn(`Activity not logged: ${error.code}`);
+}
+
+async function saveAction(
+  db: Db,
+  row: { client_id: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null },
+): Promise<{ error?: string }> {
+  const { data, error } = await db.from("actions").insert(row).select("id").single();
+  if (error || !data) {
+    console.warn(`Action refused: ${error?.code}`);
+    return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
+  }
+  await logActivity(db, { client_id: row.client_id, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : "Next action added"}: ${row.title}` });
+  return {};
+}
+
+function refreshOps(slug?: string) {
+  if (slug && /^[a-z0-9-]{1,90}$/.test(slug)) revalidatePath(`/clients/${slug}`);
+  revalidatePath("/", "layout");
+}
+
+/** Add a follow-up or an issue to a client. */
+export async function createAction(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add next actions." };
+  const clientId = text(form, "clientId", 40);
+  const slug = text(form, "slug", 90);
+  const kind = text(form, "kind", 10) === "issue" ? "issue" : "follow_up";
+  const title = text(form, "title", 120);
+  const notes = text(form, "notes", 500);
+  const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
+  const dueRaw = text(form, "due", 10);
+  const ownerRaw = text(form, "ownerId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  if (!title) return { error: "Say what needs to happen." };
+  const due = dueRaw ? anyDate(dueRaw) : null;
+  if (dueRaw && !due) return { error: "Pick a real due date." };
+  const db = await createDatabaseClient();
+  if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
+  const saved = await saveAction(db, { client_id: clientId, kind, title, notes: notes || null, owner_staff_id: ownerRaw || null, priority, due_on: due });
+  if (saved.error) return { error: saved.error };
+  refreshOps(slug);
+  return { ok: true };
+}
+
+/** Done / reopen / reschedule / assign / status / priority on one action. */
+export async function updateAction(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const id = text(form, "actionId", 40);
+  const op = text(form, "op", 12);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { data: current } = await db.from("actions").select("id, client_id, title, status").eq("id", id).maybeSingle();
+  if (!current) return; // not found, or not allowed to see it
+  const a = current as { id: string; client_id: string | null; title: string; status: string };
+
+  let patch: Record<string, unknown> | null = null;
+  let summary = "";
+  let kind = "action_status";
+  if (op === "done") {
+    patch = { status: "done", done_at: new Date().toISOString() };
+    summary = `Done: ${a.title}`;
+    kind = "action_done";
+  } else if (op === "reopen") {
+    patch = { status: "open", done_at: null };
+    summary = `Reopened: ${a.title}`;
+    kind = "action_reopened";
+  } else if (op === "reschedule") {
+    const preset = text(form, "preset", 8);
+    const base = localToday();
+    const shift = (days: number) => {
+      const d = new Date(`${base}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+    const due = preset === "tomorrow" ? shift(1) : preset === "week" ? shift(7) : anyDate(text(form, "due", 10));
+    if (!due) return;
+    patch = { due_on: due };
+    summary = `Rescheduled to ${due}: ${a.title}`;
+    kind = "action_rescheduled";
+  } else if (op === "assign") {
+    const ownerId = text(form, "ownerId", 40);
+    const name = ownerId ? await staffExists(db, ownerId) : null;
+    if (ownerId && !name) return;
+    patch = { owner_staff_id: ownerId || null };
+    summary = name ? `Assigned to ${name}: ${a.title}` : `Unassigned: ${a.title}`;
+    kind = "action_assigned";
+  } else if (op === "status") {
+    const status = oneOf(STATUSES, text(form, "status", 12));
+    if (!status) return;
+    patch = status === "done" ? { status, done_at: new Date().toISOString() } : { status, done_at: null };
+    summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "done" ? "Done" : "Open"}: ${a.title}`;
+    kind = status === "done" ? "action_done" : "action_status";
+  } else if (op === "priority") {
+    const priority = oneOf(PRIORITIES, text(form, "priority", 10));
+    if (!priority) return;
+    patch = { priority };
+    summary = `Priority ${priority}: ${a.title}`;
+  }
+  if (!patch) return;
+  const { error } = await db.from("actions").update(patch).eq("id", id);
+  if (error) {
+    console.warn(`Action update refused: ${error.code}`);
+    return;
+  }
+  await logActivity(db, { client_id: a.client_id, action_id: a.id, kind, summary });
+  refreshOps(text(form, "slug", 90));
+}
+
+/** Who owns a client (owner only; the database enforces this too). */
+export async function setClientOwner(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const clientId = text(form, "clientId", 40);
+  const ownerId = text(form, "ownerId", 40);
+  if (!isUuid(clientId)) return;
+  const db = await createDatabaseClient();
+  const name = ownerId ? await staffExists(db, ownerId) : null;
+  if (ownerId && !name) return;
+  const { error } = await db.from("clients").update({ owner_staff_id: ownerId || null }).eq("id", clientId);
+  if (error) {
+    console.warn(`Owner change refused: ${error.code}`);
+    return;
+  }
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: name ? `Owner set to ${name}` : "Owner removed" });
+  refreshOps(text(form, "slug", 90));
 }
 
 // ---------------------------------------------------------------------------

@@ -23,9 +23,9 @@ import { useSeen } from "@/lib/use-seen";
 const SWEEP_SECONDS = 4;
 
 export const kindStyle: Record<DetectionKind, { label: string; dot: string; text: string; glow: string }> = {
-  problem: { label: "Problems", dot: "bg-rose", text: "text-rose", glow: "shadow-[0_0_10px_2px_rgb(255_122_147/0.7)]" },
-  attention: { label: "Attention", dot: "bg-amber", text: "text-amber", glow: "shadow-[0_0_10px_2px_rgb(251_191_74/0.7)]" },
-  opportunity: { label: "Upsells", dot: "bg-lime", text: "text-lime", glow: "shadow-[0_0_10px_2px_rgb(212_245_122/0.7)]" },
+  problem: { label: "At risk", dot: "bg-rose", text: "text-rose", glow: "shadow-[0_0_10px_2px_rgb(255_122_147/0.7)]" },
+  attention: { label: "Need attention", dot: "bg-amber", text: "text-amber", glow: "shadow-[0_0_10px_2px_rgb(251_191_74/0.7)]" },
+  opportunity: { label: "Opportunities", dot: "bg-lime", text: "text-lime", glow: "shadow-[0_0_10px_2px_rgb(212_245_122/0.7)]" },
 };
 
 // Each kind gets its own third of the circle, so colors don't get mixed up.
@@ -136,11 +136,14 @@ export function DetectionRadar({
   detections,
   coachSignature,
   limit = 18,
+  healthyCount,
 }: {
   detections: Detection[];
   /** Set when something here is worth checking; makes the card glow until opened. */
   coachSignature: string | null;
   limit?: number;
+  /** Clients with nothing to flag (shown as a quiet count). */
+  healthyCount?: number;
 }) {
   const shown = detections.slice(0, limit);
   const [open, setOpen] = useState(false);
@@ -174,6 +177,12 @@ export function DetectionRadar({
                 {counts(k)} {kindStyle[k].label.toLowerCase()}
               </span>
             ))}
+            {healthyCount !== undefined && (
+              <span className="flex items-center gap-1 text-faint">
+                <span className="size-1.5 rounded-full bg-teal/60" />
+                {healthyCount} healthy
+              </span>
+            )}
           </span>
           {!open && top && (
             <span className="mt-1 block truncate text-xs">

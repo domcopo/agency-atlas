@@ -9,7 +9,10 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { EmptyState, Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getAiStatus, getCheckInHistory, getClientHealth, getClientProfile, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getAiStatus, getCheckInHistory, getClientHealth, getClientOps, getClientProfile, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
+import { PriorityList } from "@/components/cards/ActionRow";
+import { ActionForm } from "@/components/forms/ActionForm";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
@@ -20,6 +23,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: (await getRosterClient(id))?.name ?? "Client" };
 }
 
+const kindLabel = { check_in: "Check-in", call: "Call", message: "Message", email: "Email", meeting: "Meeting", note: "Note" } as const;
 const tierLabel = { high: "High tier ($500+)", mid: "Mid tier ($150–499)", low: "Low tier (under $150)" } as const;
 const sourceLabel: Record<string, string> = {
   sheet: "Full client sheet",
@@ -41,6 +45,11 @@ export default async function ClientPage({ params }: Props) {
   const ai = await getAiStatus();
   const profile = await getClientProfile(c.dbId);
   const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady && c.dbId);
+  const ops = await getClientOps(c.id);
+  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const canWork = Boolean(usesDatabase() && member && member.role !== "developer" && c.dbId);
+  const nextAction = [...(ops?.open ?? [])].sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))[0] ?? null;
+  const isCurrent = c.status !== "canceled" && c.status !== "incomplete_expired";
 
   return (
     <>
@@ -70,6 +79,58 @@ export default async function ClientPage({ params }: Props) {
         </div>
       )}
 
+      {usesDatabase() && (
+        <div className="mb-3">
+          <ClientOpsCard
+            clientDbId={c.dbId}
+            slug={c.id}
+            health={ops?.health ?? null}
+            ownerId={c.ownerId}
+            ownerName={c.ownerName}
+            lastContact={c.lastContact}
+            next={nextAction}
+            openIssues={(ops?.open ?? []).filter((a) => a.kind === "issue").length}
+            staff={staff}
+            canSetOwner={member?.role === "owner"}
+            ready={Boolean(ops?.ready)}
+            today={today}
+          />
+        </div>
+      )}
+
+      {usesDatabase() && isCurrent && (
+        <section id="next" className="scroll-mt-16">
+          <SectionTitle aside={ops?.open.length ? `${ops.open.length} open` : undefined}>Next actions &amp; issues</SectionTitle>
+          {ops?.ready ? (
+            <>
+              <PriorityList
+                items={ops.priorities}
+                staff={staff}
+                canEdit={canWork}
+                limit={5}
+                slug={c.id}
+                empty="Nothing open. Add the next step below so this client never goes quiet."
+              />
+              {canWork && c.dbId && (
+                <details className="glass mt-2.5 rounded-3xl px-4 py-1" open={!ops.open.length}>
+                  <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">
+                    + Add next action or issue
+                  </summary>
+                  <div className="pb-3">
+                    <ActionForm clientId={c.dbId} slug={c.id} today={today} staff={staff} defaultOwnerId={c.ownerId} />
+                  </div>
+                </details>
+              )}
+            </>
+          ) : (
+            <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">
+              Next actions and issues turn on after one setup step: run <span className="font-mono text-xs">0006_owners_and_next_actions.sql</span> in Supabase.
+            </p>
+          )}
+        </section>
+      )}
+
+      <SectionTitle>Account</SectionTitle>
       <GlassCard className="grid grid-cols-2 gap-4">
         <div>
           <p className="text-xs text-muted">Monthly</p>
@@ -116,7 +177,10 @@ export default async function ClientPage({ params }: Props) {
           {c.status !== "canceled" && c.status !== "incomplete_expired" && (
             <GlassCard className="mt-2.5">
               {usesDatabase() && c.dbId && member && member.role !== "developer" ? (
-                <CheckInForm clientId={c.dbId} slug={c.id} today={today} />
+                <>
+                  <p className="mb-2 text-xs font-semibold text-muted">Log a contact</p>
+                  <CheckInForm clientId={c.dbId} slug={c.id} today={today} />
+                </>
               ) : (
                 <p className="text-xs text-muted">
                   Logging check-ins turns on once the database is connected. For now, tell Claude the date.
@@ -126,7 +190,7 @@ export default async function ClientPage({ params }: Props) {
           )}
           {history.length > 0 && (
             <GlassCard className="mt-2.5">
-              <p className="mb-2 text-xs font-semibold text-muted">Recent check-ins</p>
+              <p className="mb-2 text-xs font-semibold text-muted">Recent contacts</p>
               <ul className="space-y-2 text-sm">
                 {history.map((h, i) => {
                   const Icon = h.mood === "better" ? ArrowUpRight : h.mood === "worse" ? ArrowDownRight : ArrowRight;
@@ -136,6 +200,7 @@ export default async function ClientPage({ params }: Props) {
                       <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${tone}`} />
                       <span className="min-w-0">
                         <span className="font-semibold">{formatDate(h.date)}</span>
+                        {h.kind && h.kind !== "check_in" && <span className="ml-1.5 text-xs text-sky">{kindLabel[h.kind]}</span>}
                         {h.mood && <span className={`ml-1.5 text-xs ${tone}`}>{h.mood === "better" ? "Better" : h.mood === "worse" ? "Worse" : "Same"}</span>}
                         {h.note && <span className="block break-words text-xs text-muted">{h.note}</span>}
                       </span>

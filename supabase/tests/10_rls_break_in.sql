@@ -260,6 +260,68 @@ select test.expect('select * from public.ai_usage', 0, 'owner without two-factor
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7c. Owners, next actions and activity: owner and managers work them; nobody
+--     deletes; an action can't be moved to another client; history can't change.
+-- ---------------------------------------------------------------------------
+insert into public.staff (id, name, role) values ('00000000-0000-0000-0000-0000000000b2', 'Lead (test)', 'client_comms');
+
+begin;
+set local role anon;
+select test.expect('select * from public.actions', -1, 'signed out cannot read actions');
+select test.expect('select * from public.activity', -1, 'signed out cannot read activity');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect($$insert into public.actions (client_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'non-team user cannot add actions');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.actions', 0, 'developer sees no actions yet');
+select test.expect($$insert into public.actions (client_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'developer cannot add actions yet');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.actions (id, client_id, title, owner_staff_id, due_on) values ('00000000-0000-0000-0000-00000000ac01', '00000000-0000-0000-0000-0000000000c1', 'Review ad results', '00000000-0000-0000-0000-0000000000b2', '2026-11-10')$$, 1, 'manager adds a next action');
+select test.expect($$insert into public.actions (lead_ghl_id, title) values ('opp1abc', 'Call back')$$, 1, 'manager adds a lead action');
+select test.expect($$insert into public.actions (title) values ('No client')$$, -2, 'an action needs a client or a lead');
+select test.expect($$insert into public.actions (client_id, lead_ghl_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'opp1abc', 'Both')$$, -2, 'an action cannot have both a client and a lead');
+select test.expect($$insert into public.actions (client_id, title, priority) values ('00000000-0000-0000-0000-0000000000c1', 'x', 'urgent!!')$$, -2, 'unknown priorities are rejected');
+select test.expect($$insert into public.actions (client_id, title, created_by) values ('00000000-0000-0000-0000-0000000000c1', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'actions cannot be added as someone else');
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ac01'$$, 1, 'manager marks an action done');
+select test.expect($$update public.actions set client_id = null where id = '00000000-0000-0000-0000-00000000ac01'$$, -1, 'an action cannot be moved off its client');
+select test.expect($$update public.actions set created_by = '00000000-0000-0000-0000-0000000000a1'$$, -1, 'an action creator cannot be rewritten');
+select test.expect($$delete from public.actions$$, -1, 'actions cannot be deleted');
+select test.expect($$update public.clients set owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, 0, 'manager cannot set client owners');
+select test.expect($$insert into public.activity (client_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', 'action_done', 'Done: Review ad results')$$, 1, 'manager logs activity');
+select test.expect($$insert into public.activity (client_id, kind, summary, actor) values ('00000000-0000-0000-0000-0000000000c1', 'action_done', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'activity cannot be logged as someone else');
+select test.expect($$update public.activity set summary = 'changed'$$, -1, 'activity history cannot be edited');
+select test.expect($$delete from public.activity$$, -1, 'activity history cannot be deleted');
+select test.expect($$insert into public.check_ins (client_id, happened_on, kind) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-03', 'call')$$, 1, 'manager logs a call');
+select test.expect($$insert into public.check_ins (client_id, happened_on, kind) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-03', 'carrier pigeon')$$, -2, 'unknown contact kinds are rejected');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.clients set owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, 1, 'owner sets a client owner');
+select test.expect('select * from public.actions', 2, 'owner sees all actions');
+select test.expect($$delete from public.actions$$, -1, 'even the owner cannot delete actions');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.actions', 0, 'owner without two-factor sees no actions');
+select test.expect('select * from public.activity', 0, 'owner without two-factor sees no activity');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

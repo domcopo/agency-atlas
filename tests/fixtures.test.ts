@@ -529,3 +529,101 @@ describe("no sample data once the real database is connected", () => {
     expect(showsSamples()).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Operations rules (src/lib/ops.ts): health words, flags, priorities.
+// ---------------------------------------------------------------------------
+import { buildPriorities, dueLabel, healthSummary, ownershipGaps } from "@/lib/ops";
+import type { CheckIn, ClientAction, RosterClient } from "@/lib/types";
+
+describe("operations rules", () => {
+  const today = "2026-11-04";
+  const client = (over: Partial<RosterClient> = {}): RosterClient => ({
+    id: "sam-sample",
+    dbId: "00000000-0000-0000-0000-0000000000c1",
+    name: "Sam Sample (fictional)",
+    monthlyUsd: 300,
+    startDate: "2026-01-05",
+    status: "active",
+    listedIn: [],
+    services: ["Ads"],
+    lastContact: "2026-11-01",
+    ...over,
+  });
+  const ci = (over: Partial<CheckIn> = {}): CheckIn => ({ cadenceDays: 14, state: "on_track", last: "2026-11-01", due: "2026-11-15", ...over });
+  const action = (over: Partial<ClientAction> = {}): ClientAction => ({
+    id: "a1",
+    kind: "follow_up",
+    title: "Review ad results",
+    notes: null,
+    priority: "normal",
+    status: "open",
+    dueOn: "2026-11-04",
+    doneAt: null,
+    createdAt: "2026-11-01T00:00:00Z",
+    ownerId: "o1",
+    ownerName: "Owner (test)",
+    client: { slug: "sam-sample", dbId: "00000000-0000-0000-0000-0000000000c1", name: "Sam Sample (fictional)" },
+    leadGhlId: null,
+    ...over,
+  });
+
+  it("is healthy when contact is recent and nothing is open", () => {
+    expect(healthSummary(client(), ci(), [], today)?.state).toBe("healthy");
+  });
+
+  it("needs attention when the check-in is overdue", () => {
+    const h = healthSummary(client({ lastContact: "2026-10-15" }), ci({ state: "overdue", last: "2026-10-15" }), [], today);
+    expect(h?.state).toBe("needs_attention");
+    expect(h?.reasons[0]).toMatch(/Check-in overdue: last contact 20 days ago/);
+  });
+
+  it("is at risk after a long gap, two open issues, or paused", () => {
+    expect(healthSummary(client({ lastContact: "2026-10-01" }), ci({ state: "overdue" }), [], today)?.state).toBe("at_risk");
+    const issues = [action({ id: "i1", kind: "issue" }), action({ id: "i2", kind: "issue" })];
+    expect(healthSummary(client(), ci(), issues, today)?.reasons).toContain("2 open issues");
+    expect(healthSummary(client({ status: "paused" }), ci(), [], today)?.state).toBe("at_risk");
+  });
+
+  it("shows an opportunity only for otherwise healthy clients", () => {
+    const seoOnly = client({ services: ["SEO"], startDate: "2026-03-01" });
+    expect(healthSummary(seoOnly, ci(), [], today)?.state).toBe("opportunity");
+    expect(healthSummary(seoOnly, ci({ state: "overdue" }), [], today)?.state).toBe("needs_attention");
+  });
+
+  it("ignores past clients", () => {
+    expect(healthSummary(client({ status: "canceled" }), ci(), [], today)).toBeNull();
+  });
+
+  it("labels due dates in plain words", () => {
+    expect(dueLabel("2026-11-01", today)).toBe("Overdue by 3 days");
+    expect(dueLabel(today, today)).toBe("Due today");
+    expect(dueLabel("2026-11-05", today)).toBe("Due tomorrow");
+    expect(dueLabel(null, today)).toBe("No due date");
+  });
+
+  it("puts overdue work first and flags missing owners once", () => {
+    const c1 = client();
+    const c2 = client({ id: "pat-sample", dbId: "00000000-0000-0000-0000-0000000000c2", name: "Pat Sample (fictional)", ownerId: undefined, lastContact: undefined });
+    const actions = [action({ dueOn: "2026-11-10" }), action({ id: "a2", dueOn: "2026-11-01", ownerId: null, ownerName: null })];
+    const items = buildPriorities({
+      clients: [c1, c2],
+      actions,
+      health: new Map([
+        [c1.id, healthSummary(c1, ci(), actions, today)],
+        [c2.id, healthSummary(c2, ci({ state: "never_logged" }), actions, today)],
+      ]),
+      checkIns: new Map([
+        [c1.id, ci()],
+        [c2.id, ci({ state: "never_logged", last: undefined })],
+      ]),
+      today,
+    });
+    expect(items[0]?.id).toBe("a_a2"); // overdue
+    expect(items.filter((i) => i.id === "g_owner")).toHaveLength(1);
+    expect(items.some((i) => i.id === "g_action_owner")).toBe(true);
+    // A client with its own open action doesn't get an extra rule-based flag.
+    expect(items.some((i) => i.clientSlug === c1.id && !i.action)).toBe(false);
+    expect(ownershipGaps([c1, c2], actions).noOwner.map((c) => c.id)).toEqual(["sam-sample", "pat-sample"]);
+  });
+});
