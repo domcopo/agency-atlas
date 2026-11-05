@@ -19,7 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
-import { buildPriorities, healthSummary, opportunities, ownershipGaps } from "@/lib/ops";
+import { buildPriorities, healthSummary, isSalesStage, opportunities, ownershipGaps } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
@@ -497,7 +497,8 @@ export const getOps = cache(async () => {
   const leadNames = new Map(deals.map((d) => [d.ghlId, d.name]));
   const withAction = new Set(actions.filter((a) => a.leadGhlId).map((a) => a.leadGhlId));
   const weekAgo = new Date(Date.parse(t) - 7 * 86_400_000).toISOString().slice(0, 10);
-  const newLeads = deals.filter((d) => (d.createdAt ?? "").slice(0, 10) >= weekAgo && !withAction.has(d.ghlId));
+  // Only deals in selling stages count as leads (onboarding/delivery deals don't).
+  const newLeads = deals.filter((d) => isSalesStage(d.stage) && (d.createdAt ?? "").slice(0, 10) >= weekAgo && !withAction.has(d.ghlId));
   const priorities: PriorityItem[] = ready
     ? buildPriorities({ clients, actions, health, checkIns, today: t, leadNames, newLeadsWithoutAction: newLeads.length })
     : [];

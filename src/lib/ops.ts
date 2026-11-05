@@ -224,3 +224,15 @@ export function opportunityAction(idea: string): string {
   if (idea.startsWith("Referral ask")) return "Ask for a referral";
   return "Discuss growth idea";
 }
+
+/**
+ * Is this GoHighLevel stage part of SELLING (not onboarding or delivery)?
+ * Matched by keywords, so renamed or new sales stages still count. Edit the lists to tune.
+ */
+const SALES_WORDS = /(lead|referr|refferal|reach ?out|sales|discovery|proposal|follow ?up|contacted|qualif)/i;
+const NOT_SALES_WORDS = /(onboard|build|step ?up|review|complete|recurring|launch|live|won|lost|churn|cancel)/i;
+
+export function isSalesStage(stage: string | null | undefined): boolean {
+  if (!stage) return false;
+  return SALES_WORDS.test(stage) && !NOT_SALES_WORDS.test(stage);
+}

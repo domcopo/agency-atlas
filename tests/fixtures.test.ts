@@ -698,3 +698,11 @@ describe("Round 2: My Work, team load, operations briefing", () => {
     expect(b.team).toEqual(["Teammate (test) has 3 overdue items", "a teammate is idle"]);
   });
 });
+
+describe("sales stages", () => {
+  it("counts selling stages as leads, not onboarding or delivery", async () => {
+    const { isSalesStage } = await import("@/lib/ops");
+    for (const s of ["New Lead", "Leads / Referrals (sample)", "reach out (sample)", "Sales Call", "Proposal sent"]) expect(isSalesStage(s)).toBe(true);
+    for (const s of ["Onboarding scheduled", "Stepup / build in progress", "Needs review", "Completed", "Recurring", "", null]) expect(isSalesStage(s)).toBe(false);
+  });
+});

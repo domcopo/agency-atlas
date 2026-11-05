@@ -24,6 +24,7 @@ import {
 } from "@/lib/data-source";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { LeadActionForm } from "@/components/forms/LeadActionForm";
+import { isSalesStage } from "@/lib/ops";
 import { formatUsd, formatUsdExact } from "@/lib/format";
 import type { ProspectStage } from "@/lib/types";
 
@@ -53,7 +54,7 @@ export default async function SalesPage() {
   const canWork = Boolean(member && member.role !== "developer");
   const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
   const leadItems = ops.priorities.filter((p) => p.action?.leadGhlId);
-  const dealOptions = ops.deals.slice(0, 300).map((d) => ({ ghlId: d.ghlId, label: `${d.name} · ${d.stage}`.slice(0, 90) }));
+  const dealOptions = [...ops.deals.filter((d) => isSalesStage(d.stage)), ...ops.deals.filter((d) => !isSalesStage(d.stage))].slice(0, 300).map((d) => ({ ghlId: d.ghlId, label: `${d.name} · ${d.stage}`.slice(0, 90) }));
   const samples = (
     <>
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
@@ -122,6 +123,8 @@ export default async function SalesPage() {
             <div className="mb-2.5 rounded-2xl border border-amber/35 bg-amber/8 p-3.5 text-xs">
               <p className="font-semibold text-amber">
                 {ops.newLeads.length} new lead{ops.newLeads.length === 1 ? "" : "s"} in the last 7 days with no follow-up
+              </p>
+              <p className="text-[11px] text-faint">Counts deals in sales stages only (lead, referral, reach-out, sales call…), not onboarding or delivery.
               </p>
               <ul className="mt-1 space-y-0.5 text-muted">
                 {ops.newLeads.slice(0, 5).map((d) => (
