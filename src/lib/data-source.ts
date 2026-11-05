@@ -45,6 +45,7 @@ import type {
   ClientHealth,
   ContactKind,
   HealthSummary,
+  OpsBriefing,
   PriorityItem,
   Detection,
   RosterClient,
@@ -452,6 +453,39 @@ export const getActions = cache(async (): Promise<{ ready: boolean; actions: Cli
   };
 });
 
+export interface OpenDeal {
+  ghlId: string;
+  name: string;
+  stage: string;
+  value: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** Open GoHighLevel deals (read-only copies), most recently active first. */
+export const getOpenDeals = cache(async (): Promise<OpenDeal[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("ghl_opportunities")
+    .select("ghl_id, name, stage_name, monetary_value, ghl_created_at, ghl_updated_at")
+    .eq("status", "open")
+    .order("ghl_updated_at", { ascending: false, nullsFirst: false })
+    .limit(1000);
+  if (error) return [];
+  return (data ?? [])
+    // Lead follow-ups can only point at plain ids (the actions table's rule).
+    .filter((r) => /^[A-Za-z0-9]{6,40}$/.test(r.ghl_id))
+    .map((r) => ({
+      ghlId: r.ghl_id,
+      name: r.name || "Unnamed deal",
+      stage: r.stage_name || "No stage",
+      value: Number(r.monetary_value ?? 0),
+      createdAt: r.ghl_created_at,
+      updatedAt: r.ghl_updated_at,
+    }));
+});
+
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
   const clients = (await roster()).clients;
@@ -459,10 +493,17 @@ export const getOps = cache(async () => {
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
-  const priorities: PriorityItem[] = ready ? buildPriorities({ clients, actions, health, checkIns, today: t }) : [];
+  const deals = ready ? await getOpenDeals() : [];
+  const leadNames = new Map(deals.map((d) => [d.ghlId, d.name]));
+  const withAction = new Set(actions.filter((a) => a.leadGhlId).map((a) => a.leadGhlId));
+  const weekAgo = new Date(Date.parse(t) - 7 * 86_400_000).toISOString().slice(0, 10);
+  const newLeads = deals.filter((d) => (d.createdAt ?? "").slice(0, 10) >= weekAgo && !withAction.has(d.ghlId));
+  const priorities: PriorityItem[] = ready
+    ? buildPriorities({ clients, actions, health, checkIns, today: t, leadNames, newLeadsWithoutAction: newLeads.length })
+    : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { ready, clients, actions, health, checkIns, priorities, counts, gaps: ownershipGaps(clients, actions), today: t };
+  return { ready, clients, actions, health, checkIns, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -478,6 +519,38 @@ export async function getClientOps(slug: string) {
     done: mine.filter((a) => a.status === "done").slice(0, 5),
     priorities: ops.priorities.filter((p) => p.clientSlug === slug || p.action?.client?.slug === slug),
   };
+}
+
+export interface TimelineEntry {
+  at: string; // ISO date or timestamp
+  kind: "contact" | "action" | "account";
+  title: string;
+  detail: string | null;
+  tone: "neutral" | "good" | "bad" | "info";
+}
+
+/**
+ * One client's history, newest first: contacts (check-ins, calls, messages...),
+ * next actions and issues opened/done/reassigned, owner changes, and the start/end
+ * of the account. Read as the signed-in person (security rules apply).
+ */
+export async function getClientTimeline(slug: string, limit = 15): Promise<TimelineEntry[]> {
+  const c = (await roster()).clients.find((x) => x.id === slug);
+  if (!c?.dbId || !usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const words: Record<ContactKind, string> = { check_in: "Check-in", call: "Call", message: "Message", email: "Email", meeting: "Meeting", note: "Note" };
+  const out: TimelineEntry[] = [];
+  for (const r of (await readCheckIns(db)).filter((x) => x.client_id === c.dbId)) {
+    const mood = r.mood === "better" ? " · doing better" : r.mood === "worse" ? " · got worse" : r.mood === "same" ? " · holding steady" : "";
+    out.push({ at: r.happened_on, kind: "contact", title: `${words[r.kind]} logged${mood}`, detail: r.note, tone: r.mood === "worse" ? "bad" : r.mood === "better" ? "good" : "neutral" });
+  }
+  const act = await db.from("activity").select("at, kind, summary").eq("client_id", c.dbId).order("at", { ascending: false }).limit(50);
+  for (const r of act.data ?? []) {
+    out.push({ at: r.at, kind: "action", title: r.summary, detail: null, tone: r.kind === "action_done" ? "good" : r.kind === "action_created" && /^Issue/.test(r.summary) ? "bad" : "info" });
+  }
+  out.push({ at: c.startDate, kind: "account", title: "Became a client", detail: null, tone: "good" });
+  if (c.endDate) out.push({ at: c.endDate, kind: "account", title: c.status === "paused" ? "Paused" : "Ended", detail: null, tone: "bad" });
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
 
 /** Recent contacts across all clients (calls, messages, check-ins...), newest first. */
@@ -586,6 +659,23 @@ export async function getCoachHints() {
     const h = getClientHealth(c);
     return c.check || (c.followUp && h) || h?.level === "at_risk" || h?.checkIn.state === "overdue";
   });
+  if (!showsSamples()) {
+    // Real data: glow only for work that is due or overdue, and for new leads with no follow-up.
+    const ops = await getOps();
+    const due = ops.priorities.filter((p) => p.action && (p.when === "overdue" || p.when === "today"));
+    const leadDue = [...due.filter((p) => p.action?.leadGhlId).map((p) => p.id), ...ops.newLeads.map((d) => `new_${d.ghlId}`)];
+    const workDue = due.filter((p) => !p.action?.leadGhlId).map((p) => p.id);
+    return {
+      radar: hint("radar", worth.map((d) => d.id), `${worth.length} worth checking`),
+      leads: hint("leads", leadDue, `${leadDue.length} lead follow-ups due`),
+      chats: hint("chats", [], ""),
+      tabs: {
+        "/clients": hint("clients", clientItems.map((c) => c.id), "At-risk clients, check-ins and records to check"),
+        "/sales": hint("sales", leadDue, "Lead follow-ups due, or new leads with no follow-up"),
+        "/work": hint("work", workDue, "Follow-ups and issues due today or overdue"),
+      } as Record<string, CoachHint>,
+    };
+  }
   return {
     radar: hint("radar", worth.map((d) => d.id), `${worth.length} worth checking`),
     leads: hint("leads", toWork.overdue.map((p) => p.id), `${toWork.overdue.length} overdue follow-ups`),
@@ -942,12 +1032,12 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
 });
 
 /** The latest saved briefing, if any. */
-export const getLatestBriefing = cache(async (): Promise<{ createdAt: string; content: Briefing } | null> => {
+export const getLatestBriefing = cache(async (): Promise<{ createdAt: string; content: Briefing | OpsBriefing } | null> => {
   if (!usesDatabase()) return null;
   const db = await createDatabaseClient();
   const { data, error } = await db.from("ai_briefings").select("created_at, content").order("created_at", { ascending: false }).limit(1).maybeSingle();
   if (error || !data) return null;
-  return { createdAt: data.created_at, content: data.content as Briefing };
+  return { createdAt: data.created_at, content: data.content as Briefing | OpsBriefing };
 });
 
 /** The latest AI profile draft for one client, if any. */

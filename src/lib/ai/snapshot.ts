@@ -2,7 +2,7 @@
 // ("C1", "C2"...) so names never leave this Mac. The app swaps them back on screen.
 // Pure functions: no network, no database. Tested in tests/fixtures.test.ts.
 
-import type { Briefing, CheckInEntry, ClientHealth, ClientProfile, GhlSummary, RosterClient } from "@/lib/types";
+import type { Briefing, CheckIn, CheckInEntry, ClientAction, ClientHealth, ClientProfile, GhlSummary, HealthSummary, OpsBriefing, RosterClient } from "@/lib/types";
 
 export interface Codebook {
   codeOf: Map<string, string>; // client slug -> "C3"
@@ -135,5 +135,86 @@ export function restoreProfile(raw: unknown, book: Codebook): ClientProfile {
     nextStep: txt(r.next_step, 300, book),
     questionsToAsk: txtList(r.questions_to_ask, 4, 240, book),
     draftCheckIn: txt(r.draft_check_in, 900, book),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Operations briefing (version 2). Team members are coded too ("T1", "T2"...),
+// so neither client nor staff names leave this Mac.
+// ---------------------------------------------------------------------------
+
+export interface StaffBook {
+  codeOf: Map<string, string>; // staff id -> "T2"
+  nameOf: Map<string, string>; // "T2" -> name
+}
+
+export function buildStaffBook(staff: { id: string; name: string }[]): StaffBook {
+  const codeOf = new Map<string, string>();
+  const nameOf = new Map<string, string>();
+  staff.forEach((m, i) => {
+    codeOf.set(m.id, `T${i + 1}`);
+    nameOf.set(`T${i + 1}`, m.name);
+  });
+  return { codeOf, nameOf };
+}
+
+/** Client codes back to names, then team codes back to names (unknown team codes become "a teammate"). */
+export function restoreWithStaff(text: string, book: Codebook, staff: StaffBook): string {
+  return restore(text, book).replace(/\[?\b(T\d{1,3})\b\]?/g, (_w, code: string) => staff.nameOf.get(code) ?? "a teammate");
+}
+
+/** One client's operational facts, coded. */
+export function opsClientFacts(input: {
+  c: RosterClient;
+  health: HealthSummary | null;
+  checkIn: CheckIn;
+  open: ClientAction[];
+  notes: CheckInEntry[];
+  book: Codebook;
+  staff: StaffBook;
+  today: string;
+}) {
+  const { c, health, checkIn, open, notes, book, staff, today } = input;
+  const days = c.lastContact ? Math.round((Date.parse(today) - Date.parse(c.lastContact)) / 86_400_000) : null;
+  return {
+    code: book.codeOf.get(c.id),
+    status: c.status,
+    services: c.services.length ? c.services : ["not recorded"],
+    monthly_usd: c.monthlyUsd,
+    started: c.startDate,
+    owner: c.ownerId ? (staff.codeOf.get(c.ownerId) ?? "unknown") : "none",
+    health: health ? { word: health.state, reasons: health.reasons.map((r) => redact(r, book)) } : null,
+    days_since_contact: days,
+    check_in_every_days: checkIn.cadenceDays,
+    last_mood: c.lastMood ?? null,
+    open_items: open.map((a) => ({
+      type: a.kind,
+      title: redact(clip(a.title, 120) ?? "", book),
+      owner: a.ownerId ? (staff.codeOf.get(a.ownerId) ?? "unknown") : "none",
+      priority: a.priority,
+      status: a.status,
+      due: a.dueOn,
+    })),
+    owner_note: c.followUp ? redact(c.followUp, book) : null,
+    recent_contact_notes: notes.filter((n) => n.note).map((n) => ({ date: n.date, type: n.kind ?? "check_in", mood: n.mood, note: redact(clip(n.note, 300) ?? "", book) })),
+  };
+}
+
+export function restoreOpsBriefing(raw: unknown, book: Codebook, staff: StaffBook): OpsBriefing {
+  const r = asObj(raw);
+  const t = (v: unknown, max: number) => restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff);
+  const one = (v: unknown) => restoreClients([v], book)[0] ?? null;
+  return {
+    version: 2,
+    headline: t(r.headline, 200),
+    priorities: asArr(r.priorities, 7).map((o) => ({
+      client: one(o.client),
+      reason: t(o.reason, 300),
+      action: t(o.action, 120),
+      when: o.when === "this_week" ? "this_week" : "today",
+      priority: o.priority === "critical" ? "critical" : o.priority === "high" ? "high" : "normal",
+    })),
+    opportunities: asArr(r.opportunities, 3).map((o) => ({ client: one(o.client), idea: t(o.idea, 160), why: t(o.why, 300) })),
+    team: (Array.isArray(r.team) ? r.team.slice(0, 3) : []).map((x) => t(x, 200)).filter(Boolean),
   };
 }

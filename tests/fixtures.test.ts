@@ -627,3 +627,74 @@ describe("operations rules", () => {
     expect(ownershipGaps([c1, c2], actions).noOwner.map((c) => c.id)).toEqual(["sam-sample", "pat-sample"]);
   });
 });
+
+describe("Round 2: My Work, team load, operations briefing", () => {
+  const today = "2026-11-04";
+  const item = (id: string, over: Partial<import("@/lib/types").PriorityItem> = {}): import("@/lib/types").PriorityItem => ({
+    id,
+    title: id,
+    reason: "",
+    href: "/",
+    ownerName: null,
+    ownerId: null,
+    dueOn: null,
+    when: "none",
+    priority: "normal",
+    ...over,
+  });
+
+  it("splits one person's work into overdue, today, upcoming and waiting", async () => {
+    const { myWork } = await import("@/lib/ops");
+    const items = [
+      item("a_1", { ownerId: "p1", when: "overdue" }),
+      item("a_2", { ownerId: "p1", when: "today" }),
+      item("a_3", { ownerId: "p1", when: "upcoming" }),
+      item("a_4", { ownerId: "p1", when: "overdue", action: { status: "waiting" } as never }),
+      item("a_5", { ownerId: "p2", when: "today" }),
+      item("g_owner", { when: "none" }), // group lines never land on a person
+    ];
+    const mine = myWork(items, "p1");
+    expect(mine.overdue.map((i) => i.id)).toEqual(["a_1"]);
+    expect(mine.today.map((i) => i.id)).toEqual(["a_2"]);
+    expect(mine.upcoming.map((i) => i.id)).toEqual(["a_3"]);
+    expect(mine.waiting.map((i) => i.id)).toEqual(["a_4"]);
+    expect(myWork(items, null).overdue).toHaveLength(0);
+    expect(Object.values(myWork(items, undefined)).flat()).toHaveLength(5);
+  });
+
+  it("counts each person's open and overdue items", async () => {
+    const { teamLoad } = await import("@/lib/ops");
+    const a = (id: string, ownerId: string | null, dueOn: string | null, status = "open") =>
+      ({ id, ownerId, dueOn, status, kind: "follow_up", client: null }) as unknown as import("@/lib/types").ClientAction;
+    const load = teamLoad([{ id: "p1", name: "Person (test)" }], [], [a("1", "p1", "2026-11-01"), a("2", "p1", "2026-11-09"), a("3", "p1", null, "done"), a("4", null, null)], today);
+    expect(load.people[0]).toMatchObject({ open: 2, overdue: 1 });
+    expect(load.unowned.open).toBe(1);
+  });
+
+  it("codes team names for the AI and restores them on screen", async () => {
+    const { buildCodebook, buildStaffBook, opsClientFacts, restoreOpsBriefing } = await import("@/lib/ai/snapshot");
+    const c = { id: "pat-example", dbId: "db1", name: "Pat Example (fictional)", monthlyUsd: 200, startDate: "2026-01-01", status: "active", listedIn: [], services: ["SEO"], ownerId: "s1", followUp: "Ask Pat Example (fictional) about reviews" } as import("@/lib/types").RosterClient;
+    const book = buildCodebook([c]);
+    const staff = buildStaffBook([{ id: "s1", name: "Teammate (test)" }]);
+    const facts = opsClientFacts({ c, health: null, checkIn: { cadenceDays: 30, state: "never_logged" }, open: [], notes: [], book, staff, today });
+    const sent = JSON.stringify(facts);
+    expect(sent).not.toContain("Pat Example");
+    expect(sent).not.toContain("Teammate (test)");
+    expect(facts.owner).toBe("T1");
+    const b = restoreOpsBriefing(
+      {
+        headline: "Call [C1] today",
+        priorities: [{ client: "C1", reason: "No contact in 16 days; [T1] owns it", action: "Call [C1]", when: "soon!", priority: "urgent" }, ...Array.from({ length: 10 }, () => ({ client: "C9", reason: "x", action: "y" }))],
+        team: ["[T1] has 3 overdue items", "[T7] is idle"],
+      },
+      book,
+      staff,
+    );
+    expect(b.version).toBe(2);
+    expect(b.headline).toBe("Call Pat Example (fictional) today");
+    expect(b.priorities).toHaveLength(7);
+    expect(b.priorities[0]).toMatchObject({ reason: "No contact in 16 days; Teammate (test) owns it", when: "today", priority: "normal" });
+    expect(b.priorities[1]?.client).toBeNull(); // unknown code dropped
+    expect(b.team).toEqual(["Teammate (test) has 3 overdue items", "a teammate is idle"]);
+  });
+});

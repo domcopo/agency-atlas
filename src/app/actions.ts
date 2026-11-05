@@ -9,15 +9,17 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { askAi, BRIEFING_SCHEMA, BRIEFING_TASK, isAiConfigured, PROFILE_SCHEMA, PROFILE_TASK, type AiResult } from "@/lib/ai/client";
-import { buildCodebook, clientFacts, pipelineFacts, restoreBriefing, restoreProfile } from "@/lib/ai/snapshot";
+import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, type AiResult } from "@/lib/ai/client";
+import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, restoreOpsBriefing, restoreProfile } from "@/lib/ai/snapshot";
 import {
   getAiStatus,
   getAtlasQuestions,
   getCheckInHistory,
   getClientHealth,
   getGhlSummary,
+  getOps,
   getRecentCheckInsByClient,
+  getTeam,
   getRoster,
   getToday,
 } from "@/lib/data-source";
@@ -199,21 +201,21 @@ async function staffExists(db: Db, id: string): Promise<string | null> {
   return (data as { name?: string } | null)?.name ?? null;
 }
 
-async function logActivity(db: Db, row: { client_id: string | null; action_id?: string | null; kind: string; summary: string }) {
+async function logActivity(db: Db, row: { client_id: string | null; lead_ghl_id?: string | null; action_id?: string | null; kind: string; summary: string }) {
   const { error } = await db.from("activity").insert({ ...row, summary: row.summary.slice(0, 200) });
   if (error) console.warn(`Activity not logged: ${error.code}`);
 }
 
 async function saveAction(
   db: Db,
-  row: { client_id: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null },
+  row: { client_id?: string; lead_ghl_id?: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null },
 ): Promise<{ error?: string }> {
   const { data, error } = await db.from("actions").insert(row).select("id").single();
   if (error || !data) {
     console.warn(`Action refused: ${error?.code}`);
     return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
   }
-  await logActivity(db, { client_id: row.client_id, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : "Next action added"}: ${row.title}` });
+  await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : "Next action added"}: ${row.title}` });
   return {};
 }
 
@@ -246,6 +248,56 @@ export async function createAction(_prev: { error?: string; ok?: boolean } | und
   return { ok: true };
 }
 
+/** A follow-up on a GoHighLevel deal. Stored ONLY in this app; GoHighLevel is never changed. */
+export async function createLeadAction(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add lead follow-ups." };
+  const leadId = text(form, "leadId", 40);
+  const title = text(form, "title", 120);
+  const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
+  const dueRaw = text(form, "due", 10);
+  const ownerRaw = text(form, "ownerId", 40);
+  if (!/^[A-Za-z0-9]{6,40}$/.test(leadId)) return { error: "Pick a deal." };
+  if (!title) return { error: "Say what needs to happen." };
+  const due = dueRaw ? anyDate(dueRaw) : null;
+  if (dueRaw && !due) return { error: "Pick a real due date." };
+  const db = await createDatabaseClient();
+  // The deal must exist in this app's read-only copy.
+  const { data: deal } = await db.from("ghl_opportunities").select("ghl_id").eq("ghl_id", leadId).maybeSingle();
+  if (!deal) return { error: "That deal isn't in the last sync." };
+  if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
+  const saved = await saveAction(db, { lead_ghl_id: leadId, kind: "follow_up", title, owner_staff_id: ownerRaw || null, priority, due_on: due });
+  if (saved.error) return { error: saved.error };
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** "Make it a next action" from an AI suggestion: a person taps it; the AI never does. */
+export async function addSuggestedAction(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const slug = text(form, "slug", 90);
+  const title = text(form, "title", 120);
+  const when = text(form, "when", 10);
+  const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
+  if (!title) return;
+  // Look the client up on the server; never trust ids from the page.
+  const client = (await getRoster()).find((c) => c.id === slug);
+  if (!client?.dbId) return;
+  const d = new Date(`${localToday()}T00:00:00Z`);
+  if (when === "this_week") d.setUTCDate(d.getUTCDate() + 7);
+  const db = await createDatabaseClient();
+  const saved = await saveAction(db, {
+    client_id: client.dbId,
+    kind: "follow_up",
+    title,
+    owner_staff_id: client.ownerId ?? null,
+    priority,
+    due_on: d.toISOString().slice(0, 10),
+  });
+  if (!saved.error) refreshOps(slug);
+}
+
 /** Done / reopen / reschedule / assign / status / priority on one action. */
 export async function updateAction(form: FormData) {
   const me = await getCurrentMember();
@@ -254,9 +306,9 @@ export async function updateAction(form: FormData) {
   const op = text(form, "op", 12);
   if (!isUuid(id)) return;
   const db = await createDatabaseClient();
-  const { data: current } = await db.from("actions").select("id, client_id, title, status").eq("id", id).maybeSingle();
+  const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, title, status").eq("id", id).maybeSingle();
   if (!current) return; // not found, or not allowed to see it
-  const a = current as { id: string; client_id: string | null; title: string; status: string };
+  const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; title: string; status: string };
 
   let patch: Record<string, unknown> | null = null;
   let summary = "";
@@ -307,7 +359,7 @@ export async function updateAction(form: FormData) {
     console.warn(`Action update refused: ${error.code}`);
     return;
   }
-  await logActivity(db, { client_id: a.client_id, action_id: a.id, kind, summary });
+  await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
   refreshOps(text(form, "slug", 90));
 }
 
@@ -555,24 +607,45 @@ export async function generateBriefing(): Promise<{ error?: string; message?: st
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
 
-  const today = getToday();
-  const current = (await getRoster()).filter((c) => c.status === "active" || c.status === "paused");
+  const ops = await getOps();
+  const today = ops.today;
+  const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
   const book = buildCodebook(current);
+  const staff = buildStaffBook((await getTeam()).members.map((m) => ({ id: m.id, name: m.name })));
   const notes = await getRecentCheckInsByClient(3);
+  const open = ops.actions.filter((a) => a.status !== "done");
   const data = {
     today,
-    clients: current.map((c) => clientFacts(c, getClientHealth(c), (c.dbId && notes.get(c.dbId)) || [], book, today)),
+    clients: current.map((c) =>
+      opsClientFacts({
+        c,
+        health: ops.health.get(c.id) ?? null,
+        checkIn: ops.checkIns.get(c.id)!,
+        open: open.filter((a) => a.client?.slug === c.id),
+        notes: (c.dbId && notes.get(c.dbId)) || [],
+        book,
+        staff,
+        today,
+      }),
+    ),
+    team: [...staff.codeOf.entries()].map(([id, code]) => ({
+      code,
+      open_items: open.filter((a) => a.ownerId === id).length,
+      overdue_items: open.filter((a) => a.ownerId === id && a.dueOn !== null && a.dueOn < today).length,
+      clients_owned: current.filter((c) => c.status === "active" && c.ownerId === id).length,
+    })),
+    unowned: { active_clients: ops.gaps.noOwner.length, open_items: ops.gaps.actionsNoOwner.length, active_clients_without_next_action: ops.gaps.noNextAction.length },
     pipeline: pipelineFacts(await getGhlSummary()),
   };
 
-  const result = await askAi({ task: BRIEFING_TASK, data, schema: BRIEFING_SCHEMA, maxOutputTokens: 8000, remainingUsd: pre.remaining });
+  const result = await askAi({ task: OPS_BRIEFING_TASK, data, schema: OPS_BRIEFING_SCHEMA, maxOutputTokens: 6000, remainingUsd: pre.remaining });
   const db = await createDatabaseClient();
   await logAiUsage(db, "briefing", result);
   if (!result.ok) {
     revalidatePath("/", "layout");
     return { error: result.message };
   }
-  const { error } = await db.from("ai_briefings").insert({ kind: "daily", content: restoreBriefing(result.data, book) });
+  const { error } = await db.from("ai_briefings").insert({ kind: "daily", content: restoreOpsBriefing(result.data, book, staff) });
   revalidatePath("/", "layout");
   if (error) return { error: "The briefing was written but couldn't be saved." };
   return { message: `Briefing ready. Cost: $${result.costUsd.toFixed(3)}.` };

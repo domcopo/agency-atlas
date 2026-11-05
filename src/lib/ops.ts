@@ -121,8 +121,12 @@ export function buildPriorities(input: {
   health: Map<string, HealthSummary | null>;
   checkIns: Map<string, CheckIn>;
   today: string;
+  /** GoHighLevel deal id -> deal name, for lead follow-ups. */
+  leadNames?: Map<string, string>;
+  /** New deals (last 7 days) with no follow-up yet. */
+  newLeadsWithoutAction?: number;
 }): PriorityItem[] {
-  const { clients, actions, health, checkIns, today } = input;
+  const { clients, actions, health, checkIns, today, leadNames, newLeadsWithoutAction } = input;
   const items: PriorityItem[] = [];
 
   for (const a of actions.filter((x) => x.status !== "done")) {
@@ -131,10 +135,11 @@ export function buildPriorities(input: {
     const status = a.status === "waiting" ? " · waiting on client" : a.status === "in_progress" ? " · in progress" : "";
     items.push({
       id: `a_${a.id}`,
-      title: a.client ? `${a.client.name}: ${a.title}` : a.title,
+      title: a.client ? `${a.client.name}: ${a.title}` : a.leadGhlId ? `${leadNames?.get(a.leadGhlId) ?? "Lead"}: ${a.title}` : a.title,
       reason: `${label} · ${dueLabel(a.dueOn, today)}${status}`,
-      href: a.client ? `/clients/${a.client.slug}` : "/sales",
+      href: a.client ? `/clients/${a.client.slug}` : "/sales#follow-ups",
       ownerName: a.ownerName,
+      ownerId: a.ownerId,
       dueOn: a.dueOn,
       when,
       priority: a.priority,
@@ -146,7 +151,7 @@ export function buildPriorities(input: {
     if (openActions(actions, c.dbId).length) continue; // its own action already covers it
     const h = health.get(c.id);
     const ci = checkIns.get(c.id);
-    const base = { href: `/clients/${c.id}`, ownerName: c.ownerName ?? null, dueOn: null, clientSlug: c.id };
+    const base = { href: `/clients/${c.id}`, ownerName: c.ownerName ?? null, ownerId: c.ownerId ?? null, dueOn: null, clientSlug: c.id };
     const isNew = daysBetween(c.startDate, today) <= OPS_RULES.newClientDays && c.startDate <= today;
     if (h?.state === "at_risk") {
       items.push({ ...base, id: `f_risk_${c.id}`, title: `Check on ${c.name}`, reason: `At risk: ${h.reasons[0]}`, when: "today", priority: "high" });
@@ -164,6 +169,8 @@ export function buildPriorities(input: {
   const neverLogged = clients.filter((c) => c.status === "active" && !c.lastContact && !flagged.has(c.id));
   if (neverLogged.length)
     items.push({ id: "g_never", title: `Log the last contact for ${plural(neverLogged.length, "client")}`, reason: "No contact logged, so check-in reminders can't start", href: "/clients#checkins", ownerName: null, dueOn: null, when: "none", priority: "normal" });
+  if (newLeadsWithoutAction)
+    items.push({ id: "g_leads", title: `${plural(newLeadsWithoutAction, "new lead")} this week with no follow-up`, reason: "New leads go cold fast. Add a follow-up and an owner", href: "/sales#follow-ups", ownerName: null, dueOn: null, when: "today", priority: "high" });
   const gaps = ownershipGaps(clients, actions);
   if (gaps.noOwner.length)
     items.push({ id: "g_owner", title: `Assign owners to ${plural(gaps.noOwner.length, "active client")}`, reason: "Nobody is responsible for them yet", href: "/clients#owners", ownerName: null, dueOn: null, when: "none", priority: "normal" });
@@ -179,4 +186,41 @@ export function buildPriorities(input: {
       Number(!a.action) - Number(!b.action) ||
       (a.dueOn ?? "9999").localeCompare(b.dueOn ?? "9999"),
   );
+}
+
+export type WorkBucket = "overdue" | "today" | "upcoming" | "waiting";
+
+/** One person's queue (or everyone's when ownerId is undefined; null = unowned). */
+export function myWork(items: PriorityItem[], ownerId: string | null | undefined) {
+  const mine = items.filter((i) => !i.id.startsWith("g_") && (ownerId === undefined || (i.ownerId ?? null) === ownerId));
+  const buckets: Record<WorkBucket, PriorityItem[]> = { overdue: [], today: [], upcoming: [], waiting: [] };
+  for (const i of mine) {
+    if (i.action?.status === "waiting") buckets.waiting.push(i);
+    else if (i.when === "overdue") buckets.overdue.push(i);
+    else if (i.when === "today") buckets.today.push(i);
+    else buckets.upcoming.push(i);
+  }
+  return buckets;
+}
+
+/** Per-person load for managers: open items, overdue, clients owned. */
+export function teamLoad(staff: { id: string; name: string }[], clients: RosterClient[], actions: ClientAction[], today: string) {
+  const open = actions.filter((a) => a.status !== "done");
+  const row = (ownerId: string | null) => {
+    const mine = open.filter((a) => (a.ownerId ?? null) === ownerId);
+    return {
+      open: mine.length,
+      overdue: mine.filter((a) => a.dueOn !== null && a.dueOn < today).length,
+      clients: ownerId ? clients.filter((c) => c.status === "active" && c.ownerId === ownerId).length : clients.filter((c) => c.status === "active" && !c.ownerId).length,
+    };
+  };
+  return { people: staff.map((m) => ({ ...m, ...row(m.id) })), unowned: row(null) };
+}
+
+/** A short next step for an opportunity idea (used by Growth's "Make it a next action"). */
+export function opportunityAction(idea: string): string {
+  if (idea.startsWith("SEO upsell")) return "Offer SEO";
+  if (idea.startsWith("Ads upsell")) return "Offer Ads";
+  if (idea.startsWith("Referral ask")) return "Ask for a referral";
+  return "Discuss growth idea";
 }

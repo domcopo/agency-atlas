@@ -643,6 +643,7 @@ export interface PriorityItem {
   reason: string;
   href: string;
   ownerName: string | null;
+  ownerId?: string | null;
   dueOn: ISODate | null;
   /** "overdue" sorts first, then "today", then the rest. */
   when: "overdue" | "today" | "upcoming" | "none";
@@ -651,4 +652,19 @@ export interface PriorityItem {
   action?: ClientAction;
   /** Present for flags about one client (so "Add next action" can prefill it). */
   clientSlug?: string;
+}
+
+/** AI briefing, operations format (version 2): a short ranked list, not paragraphs. */
+export interface OpsBriefing {
+  version: 2;
+  headline: string;
+  priorities: {
+    client: ClientLink | null;
+    reason: string;
+    action: string;
+    when: "today" | "this_week";
+    priority: "critical" | "high" | "normal";
+  }[];
+  opportunities: { client: ClientLink | null; idea: string; why: string }[];
+  team: string[];
 }

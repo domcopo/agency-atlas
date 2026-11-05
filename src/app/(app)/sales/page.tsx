@@ -15,9 +15,15 @@ import {
   getProspects,
   getRosterSource,
   getToday,
+  getMember,
+  getOps,
+  getTeam,
   getWinLoss,
   showsSamples,
+  usesDatabase,
 } from "@/lib/data-source";
+import { PriorityList } from "@/components/cards/ActionRow";
+import { LeadActionForm } from "@/components/forms/LeadActionForm";
 import { formatUsd, formatUsdExact } from "@/lib/format";
 import type { ProspectStage } from "@/lib/types";
 
@@ -42,6 +48,12 @@ export default async function SalesPage() {
   const ghl = await getGhlSummary();
 
   const showSamples = showsSamples();
+  const ops = await getOps();
+  const member = usesDatabase() ? await getMember() : null;
+  const canWork = Boolean(member && member.role !== "developer");
+  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const leadItems = ops.priorities.filter((p) => p.action?.leadGhlId);
+  const dealOptions = ops.deals.slice(0, 300).map((d) => ({ ghlId: d.ghlId, label: `${d.name} · ${d.stage}`.slice(0, 90) }));
   const samples = (
     <>
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
@@ -102,6 +114,39 @@ export default async function SalesPage() {
   return (
     <>
       <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
+
+      {ops.ready && ghl.lastSync && (
+        <section id="follow-ups" className="scroll-mt-16">
+          <SectionTitle aside={`${leadItems.length} open`}>Lead follow-ups</SectionTitle>
+          {ops.newLeads.length > 0 && (
+            <div className="mb-2.5 rounded-2xl border border-amber/35 bg-amber/8 p-3.5 text-xs">
+              <p className="font-semibold text-amber">
+                {ops.newLeads.length} new lead{ops.newLeads.length === 1 ? "" : "s"} in the last 7 days with no follow-up
+              </p>
+              <ul className="mt-1 space-y-0.5 text-muted">
+                {ops.newLeads.slice(0, 5).map((d) => (
+                  <li key={d.ghlId}>
+                    {d.name} · {d.stage}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <PriorityList items={leadItems} staff={staff} canEdit={canWork} limit={5} empty="No lead follow-ups yet. Add one below so no lead goes quiet." />
+          {canWork && dealOptions.length > 0 && (
+            <details className="glass mt-2.5 rounded-3xl px-4 py-1" open={leadItems.length === 0}>
+              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">
+                + Add a lead follow-up
+              </summary>
+              <div className="pb-3">
+                <LeadActionForm deals={dealOptions} staff={staff} today={ops.today} defaultLeadId={ops.newLeads[0]?.ghlId} />
+              </div>
+            </details>
+          )}
+          <p className="mt-1.5 px-1 text-[11px] text-faint">Saved in this app only. GoHighLevel is never changed.</p>
+        </section>
+      )}
+
 
       <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients won &amp; lost</SectionTitle>
       <GlassCard>

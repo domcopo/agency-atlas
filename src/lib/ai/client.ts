@@ -169,3 +169,33 @@ export const PROFILE_TASK = `Draft a client knowledge profile for the one client
 - next_step: the single best next action for the team.
 - questions_to_ask: up to 4 questions that would fill gaps in what we know.
 - draft_check_in: a short check-in message the team could send.`;
+
+// Operations briefing (version 2): a ranked list of who/what/why, not paragraphs.
+export const OPS_BRIEFING_SCHEMA = obj({
+  headline: str,
+  priorities: {
+    type: "array",
+    items: obj({
+      client: str,
+      reason: str,
+      action: str,
+      when: { type: "string", enum: ["today", "this_week"] },
+      priority: { type: "string", enum: ["critical", "high", "normal"] },
+    }),
+  },
+  opportunities: { type: "array", items: obj({ client: str, idea: str, why: str }) },
+  team: { type: "array", items: str },
+});
+
+export const OPS_BRIEFING_TASK = `Answer "What should we pay attention to today?" for the agency owner, from the data below.
+Team members are coded like T2; refer to them as [T2]. Clients are coded like C7; refer to them as [C7].
+- headline: ONE short sentence (under 25 words) on the single most important thing.
+- priorities: up to 7, most urgent first. Each is one client ("client" is the code like C7; use "" only for a team-wide item).
+  - reason: the specific evidence with numbers, e.g. "No contact logged in 16 days and 2 open issues", "Issue overdue by 4 days", "Owner's note: ...". Never vague ("consider checking in").
+  - action: a short imperative the owner of the client can do, e.g. "Review ad results with the client". Under 12 words.
+  - when: today or this_week. priority: critical, high or normal.
+  - Prefer: overdue items, at-risk clients, new clients without a first-month check-in, open issues, clients with no owner or no next step.
+  - Don't repeat an item that already exists in open_items unless it is overdue; then say it's overdue.
+- opportunities: up to 3 realistic upsell, cross-sell or referral ideas tied to one client, with why.
+- team: up to 3 short observations about ownership or workload, e.g. "[T2] has 5 overdue items", "9 active clients have no owner". Only if the data shows it.
+Be brief. No paragraphs.`;

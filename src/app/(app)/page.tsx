@@ -17,6 +17,8 @@ import Link from "next/link";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { BriefingCard } from "@/components/cards/BriefingCard";
+import { OpsBriefingCard } from "@/components/cards/OpsBriefingCard";
+import type { Briefing } from "@/lib/types";
 import { BriefingButton } from "@/components/forms/AiButtons";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { DetectionRadar } from "@/components/cards/DetectionRadar";
@@ -232,6 +234,8 @@ export default async function MissionControlPage() {
     icon: <Users aria-hidden />,
     stat: ghl.lastSync ? String(ghl.open.count) : "–",
     statLabel: ghl.lastSync ? "open deals in GoHighLevel" : "GoHighLevel not synced",
+    attention: ops.newLeads.length > 0,
+    coachSignature: coach.leads.signature,
     panel: ghl.lastSync ? (
       <div className="glass overflow-hidden rounded-3xl">
         <div className="grid grid-cols-3 divide-x divide-line border-b border-line text-center">
@@ -393,7 +397,19 @@ export default async function MissionControlPage() {
       {(canUseAi || briefing) && (
         <>
           <SectionTitle aside={ai.tablesReady ? <Link href="/safety#ai" className="block w-36"><AiMeter ai={ai} compact /></Link> : undefined}>AI briefing</SectionTitle>
-          {briefing && <BriefingCard briefing={briefing.content} createdAt={briefing.createdAt} isToday={briefingIsToday} />}
+          {briefing &&
+            ("version" in briefing.content && briefing.content.version === 2 ? (
+              <OpsBriefingCard
+                briefing={briefing.content}
+                createdAt={briefing.createdAt}
+                isToday={briefingIsToday}
+                owners={new Map(ops.clients.map((c) => [c.id, c.ownerName]))}
+                existing={new Set(ops.actions.filter((a) => a.status !== "done" && a.client).map((a) => `${a.client!.slug}|${a.title.toLowerCase()}`))}
+                canAdd={canWork && ops.ready}
+              />
+            ) : (
+              <BriefingCard briefing={briefing.content as Briefing} createdAt={briefing.createdAt} isToday={briefingIsToday} />
+            ))}
           {canUseAi && (
             <div className={briefing ? "mt-2.5" : ""}>
               <BriefingButton label={briefingIsToday ? "Refresh today's briefing" : "Get today's briefing"} disabled={ai.level === "blocked"} />

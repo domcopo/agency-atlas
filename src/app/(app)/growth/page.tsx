@@ -5,12 +5,27 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { InsightCard } from "@/components/cards/InsightCard";
 import { ConfidenceMeter, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getBusiness, getBusinesses, getInsights, getSurveyQuestions, getSurveyResponses, getTrends, showsSamples } from "@/lib/data-source";
+import { getBusiness, getBusinesses, getInsights, getMember, getOps, getSurveyQuestions, getSurveyResponses, getTrends, showsSamples, usesDatabase } from "@/lib/data-source";
+import { OpportunityList } from "@/components/cards/OpportunityList";
+import { opportunities } from "@/lib/ops";
 
 export const metadata: Metadata = { title: "Growth Lab" };
 
-export default function GrowthPage() {
+export default async function GrowthPage() {
   const samples = showsSamples();
+  const ops = await getOps();
+  const member = usesDatabase() ? await getMember() : null;
+  const opps = ops.clients
+    .map((c) => ({
+      slug: c.id,
+      name: c.name,
+      monthlyUsd: c.monthlyUsd,
+      ownerName: c.ownerName,
+      ideas: opportunities(c, ops.today),
+      added: new Set(ops.actions.filter((a) => a.status !== "done" && a.client?.slug === c.id).map((a) => a.title.toLowerCase())),
+    }))
+    .filter((o) => o.ideas.length > 0)
+    .sort((a, b) => b.monthlyUsd - a.monthlyUsd);
   const trends = getTrends();
   const businesses = getBusinesses();
   const questions = getSurveyQuestions();
@@ -20,6 +35,14 @@ export default function GrowthPage() {
   return (
     <>
       <PageHeader title="Growth Lab" subtitle="Long-term case studies: why businesses grow, and what to ask them." />
+
+      {!samples && (
+        <section id="opportunities" className="mb-5 scroll-mt-16">
+          <SectionTitle aside={`${opps.length} clients`}>Opportunities</SectionTitle>
+          <OpportunityList items={opps} canAdd={Boolean(member && member.role !== "developer" && ops.ready)} />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">Simple rules from your client list (services, months together, mood). You decide what to pitch.</p>
+        </section>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <GlassCard href="/growth/dex" label="Open case studies (Business Dex)" padding="tight" className="space-y-1">

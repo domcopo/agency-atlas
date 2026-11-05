@@ -4,7 +4,9 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples } from "@/lib/data-source";
+import { getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { MyWork } from "@/components/cards/MyWork";
+import { myWork, teamLoad } from "@/lib/ops";
 import { cn } from "@/lib/format";
 import type { TeamRole, WorkPriority } from "@/lib/types";
 
@@ -17,9 +19,16 @@ const roleInfo: Record<TeamRole, { label: string; icon: typeof Crown; color: str
   seo_developer: { label: "SEO developer", icon: Wrench, color: "text-teal bg-teal/12" },
 };
 
-export default async function WorkPage() {
+export default async function WorkPage({ searchParams }: { searchParams: Promise<{ who?: string }> }) {
   const today = getToday();
   const samples = showsSamples();
+  const ops = await getOps();
+  const member = usesDatabase() ? await getMember() : null;
+  const staffList = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const whoRaw = (await searchParams).who ?? "all";
+  const who = whoRaw === "none" || staffList.some((m) => m.id === whoRaw) ? whoRaw : "all";
+  const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
+  const load = teamLoad(staffList, ops.clients, ops.actions, ops.today);
   const orders = getWorkOrders();
   const rules = getWorkRules();
   const devs = getSampleDevelopers();
@@ -52,12 +61,14 @@ export default async function WorkPage() {
           </p>
         ) : (
           <p>
-            <span className="font-semibold text-ink">Work orders aren&apos;t connected yet.</span> Work still happens
-            in GoHighLevel. Your real queue and developer load will show here once work orders are connected (a
-            later step, with your approval). Below are your real team, rules and daily order.
+            <span className="font-semibold text-ink">Everyone&apos;s follow-ups and client issues, in one place.</span>{" "}
+            Pick a person to see their list. Add items from a client&apos;s page. Development work itself still happens
+            in GoHighLevel.
           </p>
         )}
       </div>
+
+      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member && member.role !== "developer")} />}
 
       {samples && (
         <>
@@ -143,74 +154,81 @@ export default async function WorkPage() {
         </>
       )}
 
-      <SectionTitle aside={<Provenance kind={realTeam ? "real" : "demo"} what="your team" />}>Your team</SectionTitle>
-      <div className="space-y-2.5">
-        {team.members.map((m) => {
-          const r = roleInfo[m.role];
-          const Icon = r.icon;
-          return (
-            <GlassCard key={m.id} padding="tight" className="flex gap-3">
-              <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${r.color}`}>
-                <Icon aria-hidden className="size-4.5" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{m.name}</p>
-                <p className="text-xs text-muted">{r.label}</p>
-                {m.handles.length > 0 && <p className="mt-1 text-[11px] text-faint">{m.handles.join(" · ")}</p>}
-              </div>
-            </GlassCard>
-          );
-        })}
-      </div>
-
-      <SectionTitle>Who to go to</SectionTitle>
-      <GlassCard padding="none">
-        <ul className="divide-y divide-line">
-          {rules.escalation.map((e) => (
-            <li key={e.topic} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-              <span className="text-muted">{e.topic}</span>
-              <span className="shrink-0 font-semibold">{nameForRole(e.to) || roleInfo[e.to].label}</span>
-            </li>
-          ))}
-        </ul>
-      </GlassCard>
-
-      <SectionTitle>Daily order for developers</SectionTitle>
-      <GlassCard padding="none">
-        <ol className="divide-y divide-line">
-          {rules.dailyOrder.map((s, i) => (
-            <li key={s.step} className="flex gap-3 px-4 py-3">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-violet/20 text-xs font-bold text-violet">
-                {i + 1}
-              </span>
-              <div>
-                <p className="text-sm font-semibold">{s.step}</p>
-                <p className="text-xs text-muted">{s.detail}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
-          Each SEO client = {rules.seoHoursPerClient} hrs/month, up to {rules.maxSeoClientsPerDeveloper} per developer
-          ({rules.seoShare}% SEO / {rules.miscShare}% misc). ${rules.bonusPerClientUsd} bonus per client after{" "}
-          {rules.bonusAfterSuccessfulClients} successful monthly clients.
-        </p>
-      </GlassCard>
-
-      <SectionTitle>Priority levels</SectionTitle>
-      <div className="space-y-2">
-        {(["urgent", "high", "normal", "low"] as WorkPriority[]).map((p) => (
-          <div key={p} className="flex items-center gap-3 rounded-2xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-sm">
-            <Pill color={priorityStyle[p].color}>{priorityStyle[p].label}</Pill>
-            <span className="text-muted">
-              {p === "urgent" && "Critical issues, down websites, client impacting. Do first."}
-              {p === "high" && "Time-sensitive requests. Do next."}
-              {p === "normal" && "Standard requests and tweaks. Do after high."}
-              {p === "low" && "Non-urgent tasks. Do when available."}
-            </span>
+      <details className="mt-5 rounded-3xl border border-line" open={samples}>
+        <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold">
+          Team &amp; rules <span className="text-xs font-normal text-muted">who does what, daily order, priorities</span>
+        </summary>
+        <div className="px-3 pb-4">
+          <SectionTitle aside={<Provenance kind={realTeam ? "real" : "demo"} what="your team" />}>Your team</SectionTitle>
+          <div className="space-y-2.5">
+            {team.members.map((m) => {
+              const r = roleInfo[m.role];
+              const Icon = r.icon;
+              return (
+                <GlassCard key={m.id} padding="tight" className="flex gap-3">
+                  <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${r.color}`}>
+                    <Icon aria-hidden className="size-4.5" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">{m.name}</p>
+                    <p className="text-xs text-muted">{r.label}</p>
+                    {m.handles.length > 0 && <p className="mt-1 text-[11px] text-faint">{m.handles.join(" · ")}</p>}
+                  </div>
+                </GlassCard>
+              );
+            })}
           </div>
-        ))}
-      </div>
+
+          <SectionTitle>Who to go to</SectionTitle>
+          <GlassCard padding="none">
+            <ul className="divide-y divide-line">
+              {rules.escalation.map((e) => (
+                <li key={e.topic} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                  <span className="text-muted">{e.topic}</span>
+                  <span className="shrink-0 font-semibold">{nameForRole(e.to) || roleInfo[e.to].label}</span>
+                </li>
+              ))}
+            </ul>
+          </GlassCard>
+
+          <SectionTitle>Daily order for developers</SectionTitle>
+          <GlassCard padding="none">
+            <ol className="divide-y divide-line">
+              {rules.dailyOrder.map((s, i) => (
+                <li key={s.step} className="flex gap-3 px-4 py-3">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-violet/20 text-xs font-bold text-violet">
+                    {i + 1}
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold">{s.step}</p>
+                    <p className="text-xs text-muted">{s.detail}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
+              Each SEO client = {rules.seoHoursPerClient} hrs/month, up to {rules.maxSeoClientsPerDeveloper} per developer
+              ({rules.seoShare}% SEO / {rules.miscShare}% misc). ${rules.bonusPerClientUsd} bonus per client after{" "}
+              {rules.bonusAfterSuccessfulClients} successful monthly clients.
+            </p>
+          </GlassCard>
+
+          <SectionTitle>Priority levels</SectionTitle>
+          <div className="space-y-2">
+            {(["urgent", "high", "normal", "low"] as WorkPriority[]).map((p) => (
+              <div key={p} className="flex items-center gap-3 rounded-2xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-sm">
+                <Pill color={priorityStyle[p].color}>{priorityStyle[p].label}</Pill>
+                <span className="text-muted">
+                  {p === "urgent" && "Critical issues, down websites, client impacting. Do first."}
+                  {p === "high" && "Time-sensitive requests. Do next."}
+                  {p === "normal" && "Standard requests and tweaks. Do after high."}
+                  {p === "low" && "Non-urgent tasks. Do when available."}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
 
       {done.length > 0 && (
         <>
