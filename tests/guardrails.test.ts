@@ -154,6 +154,12 @@ describe("dependencies", () => {
       expect(pkg.dependencies?.[n], n).toMatch(/^\d+\.\d+\.\d+$/);
     }
   });
+
+  it("uses only Anthropic's official SDK for AI (Phase 4), pinned exactly, and no other AI library", () => {
+    expect(names.filter((n) => n.startsWith("@anthropic-ai/"))).toEqual(["@anthropic-ai/sdk"]);
+    expect(pkg.dependencies?.["@anthropic-ai/sdk"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(names.filter((n) => /^(openai|langchain|@langchain\/.*|ai|@ai-sdk\/.*|llamaindex)$/.test(n))).toEqual([]);
+  });
 });
 
 describe("real client data stays private", () => {
@@ -306,5 +312,41 @@ describe("GoHighLevel read-only (Phase 3)", () => {
     const importers = contents.filter(({ text }) => /from\s+["']@\/lib\/ghl\/client["']/.test(text)).map(({ file }) => file).sort();
     expect(importers).toEqual(["src/app/actions.ts", "src/lib/data-source.ts"]);
     for (const f of importers) expect(readFileSync(join(ROOT, f), "utf8")).not.toMatch(/^["']use client["']/m);
+  });
+});
+
+describe("AI read-only + budget (Phase 4)", () => {
+  const AI_MODULE = "src/lib/ai/client.ts";
+  const ai = readFileSync(join(ROOT, AI_MODULE), "utf8");
+
+  it("only the AI module uses Anthropic's SDK or reads the AI key", () => {
+    expect(contents.filter(({ text }) => /from\s+["']@anthropic-ai\/sdk["']/.test(text)).map(({ file }) => file)).toEqual([AI_MODULE]);
+    expect(contents.filter(({ text }) => /process\.env\.ANTHROPIC_/.test(text)).map(({ file }) => file)).toEqual([AI_MODULE]);
+    expect(findMatches([/NEXT_PUBLIC_ANTHROPIC/])).toEqual([]);
+  });
+
+  it("the AI gets NO tools, so it can only return text", () => {
+    expect(ai).not.toMatch(/\btools\s*:/);
+    expect(ai).not.toMatch(/tool_choice|mcp_servers|betaZodTool|toolRunner|tool_runner|computer_|bash_|code_execution|web_fetch|web_search/);
+    expect(ai.match(/messages\.create\(/g)?.length).toBe(1); // one place sends requests
+    expect(ai).not.toMatch(/\.beta\./); // no beta surfaces (agents, sessions, tools)
+  });
+
+  it("requests go to one fixed address, and the budget check comes before sending", () => {
+    expect(ai).toMatch(/baseURL:\s*API_BASE/);
+    expect(new Set([...ai.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]))).toEqual(new Set(["https://api.anthropic.com"]));
+    expect(ai.indexOf("worstCaseCost(")).toBeGreaterThan(-1);
+    expect(ai.indexOf("worstCaseCost(")).toBeLessThan(ai.indexOf("messages.create("));
+    expect(ai).toMatch(/remainingUsd: number;/); // callers must pass what's left
+  });
+
+  it("only server code uses the AI module, and every AI call is logged", () => {
+    const importers = contents.filter(({ text }) => /from\s+["']@\/lib\/ai\/client["']/.test(text)).map(({ file }) => file).sort();
+    expect(importers).toEqual(["src/app/actions.ts", "src/lib/data-source.ts"]);
+    for (const f of importers) expect(readFileSync(join(ROOT, f), "utf8")).not.toMatch(/^["']use client["']/m);
+    const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+    const calls = actions.match(/await askAi\(/g)?.length ?? 0;
+    expect(calls).toBeGreaterThan(0);
+    expect(actions.match(/await logAiUsage\(/g)?.length).toBe(calls);
   });
 });

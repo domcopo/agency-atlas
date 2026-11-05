@@ -553,3 +553,44 @@ export interface GhlSummary {
   showed30: number;
   noShows30: number;
 }
+
+// ---------------------------------------------------------------------------
+// AI (Phase 4)
+// ---------------------------------------------------------------------------
+
+export type ClientLink = { slug: string; name: string };
+
+export interface AiStatus {
+  configured: boolean; // key set on this Mac
+  tablesReady: boolean; // 0005 migration has been run
+  model: string;
+  budgetUsd: number;
+  spentUsd: number;
+  remainingUsd: number;
+  pct: number;
+  level: "ok" | "notice" | "warning" | "blocked";
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  recent: { at: string; feature: string; costUsd: number; outcome: string; tokens: number }[];
+}
+
+export interface Briefing {
+  headline: string;
+  priorities: { title: string; why: string; clients: ClientLink[]; when: "today" | "this_week" }[];
+  risks: { title: string; why: string; clients: ClientLink[] }[];
+  upsells: { title: string; why: string; clients: ClientLink[] }[];
+  questions: { question: string; why: string; clients: ClientLink[] }[];
+  drafts: { client: ClientLink | null; purpose: string; message: string }[];
+}
+
+export interface ClientProfile {
+  summary: string;
+  buys: string;
+  howTheyAreDoing: string;
+  caresAbout: string[];
+  risks: string[];
+  nextStep: string;
+  questionsToAsk: string[];
+  draftCheckIn: string;
+}

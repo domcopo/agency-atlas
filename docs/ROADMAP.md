@@ -71,36 +71,68 @@ agency sub-account; numbers on Sales match GHL; all tests pass; nothing in GHL c
 
 ---
 
-## Phase 4 — AI briefings and suggestions, read-only (needs approval)
+## Phase 4 — AI assistant with a hard $10/month budget (approved 2026-11-04 with Claude Opus 5.5, built)
 
-**Scope**
-- A **"Get today's briefing"** button. The server sends the AI a trimmed snapshot:
-  client list, health scores, check-ins, follow-ups, Atlas asks answers and (after
-  Phase 3) GHL metadata. No passwords, keys or tokens are ever included.
-- The AI has **no tools at all**, so it cannot do anything except write text back.
-  The reply must follow a fixed format: priorities for today, risks, upsell ideas,
-  questions to ask, and **draft messages** (copy button only; the app never sends).
-- Every suggestion must point at the records it's based on, so you can check it.
-- Text from GHL or clients is marked as untrusted data in the prompt. If a message
-  says "ignore your instructions", the worst case is a bad suggestion you can see and
-  ignore. It can't make the app do anything.
-- Briefings are saved (read-only history) so you can compare week to week.
-- Later in this phase: Atlas asks can use AI to choose better questions.
+**The idea in one line:** the AI reads a trimmed copy of your data, writes suggestions
+and drafts for a person to review, and can never change, send or delete anything.
+Every request is counted, priced and stopped at your budget.
 
-**What the owner does**
-1. Create an account at console.anthropic.com, add a payment method and a few dollars
-   of credit, and set a **monthly spend limit** (for example $30).
-2. Create an API key and add `ANTHROPIC_API_KEY=...` to `.env.local`.
+### 4a. AI spend meter + budget (built first, before any AI feature)
+- A **meter** on Data Safety (and a small chip on Home): tokens used this month,
+  cost this month, and a bar toward the budget (default **$10/month**).
+- **Alerts:** the meter glows amber at **50%**, red at **80%** with a banner on Home.
+- **Hard stop at 100%:** the app refuses new AI requests until the 1st of next month
+  (or until the owner raises the budget). Before each request it also checks that the
+  worst-case cost of that one request still fits.
+- Every request is logged: date, feature, model, tokens in/out, cost. Owner and
+  managers can see the log; nobody can edit or delete it.
+- **Second lock:** you also set a $10 monthly spend limit in the Anthropic Console, so
+  the provider itself stops billing past $10 even if the app had a bug.
 
-**Cost estimate** (Claude Opus 5.5: $4 per million tokens in, $20 per million out;
-a token is a word-piece, and 1 million tokens is about 750,000 words):
-- One daily briefing for ~35 clients: about **$0.20–$0.40** each, so **$6–$12/month**.
-- Draft messages on demand: a few cents each.
-- Expected total: **about $10–$25/month**. A cheaper model (Claude Sonnet 5.5, half the
-  price) is an option if quality holds; we can measure both.
+### 4b. What the AI does (all read-only, no tools)
+1. **Daily briefing** (button on Home): today's priorities, at-risk clients, check-ins
+   due, upsell ideas, and questions to ask, each pointing at the records it's based on.
+2. **Client knowledge profiles:** one page per client that the AI drafts from check-in
+   notes and moods, Atlas asks answers, services, health and (after Phase 3) pipeline
+   and appointments: what they buy, how they're doing, what they care about, open
+   risks, next best step. Saved as **"AI draft"** until you mark it reviewed. This
+   becomes your client knowledge base and gets better as the team logs check-ins.
+3. **Draft messages** for check-ins and win-backs: copy button only. The app never
+   sends anything.
+4. **Team coaching (weekly):** patterns worth fixing, such as overdue check-ins,
+   clients trending worse, no-shows, and new clients in their first 60 days. Overseeing
+   developers' work comes once work orders are real (they're still samples).
 
-**Done means**: the briefing appears on Home with sources; drafts copy correctly;
-tests prove the AI request has no tools and no secrets; the spend limit is set.
+### How it stays safe
+- One server-only module (`src/lib/ai/`) is the only code that talks to the AI. It
+  sends **no tools**, so the AI can only return text. Tests check this, and check that
+  no other file contacts the AI.
+- **Names are swapped for codes** ("Client 7") before anything leaves this Mac; the
+  app swaps them back on screen. Notes are sent as written, so avoid putting
+  sensitive personal details in check-in notes.
+- Data from clients and GoHighLevel is marked as untrusted in the prompt. Instructions
+  hidden in it can at worst produce a bad suggestion you can see and ignore.
+- Answers must follow a fixed format and are shown as plain text.
+- Privacy note for review: client data goes to Anthropic's API, which by default doesn't
+  train on API data and keeps it for a limited time (check their current policy).
+
+### What the owner does
+1. Create an account at console.anthropic.com, add a payment method and $10 of credit.
+2. **Settings → Limits:** set the monthly spend limit to **$10**.
+3. Create an API key and add `ANTHROPIC_API_KEY=...` to `.env.local` (Claude never sees it).
+4. Approve one new package: Anthropic's official SDK (`@anthropic-ai/sdk`).
+
+### Cost inside a $10 budget (estimates, measured once it runs)
+| Model | Price per million tokens (in / out) | Daily briefing (weekdays) | Profiles + drafts | Month |
+|---|---|---|---|---|
+| Claude Opus 5.5 (most capable) | $4 / $20 | about $5 | about $3 | **about $8** (close to the cap) |
+| Claude Sonnet 5.5 | $2 / $10 | about $2.50 | about $1.50 | **about $4** |
+
+The meter shows real numbers after the first week, so the model can be changed later.
+
+**Done means:** the meter shows exact usage; the hard stop blocks at the budget (tested
+with a tiny test budget); the briefing, profiles and drafts work with sources; tests
+prove the AI gets no tools and no secrets.
 
 ---
 
@@ -119,4 +151,4 @@ each morning.
 - Release checklist: secrets, access rules, backups, monitoring, error alerts, rollback.
 
 **Expected running cost after Phase 5**: about $45/month hosting + database, plus
-$10–$25/month AI.
+the AI budget you set (default $10/month).

@@ -50,6 +50,7 @@ export const safetyStatus: SafetyStatus = {
     { label: "Audit log of who viewed what", done: false, phase: 2 },
     { label: "GoHighLevel read-only module: GET only, allowlisted addresses, tested", done: true, phase: 3 },
     { label: "First read-only sync from the agency sub-account", done: false, phase: 3 },
+    { label: "AI: no tools, names coded, every request priced and logged, hard budget stop", done: true, phase: 4 },
     { label: "Webhook signature verification + dedupe", done: false, phase: 4 },
     { label: "Client consent + retention choices recorded", done: false, phase: 5 },
     { label: "Internal kill switch (stops imports, never touches GHL)", done: false, phase: 5 },

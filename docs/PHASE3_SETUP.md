@@ -11,11 +11,12 @@ Before you start: two-factor must be on (Phase 2 setup, step 7).
 2. Go to **Settings** → **Private Integrations** → **Create new integration**.
    (If you don't see it, an agency admin may need to turn on Private Integrations.)
 3. Name: `Agency Atlas (read-only)`. Description: `Reads pipeline and appointments only.`
-4. Scopes: tick **only these four** and nothing else:
+4. Scopes: tick **only these** and nothing else:
    - `View Opportunities` (`opportunities.readonly`)
    - `View Calendars` (`calendars.readonly`)
    - `View Calendar Events` (`calendars/events.readonly`)
-   - `View Locations` (`locations.readonly`)
+   - `View Locations` (`locations.readonly`), optional: only used to show the
+     sub-account name. If it isn't in the list, skip it.
 
    Don't tick anything that says Edit, Write, Create, Delete or that doesn't end in
    `.readonly`. The app can only read anyway, but the token is the second lock.

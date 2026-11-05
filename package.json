@@ -15,6 +15,7 @@
     "test:rls": "node scripts/test-rls.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.135.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.118.0",
     "lucide-react": "1.59.0",

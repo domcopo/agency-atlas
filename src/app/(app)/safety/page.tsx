@@ -13,10 +13,12 @@ import type { Metadata } from "next";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getGhlSummary, getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { getAiStatus, getGhlSummary, getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
 import { hasPrivateRoster } from "@/lib/private-data";
 import { ImportButton } from "@/components/forms/ImportButton";
 import { SyncButton } from "@/components/forms/SyncButton";
+import { AiMeter } from "@/components/cards/AiMeter";
+import { BudgetForm } from "@/components/forms/AiButtons";
 import { cn } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Data Safety" };
@@ -36,6 +38,7 @@ export default async function SafetyPage() {
   const member = db ? await getMember() : null;
   const privateFile = hasPrivateRoster();
   const ghl = await getGhlSummary();
+  const ai = await getAiStatus();
   const ghlStatus = !ghl.configured ? "Not connected" : !db ? "Needs the database" : !ghl.tablesReady ? "Run setup SQL (0003)" : ghl.lastSync ? "Connected · read-only" : "Ready to sync";
 
   return (
@@ -104,6 +107,42 @@ export default async function SafetyPage() {
         )}
       </GlassCard>
 
+      <SectionTitle>AI spend</SectionTitle>
+      <section id="ai" className="scroll-mt-4">
+        <GlassCard className="space-y-3 text-sm">
+          {!ai.configured ? (
+            <p className="text-muted">AI isn&apos;t connected yet. Setup steps: docs/PHASE4_SETUP.md.</p>
+          ) : !ai.tablesReady ? (
+            <p className="text-muted">AI key found. One more step: run 0005 in the Supabase SQL Editor.</p>
+          ) : (
+            <>
+              <AiMeter ai={ai} />
+              {ai.recent.length > 0 && (
+                <ul className="space-y-1 border-t border-line pt-2 text-xs text-muted">
+                  {ai.recent.map((r, i) => (
+                    <li key={i} className="flex justify-between gap-2">
+                      <span>
+                        {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(r.at))} ·{" "}
+                        {r.feature === "briefing" ? "Briefing" : "Client profile"}
+                        {r.outcome !== "ok" ? ` (${r.outcome})` : ""}
+                      </span>
+                      <span className="shrink-0">${r.costUsd.toFixed(3)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {member?.role === "owner" && <BudgetForm current={ai.budgetUsd} />}
+            </>
+          )}
+          <ul className="space-y-1 text-xs text-muted">
+            <li>• Model: Claude Opus 5.5 ($4 in / $20 out per million tokens). Every request&apos;s exact cost is logged; the log can&apos;t be edited.</li>
+            <li>• The AI gets no tools: it can only write text. It can&apos;t change, send or delete anything.</li>
+            <li>• Client names are swapped for codes before anything leaves this Mac.</li>
+            <li>• Second lock: set the same monthly limit in your Anthropic account.</li>
+          </ul>
+        </GlassCard>
+      </section>
+
       <SectionTitle>Your client list</SectionTitle>
       <GlassCard className="space-y-2 text-sm">
         <div className="flex items-center justify-between gap-2">
@@ -163,7 +202,7 @@ export default async function SafetyPage() {
             <span className="font-semibold">Runs on this computer only.</span>{" "}
             <span className="text-muted">
               {roster.source === "database"
-                ? "Sign-in is required, but it is password-only for now (no two-factor yet), so keep it off the internet until hosting and MFA are set up."
+                ? "Sign-in requires a password and a two-factor code. Keep it on this Mac until it's properly hosted (Phase 5)."
                 : "There's no sign-in yet, so real data must never leave this Mac."}
             </span>
           </span>

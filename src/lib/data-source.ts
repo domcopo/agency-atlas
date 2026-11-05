@@ -19,6 +19,8 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
+import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
+import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
@@ -45,6 +47,9 @@ import type {
   RosterSummary,
   SafetyStatus,
   GhlSummary,
+  AiStatus,
+  Briefing,
+  ClientProfile,
   SubscriptionStatus,
   SurveyQuestion,
   SurveyResponse,
@@ -767,4 +772,98 @@ export async function getServiceGroup(slug: string) {
 
 export async function getServiceGroups() {
   return Promise.all(SERVICE_GROUPS.map(async (g) => (await getServiceGroup(g.slug))!));
+}
+
+// ---------------------------------------------------------------------------
+// AI (Phase 4): budget meter, saved briefings and client profiles
+// ---------------------------------------------------------------------------
+
+const emptyAi = (configured: boolean, tablesReady: boolean): AiStatus => ({
+  configured,
+  tablesReady,
+  model: AI_MODEL,
+  budgetUsd: 10,
+  spentUsd: 0,
+  remainingUsd: 10,
+  pct: 0,
+  level: "ok",
+  inputTokens: 0,
+  outputTokens: 0,
+  requests: 0,
+  recent: [],
+});
+
+/** This month's AI usage and budget. Read as the signed-in person (security rules apply). */
+export const getAiStatus = cache(async (): Promise<AiStatus> => {
+  const configured = isAiConfigured();
+  if (!usesDatabase()) return emptyAi(configured, false);
+  const db = await createDatabaseClient();
+  const [settings, usage] = await Promise.all([
+    db.from("ai_settings").select("monthly_budget_usd").eq("id", 1).maybeSingle(),
+    db
+      .from("ai_usage")
+      .select("created_at, feature, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome")
+      .gte("created_at", monthStartIso())
+      .order("created_at", { ascending: false })
+      .limit(2000),
+  ]);
+  if (settings.error || usage.error) return emptyAi(configured, false);
+  const s = emptyAi(configured, true);
+  s.budgetUsd = Number(settings.data?.monthly_budget_usd ?? 10);
+  for (const u of usage.data ?? []) {
+    s.spentUsd += Number(u.cost_usd);
+    s.inputTokens += u.input_tokens + u.cache_read_tokens + u.cache_write_tokens;
+    s.outputTokens += u.output_tokens;
+    s.requests++;
+  }
+  s.spentUsd = Math.round(s.spentUsd * 10_000) / 10_000;
+  const b = budgetState(s.spentUsd, s.budgetUsd);
+  s.pct = b.pct;
+  s.level = b.level;
+  s.remainingUsd = b.remaining;
+  s.recent = (usage.data ?? []).slice(0, 8).map((u) => ({
+    at: u.created_at,
+    feature: u.feature,
+    costUsd: Number(u.cost_usd),
+    outcome: u.outcome,
+    tokens: u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens,
+  }));
+  return s;
+});
+
+/** The latest saved briefing, if any. */
+export const getLatestBriefing = cache(async (): Promise<{ createdAt: string; content: Briefing } | null> => {
+  if (!usesDatabase()) return null;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("ai_briefings").select("created_at, content").order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (error || !data) return null;
+  return { createdAt: data.created_at, content: data.content as Briefing };
+});
+
+/** The latest AI profile draft for one client, if any. */
+export async function getClientProfile(clientDbId: string | undefined): Promise<{ id: string; createdAt: string; reviewedAt: string | null; content: ClientProfile } | null> {
+  if (!usesDatabase() || !clientDbId || !/^[0-9a-f-]{36}$/.test(clientDbId)) return null;
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("ai_client_profiles")
+    .select("id, created_at, reviewed_at, content")
+    .eq("client_id", clientDbId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { id: data.id, createdAt: data.created_at, reviewedAt: data.reviewed_at, content: data.content as ClientProfile };
+}
+
+/** Recent check-in notes for every client, keyed by database id (newest first). */
+export async function getRecentCheckInsByClient(perClient = 3): Promise<Map<string, CheckInEntry[]>> {
+  const out = new Map<string, CheckInEntry[]>();
+  if (!usesDatabase()) return out;
+  const db = await createDatabaseClient();
+  for (const r of await readCheckIns(db)) {
+    const list = out.get(r.client_id) ?? [];
+    if (list.length < perClient) list.push({ date: r.happened_on, note: r.note, mood: r.mood });
+    out.set(r.client_id, list);
+  }
+  return out;
 }

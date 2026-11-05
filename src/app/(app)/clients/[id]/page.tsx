@@ -3,11 +3,13 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { CheckInForm } from "@/components/forms/CheckInForm";
+import { ClientProfileCard } from "@/components/cards/ClientProfileCard";
+import { ProfileButton } from "@/components/forms/AiButtons";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { EmptyState, Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getCheckInHistory, getClientHealth, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getAiStatus, getCheckInHistory, getClientHealth, getClientProfile, getMember, getRosterClient, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
@@ -36,6 +38,9 @@ export default async function ClientPage({ params }: Props) {
   const ci = health?.checkIn;
   const member = await getMember();
   const history = await getCheckInHistory(c.dbId);
+  const ai = await getAiStatus();
+  const profile = await getClientProfile(c.dbId);
+  const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady && c.dbId);
 
   return (
     <>
@@ -139,6 +144,18 @@ export default async function ClientPage({ params }: Props) {
                 })}
               </ul>
             </GlassCard>
+          )}
+        </>
+      )}
+
+      {(profile || canUseAi) && (
+        <>
+          <SectionTitle>Client profile</SectionTitle>
+          {profile && <ClientProfileCard profile={profile} canReview={member?.role === "owner"} />}
+          {canUseAi && (
+            <div className={profile ? "mt-2.5" : ""}>
+              <ProfileButton slug={c.id} label={profile ? "Refresh profile with AI" : "Draft a profile with AI"} disabled={ai.level === "blocked"} />
+            </div>
           )}
         </>
       )}

@@ -449,3 +449,52 @@ describe("GoHighLevel data checks (untrusted input)", async () => {
     expect(cleanTime({})).toBeNull();
   });
 });
+
+describe("AI budget math and name protection", async () => {
+  const { budgetState, costOf, worstCaseCost } = await import("@/lib/ai/budget");
+  const { buildCodebook, redact, restore, restoreBriefing, restoreClients } = await import("@/lib/ai/snapshot");
+
+  it("prices a request exactly from token counts", () => {
+    // 10,000 in x $4/M + 2,000 out x $20/M = $0.04 + $0.04
+    expect(costOf("claude-opus-5-5", { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0 })).toBe(0.08);
+    expect(() => costOf("some-unknown-model", { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 })).toThrow();
+  });
+
+  it("alerts at 50% and 80%, and blocks at the budget", () => {
+    expect(budgetState(2, 10).level).toBe("ok");
+    expect(budgetState(5, 10).level).toBe("notice");
+    expect(budgetState(8.2, 10).level).toBe("warning");
+    expect(budgetState(10, 10)).toMatchObject({ level: "blocked", remaining: 0 });
+    expect(budgetState(0, 0).level).toBe("blocked");
+  });
+
+  it("refuses a request whose worst case wouldn't fit", () => {
+    const worst = worstCaseCost("claude-opus-5-5", 30_000, 8000); // ~10k in + 8k out
+    expect(worst).toBeCloseTo(0.2, 2);
+    expect(budgetState(9.9, 10).remaining).toBeLessThan(worst);
+  });
+
+  it("swaps client names for codes before sending, and back for display", () => {
+    const clients = [
+      { id: "pat-example", name: "Pat Example (fictional)", monthlyUsd: 300, startDate: "2026-01-05", status: "active", listedIn: [], services: ["SEO"] },
+      { id: "sam-sample", name: "Sam Sample", monthlyUsd: 150, startDate: "2026-03-01", status: "paused", listedIn: [], services: [] },
+    ] as Parameters<typeof buildCodebook>[0];
+    const book = buildCodebook(clients);
+    const note = redact("Talked to Sam Sample about Pat Example (fictional)'s ads", book);
+    expect(note).not.toMatch(/Sam Sample|Pat Example/);
+    expect(note).toContain("[C2]");
+    expect(restore("Call [C2] today, then C1.", book)).toBe("Call Sam Sample today, then Pat Example (fictional).");
+    expect(restore("Check [C99]", book)).toBe("Check [unknown client]");
+    expect(restoreClients(["C1", "[C2]", "C99", "C1"], book).map((c) => c.slug)).toEqual(["pat-example", "sam-sample"]);
+  });
+
+  it("checks and trims the AI's answer like any untrusted input", () => {
+    const book = buildCodebook([]);
+    const b = restoreBriefing({ headline: "x".repeat(1000), priorities: Array.from({ length: 20 }, () => ({ title: "t", why: "w", clients: [], when: "now!" })), risks: "not a list" }, book);
+    expect(b.headline.length).toBe(240);
+    expect(b.priorities).toHaveLength(6);
+    expect(b.priorities[0]?.when).toBe("this_week");
+    expect(b.risks).toEqual([]);
+    expect(b.drafts).toEqual([]);
+  });
+});

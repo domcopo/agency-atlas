@@ -14,7 +14,10 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
+import { BriefingCard } from "@/components/cards/BriefingCard";
+import { BriefingButton } from "@/components/forms/AiButtons";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { DetectionRadar } from "@/components/cards/DetectionRadar";
 import { FollowUpList } from "@/components/cards/FollowUpList";
@@ -25,7 +28,11 @@ import { ProspectCard } from "@/components/cards/ProspectCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
+  getAiStatus,
   getAtlasQuestions,
+  getLatestBriefing,
+  getMember,
+  usesDatabase,
   getConversations,
   getCoachHints,
   getDetections,
@@ -69,6 +76,11 @@ export default async function MissionControlPage() {
   const trends = getTrends();
   const real = summary.source !== "demo";
   const coach = await getCoachHints();
+  const ai = await getAiStatus();
+  const briefing = await getLatestBriefing();
+  const member = usesDatabase() ? await getMember() : null;
+  const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady);
+  const briefingIsToday = Boolean(briefing && new Date(briefing.createdAt).toDateString() === new Date().toDateString());
 
   const tabs = [
     {
@@ -213,11 +225,32 @@ export default async function MissionControlPage() {
         }
       />
 
+      {ai.tablesReady && (ai.level === "warning" || ai.level === "blocked") && (
+        <Link href="/safety#ai" className="mb-3 block rounded-2xl border border-rose/40 bg-rose/10 p-3 text-sm">
+          <span className="font-semibold text-rose">{ai.level === "blocked" ? "AI budget used up." : `AI budget ${ai.pct}% used.`}</span>{" "}
+          <span className="text-muted">
+            ${ai.spentUsd.toFixed(2)} of ${ai.budgetUsd.toFixed(2)} this month.{ai.level === "blocked" ? " AI is paused until the 1st." : ""} Tap to review.
+          </span>
+        </Link>
+      )}
+
       <HomeTabs tabs={tabs} />
 
       <div className="mt-3">
         <DetectionRadar detections={await getDetections()} coachSignature={coach.radar.signature} />
       </div>
+
+      {(canUseAi || briefing) && (
+        <>
+          <SectionTitle aside={ai.tablesReady ? <Link href="/safety#ai" className="block w-36"><AiMeter ai={ai} compact /></Link> : undefined}>AI briefing</SectionTitle>
+          {briefing && <BriefingCard briefing={briefing.content} createdAt={briefing.createdAt} isToday={briefingIsToday} />}
+          {canUseAi && (
+            <div className={briefing ? "mt-2.5" : ""}>
+              <BriefingButton label={briefingIsToday ? "Refresh today's briefing" : "Get today's briefing"} disabled={ai.level === "blocked"} />
+            </div>
+          )}
+        </>
+      )}
 
       <AtlasAsks questions={await getAtlasQuestions(3)} today={data.today} />
 

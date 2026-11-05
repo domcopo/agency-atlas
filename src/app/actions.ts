@@ -9,7 +9,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getAtlasQuestions } from "@/lib/data-source";
+import { askAi, BRIEFING_SCHEMA, BRIEFING_TASK, isAiConfigured, PROFILE_SCHEMA, PROFILE_TASK, type AiResult } from "@/lib/ai/client";
+import { buildCodebook, clientFacts, pipelineFacts, restoreBriefing, restoreProfile } from "@/lib/ai/snapshot";
+import {
+  getAiStatus,
+  getAtlasQuestions,
+  getCheckInHistory,
+  getClientHealth,
+  getGhlSummary,
+  getRecentCheckInsByClient,
+  getRoster,
+  getToday,
+} from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
 import { GhlError, isGhlConfigured, readAppointments, readLocationName, readOpportunities, type GhlAppointment, type GhlOpportunity } from "@/lib/ghl/client";
 import { createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
@@ -267,7 +278,8 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   let opportunities: GhlOpportunity[];
   let appointments: GhlAppointment[];
   try {
-    locationName = await readLocationName();
+    // The sub-account name is a nice-to-have (needs the optional locations.readonly scope).
+    locationName = await readLocationName().catch(() => null);
     opportunities = await readOpportunities();
     appointments = await readAppointments();
   } catch (err) {
@@ -323,4 +335,112 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   return {
     message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. Nothing in GoHighLevel was changed.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// AI (Phase 4). The AI only returns text; these actions check the budget first,
+// log every request's exact cost, and save the answer for people to review.
+// ---------------------------------------------------------------------------
+
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile", r: AiResult) {
+  if (!r.usage || r.costUsd === undefined) return; // nothing was sent, nothing was charged
+  const { error } = await db.from("ai_usage").insert({
+    feature,
+    model: r.model,
+    input_tokens: r.usage.inputTokens,
+    output_tokens: r.usage.outputTokens,
+    cache_read_tokens: r.usage.cacheReadTokens,
+    cache_write_tokens: r.usage.cacheWriteTokens,
+    cost_usd: r.costUsd,
+    outcome: r.ok ? "ok" : r.reason === "refused" ? "refused" : "error",
+  });
+  if (error) console.warn(`AI usage log refused: ${error.code}`);
+}
+
+async function aiPreflight(): Promise<{ error: string } | { remaining: number }> {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can use the AI." };
+  if (!isAiConfigured()) return { error: "The AI isn't set up on this Mac yet." };
+  const status = await getAiStatus();
+  if (!status.tablesReady) return { error: "The AI needs one setup step first (run 0005 in Supabase)." };
+  if (status.level === "blocked") return { error: `This month's AI budget ($${status.budgetUsd.toFixed(2)}) is used up. It resets on the 1st.` };
+  return { remaining: status.remainingUsd };
+}
+
+export async function generateBriefing(): Promise<{ error?: string; message?: string }> {
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+
+  const today = getToday();
+  const current = (await getRoster()).filter((c) => c.status === "active" || c.status === "paused");
+  const book = buildCodebook(current);
+  const notes = await getRecentCheckInsByClient(3);
+  const data = {
+    today,
+    clients: current.map((c) => clientFacts(c, getClientHealth(c), (c.dbId && notes.get(c.dbId)) || [], book, today)),
+    pipeline: pipelineFacts(await getGhlSummary()),
+  };
+
+  const result = await askAi({ task: BRIEFING_TASK, data, schema: BRIEFING_SCHEMA, maxOutputTokens: 8000, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "briefing", result);
+  if (!result.ok) {
+    revalidatePath("/", "layout");
+    return { error: result.message };
+  }
+  const { error } = await db.from("ai_briefings").insert({ kind: "daily", content: restoreBriefing(result.data, book) });
+  revalidatePath("/", "layout");
+  if (error) return { error: "The briefing was written but couldn't be saved." };
+  return { message: `Briefing ready. Cost: $${result.costUsd.toFixed(3)}.` };
+}
+
+export async function generateClientProfile(_prev: { error?: string; message?: string } | undefined, form: FormData): Promise<{ error?: string; message?: string }> {
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const slug = text(form, "slug", 90);
+  const roster = await getRoster();
+  const client = roster.find((c) => c.id === slug);
+  if (!client?.dbId) return { error: "Unknown client." };
+
+  const today = getToday();
+  const book = buildCodebook(roster);
+  const history = await getCheckInHistory(client.dbId, 20);
+  const data = { today, client: clientFacts(client, getClientHealth(client), history, book, today), pipeline: pipelineFacts(await getGhlSummary()) };
+
+  const result = await askAi({ task: PROFILE_TASK, data, schema: PROFILE_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "client_profile", result);
+  if (!result.ok) {
+    revalidatePath("/", "layout");
+    return { error: result.message };
+  }
+  const { error } = await db.from("ai_client_profiles").insert({ client_id: client.dbId, content: restoreProfile(result.data, book) });
+  revalidatePath("/", "layout");
+  if (error) return { error: "The profile was written but couldn't be saved." };
+  return { message: `Profile drafted. Cost: $${result.costUsd.toFixed(3)}.` };
+}
+
+export async function markProfileReviewed(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const id = text(form, "profileId", 40);
+  if (!/^[0-9a-f-]{36}$/.test(id)) return;
+  const db = await createDatabaseClient();
+  await db.from("ai_client_profiles").update({ reviewed_at: new Date().toISOString(), reviewed_by: me.userId }).eq("id", id);
+  revalidatePath("/", "layout");
+}
+
+export async function setAiBudget(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can change the AI budget." };
+  const value = Number(text(form, "budget", 8));
+  if (!Number.isFinite(value) || value < 0 || value > 100) return { error: "Pick a monthly budget between $0 and $100." };
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("ai_settings")
+    .update({ monthly_budget_usd: Math.round(value * 100) / 100, updated_at: new Date().toISOString(), updated_by: me.userId })
+    .eq("id", 1);
+  if (error) return { error: "Couldn't save the budget." };
+  revalidatePath("/", "layout");
+  return { ok: true };
 }

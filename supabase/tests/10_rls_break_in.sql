@@ -212,6 +212,54 @@ select test.expect($$insert into public.ghl_syncs (opportunities, appointments) 
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7b. AI: usage log can't be edited, budget is owner-only, results are history.
+-- ---------------------------------------------------------------------------
+begin;
+set local role anon;
+select test.expect('select * from public.ai_usage', -1, 'signed out cannot read AI usage');
+select test.expect('select * from public.ai_client_profiles', -1, 'signed out cannot read AI profiles');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.ai_settings', 0, 'developer cannot see the AI budget');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'm', 1, 1, 0.01, 'ok')$$, -1, 'developer cannot use the AI');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'claude-opus-5-5', 1000, 500, 0.014, 'ok')$$, 1, 'manager AI request is logged');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome, requested_by) values ('briefing', 'm', 1, 1, 0.01, 'ok', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'usage cannot be logged as someone else');
+select test.expect($$update public.ai_usage set cost_usd = 0$$, -1, 'the usage log cannot be edited');
+select test.expect($$delete from public.ai_usage$$, -1, 'the usage log cannot be deleted');
+select test.expect($$update public.ai_settings set monthly_budget_usd = 500$$, 0, 'manager cannot raise the budget');
+select test.expect('select * from public.ai_settings', 1, 'manager can see the budget');
+select test.expect($$insert into public.ai_client_profiles (client_id, content) values ('00000000-0000-0000-0000-0000000000c1', '{"summary":"x"}')$$, 1, 'manager saves an AI profile draft');
+select test.expect($$update public.ai_client_profiles set reviewed_at = now()$$, 0, 'manager cannot mark profiles reviewed');
+select test.expect($$insert into public.ai_briefings (kind, content) values ('daily', '{"headline":"x"}')$$, 1, 'manager saves a briefing');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.ai_settings set monthly_budget_usd = 15, updated_at = now()$$, 1, 'owner changes the budget');
+select test.expect($$update public.ai_settings set monthly_budget_usd = 100000$$, -2, 'absurd budgets are rejected');
+select test.expect($$update public.ai_settings set id = 2$$, -1, 'the budget row cannot be swapped');
+select test.expect($$update public.ai_client_profiles set reviewed_at = now()$$, 1, 'owner marks a profile reviewed');
+select test.expect($$update public.ai_client_profiles set content = '{"summary":"changed"}'$$, -1, 'AI profile text cannot be rewritten');
+select test.expect($$delete from public.ai_briefings$$, -1, 'briefings cannot be deleted');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'm', 1, 1, -1, 'ok')$$, -2, 'negative costs are rejected');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.ai_usage', 0, 'owner without two-factor sees no AI usage');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

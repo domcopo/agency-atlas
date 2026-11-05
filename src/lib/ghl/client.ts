@@ -36,13 +36,27 @@ export class GhlError extends Error {
   }
 }
 
+let warned = false;
+/** Logs (this Mac only) why the settings were refused. Never logs the values. */
+function refuse(reason: string): null {
+  if (!warned) console.warn(`GoHighLevel settings refused: ${reason}`);
+  warned = true;
+  return null;
+}
+
 function settings(): { token: string; locationId: string } | null {
   const token = process.env.GHL_READONLY_TOKEN?.trim();
   const locationId = process.env.GHL_LOCATION_ID?.trim();
-  if (!token || !locationId) return null;
+  if (!token && !locationId) return refuse("neither GHL_READONLY_TOKEN nor GHL_LOCATION_ID is set");
+  if (!token) return refuse("GHL_READONLY_TOKEN is missing or empty");
+  if (!locationId) return refuse("GHL_LOCATION_ID is missing or empty");
   // Private Integration tokens look like "pit-" + an ID. Anything else is refused.
-  if (!/^pit-[0-9a-f-]{20,60}$/i.test(token)) return null;
-  if (!/^[A-Za-z0-9]{8,40}$/.test(locationId)) return null;
+  if (!/^pit-[A-Za-z0-9_-]{20,120}$/.test(token)) {
+    return refuse(/^["']/.test(token) ? "the token has quote marks" : !token.startsWith("pit-") ? "the token doesn't start with pit-" : `the token isn't in the expected format (${token.length} characters)`);
+  }
+  if (!/^[A-Za-z0-9]{8,40}$/.test(locationId)) {
+    return refuse(/^["']/.test(locationId) ? "the location ID has quote marks" : `the location ID isn't letters and numbers only (${locationId.length} characters)`);
+  }
   return { token, locationId };
 }
 
