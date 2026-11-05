@@ -25,16 +25,18 @@ export interface NavHint {
   reason: string;
 }
 
-export function BottomNav({ hints = {} }: { hints?: Record<string, NavHint> }) {
+export function BottomNav({ hints = {}, developer = false }: { hints?: Record<string, NavHint>; developer?: boolean }) {
   const pathname = usePathname();
+  // Developers only use Home and Work (the database enforces what they can read).
+  const shown = developer ? tabs.filter((t) => t.href === "/" || t.href === "/work") : tabs;
 
   return (
     <nav
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 pb-[env(safe-area-inset-bottom)]"
     >
-      <ul className="mx-auto mb-3 grid max-w-md grid-cols-5 rounded-[28px] border border-line bg-[#14111f]/95 px-1.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_12px_32px_-8px_rgb(0_0_0/0.8)] backdrop-blur-xl sm:mb-4">
-        {tabs.map((t) => (
+      <ul className={`mx-auto mb-3 grid max-w-md ${developer ? "grid-cols-2" : "grid-cols-5"} rounded-[28px] border border-line bg-[#14111f]/95 px-1.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_12px_32px_-8px_rgb(0_0_0/0.8)] backdrop-blur-xl sm:mb-4`}>
+        {shown.map((t) => (
           <NavItem
             key={t.href}
             tab={t}

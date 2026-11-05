@@ -92,6 +92,30 @@ export async function signOut() {
   redirect("/login");
 }
 
+/** Change your own password (signed in with two-factor). The new password is never logged. */
+export async function changePassword(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  const me = await getCurrentMember();
+  if (!me) return { error: "Please sign in again." };
+  const next = form.get("password");
+  const confirm = form.get("confirm");
+  if (typeof next !== "string" || typeof confirm !== "string") return { error: "Type the new password twice." };
+  if (next.length < 12) return { error: "Use at least 12 characters (a short sentence works well)." };
+  if (next.length > 72) return { error: "Use 72 characters or fewer." };
+  if (next !== confirm) return { error: "The two passwords don't match." };
+  const db = await createDatabaseClient();
+  const { data } = await db.auth.getClaims();
+  if (data?.claims?.aal !== "aal2") return { error: "Sign in with your two-factor code first." };
+  const { error } = await db.auth.updateUser({ password: next });
+  if (error) {
+    console.warn(`Password change refused: ${error.code ?? error.status}`);
+    if (error.code === "same_password") return { error: "That's your current password. Pick a new one." };
+    if (error.code === "weak_password") return { error: "That password is too easy to guess. Try a longer one." };
+    if (error.code === "reauthentication_needed") return { error: "For safety, sign out and back in, then change it right away." };
+    return { error: "Couldn't change the password. Try again." };
+  }
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Two-factor sign-in (authenticator app, 6-digit codes)
 // ---------------------------------------------------------------------------
@@ -301,10 +325,12 @@ export async function addSuggestedAction(form: FormData) {
 /** Done / reopen / reschedule / assign / status / priority on one action. */
 export async function updateAction(form: FormData) {
   const me = await getCurrentMember();
-  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  if (!me) return;
   const id = text(form, "actionId", 40);
   const op = text(form, "op", 12);
   if (!isUuid(id)) return;
+  // Developers may only change the status of their own items (the database enforces this too).
+  if (me.role === "developer" && op !== "done" && op !== "status") return;
   const db = await createDatabaseClient();
   const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, title, status").eq("id", id).maybeSingle();
   if (!current) return; // not found, or not allowed to see it

@@ -554,6 +554,56 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
   return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
 
+/**
+ * A developer's own items (0007). Uses the public.my_work view, which returns only their
+ * items and each client's name: never revenue or other clients. [] before 0007.
+ */
+export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("my_work")
+    .select("id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name")
+    .order("due_on", { ascending: true, nullsFirst: false });
+  if (error || !Array.isArray(data)) return [];
+  const t = today();
+  const me = await getMember();
+  return (data as Record<string, unknown>[])
+    .filter((r) => r.status !== "done")
+    .map((r) => {
+      const action: ClientAction = {
+        id: String(r.id),
+        kind: r.kind === "issue" ? "issue" : "follow_up",
+        title: String(r.title ?? ""),
+        notes: (r.notes as string | null) ?? null,
+        priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
+        status: (["open", "in_progress", "waiting", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
+        dueOn: (r.due_on as string | null) ?? null,
+        doneAt: (r.done_at as string | null) ?? null,
+        createdAt: String(r.created_at ?? ""),
+        ownerId: me?.staffId ?? null,
+        ownerName: me?.name ?? null,
+        client: null,
+        leadGhlId: null,
+      };
+      const when = !action.dueOn ? "none" : action.dueOn < t ? "overdue" : action.dueOn === t ? "today" : "upcoming";
+      const due = !action.dueOn ? "No due date" : when === "overdue" ? `Overdue (was due ${action.dueOn})` : when === "today" ? "Due today" : `Due ${action.dueOn}`;
+      const status = action.status === "waiting" ? " · waiting on client" : action.status === "in_progress" ? " · in progress" : "";
+      return {
+        id: `a_${action.id}`,
+        title: r.client_name ? `${String(r.client_name)}: ${action.title}` : action.title,
+        reason: `${action.kind === "issue" ? "Issue" : "Follow-up"} · ${due}${status}`,
+        href: "/work#my-work",
+        ownerName: action.ownerName,
+        ownerId: action.ownerId,
+        dueOn: action.dueOn,
+        when,
+        priority: action.priority,
+        action,
+      } as PriorityItem;
+    });
+});
+
 /** Recent contacts across all clients (calls, messages, check-ins...), newest first. */
 export async function getContactLog(days = 14, limit = 6) {
   if (!usesDatabase()) return { count: 0, recent: [] as { date: string; kind: ContactKind; note: string | null; client: { slug: string; name: string } | null }[] };

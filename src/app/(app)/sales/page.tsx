@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
+import { RoleNotice } from "@/components/shell/RoleNotice";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { GhlPipelineCard } from "@/components/cards/GhlPipelineCard";
 import { GlassCard } from "@/components/cards/GlassCard";
@@ -37,6 +38,7 @@ function monthLabel(key: string) {
 }
 
 export default async function SalesPage() {
+  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Sales" />;
   const today = getToday();
   const winLoss = await getWinLoss(6);
   const prospects = getProspects();

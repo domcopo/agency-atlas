@@ -88,7 +88,7 @@ export default async function SafetyPage() {
         {db && member && (
           <p className="text-muted">
             Signed in as <span className="text-ink">{member.name}</span> ({member.role}). Everything you see is filtered
-            by the database&apos;s security rules for your role.
+            by the database&apos;s security rules for your role. <a href="/account" className="font-semibold text-violet underline-offset-2 hover:underline">Change password</a>
           </p>
         )}
         <ul className="space-y-1 text-xs text-muted">

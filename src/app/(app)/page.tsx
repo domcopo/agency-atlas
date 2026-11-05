@@ -28,6 +28,8 @@ import { HomeTabs } from "@/components/cards/HomeTabs";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard } from "@/components/cards/ProspectCard";
 import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
+import { MyWork } from "@/components/cards/MyWork";
+import { myWork } from "@/lib/ops";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
@@ -39,6 +41,7 @@ import {
   getConversations,
   getCoachHints,
   getDetections,
+  getDeveloperWork,
   getContactLog,
   getGhlSummary,
   getMissionControl,
@@ -75,6 +78,21 @@ function SeeAll({ href, children }: { href: string; children: string }) {
 }
 
 export default async function MissionControlPage() {
+  // Developers get their own list only (the database limits what they can read anyway).
+  const me = usesDatabase() ? await getMember() : null;
+  if (me?.role === "developer") {
+    const items = await getDeveloperWork();
+    return (
+      <>
+        <PageHeader title={`Hi, ${me.name}`} subtitle="Your follow-ups and issues" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        {me.staffId ? (
+          <MyWork who="me" staff={[]} buckets={myWork(items, undefined)} load={{ people: [], unowned: { open: 0, overdue: 0, clients: 0 } }} canEdit personal />
+        ) : (
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
+        )}
+      </>
+    );
+  }
   const data = await getMissionControl();
   const summary = await getRosterSummary();
   const prospects = getProspects();

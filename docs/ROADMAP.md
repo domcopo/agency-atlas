@@ -136,7 +136,7 @@ prove the AI gets no tools and no secrets.
 
 ---
 
-## Phase 5 — Hosting + phone access (needs approval)
+## Phase 5 — Hosting + phone access (approved 2026-11-04, setup: PHASE5_SETUP.md)
 
 So the team can use it on their phones, and so syncs/briefings can run automatically
 each morning.

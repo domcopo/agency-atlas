@@ -25,12 +25,15 @@ export function ActionRow({
   staff,
   canEdit,
   slug,
+  statusOnly = false,
 }: {
   item: PriorityItem;
   staff: { id: string; name: string }[];
   canEdit: boolean;
   /** Client page to refresh after a change. */
   slug?: string;
+  /** Developers: only Done and status (no reschedule / reassign). */
+  statusOnly?: boolean;
 }) {
   const a = item.action;
   const tone = priorityTone[item.priority];
@@ -62,6 +65,8 @@ export function ActionRow({
               <Check aria-hidden className="size-3.5" /> Done
             </button>
           </form>
+          {!statusOnly && (
+          <>
           <details className="group">
             <summary className={cn(btn, "list-none")}>
               <CalendarClock aria-hidden className="size-3.5" /> Reschedule
@@ -110,7 +115,9 @@ export function ActionRow({
               </button>
             </form>
           </details>
-          {a.kind === "issue" && (
+          </>
+          )}
+          {(a.kind === "issue" || statusOnly) && (
             <form action={updateAction} className="flex gap-1.5">
               <input type="hidden" name="actionId" value={a.id} />
               <input type="hidden" name="op" value="status" />

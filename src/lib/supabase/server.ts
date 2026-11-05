@@ -57,12 +57,20 @@ export function databaseSettings() {
   return settings();
 }
 
+/**
+ * Sign-in cookie rules. httpOnly: page scripts can never read the session (the
+ * browser never talks to Supabase directly). secure: only sent over HTTPS once
+ * hosted (Vercel sets VERCEL=1); off on this Mac's plain http://127.0.0.1.
+ */
+export const COOKIE_OPTIONS = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: process.env.VERCEL === "1" };
+
 /** A database client acting as the signed-in person. Call once per request. */
 export async function createDatabaseClient() {
   const s = settings();
   if (!s) throw new Error("Database is not configured");
   const cookieStore = await cookies();
   return createServerClient(s.url, s.key, {
+    cookieOptions: COOKIE_OPTIONS,
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -91,13 +99,18 @@ export async function getTwoFactorState(): Promise<"enabled" | "pending" | "none
 }
 
 /** The signed-in person's id and role, or null. Verified by the database, not trusted from the browser. */
-export async function getCurrentMember(): Promise<{ userId: string; name: string; role: "owner" | "manager" | "developer" } | null> {
+export async function getCurrentMember(): Promise<{ userId: string; name: string; role: "owner" | "manager" | "developer"; staffId: string | null } | null> {
   if (!isDatabaseConfigured()) return null;
   const db = await createDatabaseClient();
   const { data: claims } = await db.auth.getClaims();
   const userId = claims?.claims?.sub;
   if (!userId) return null;
-  const { data } = await db.from("team_members").select("display_name, role").eq("user_id", userId).maybeSingle();
+  // staff_id links the login to a team member (0007). Before 0007, read without it.
+  const linked = await db.from("team_members").select("display_name, role, staff_id").eq("user_id", userId).maybeSingle();
+  const data = linked.error
+    ? (await db.from("team_members").select("display_name, role").eq("user_id", userId).maybeSingle()).data
+    : linked.data;
   if (!data) return null;
-  return { userId, name: data.display_name as string, role: data.role as "owner" | "manager" | "developer" };
+  const staffId = (data as { staff_id?: string | null }).staff_id ?? null;
+  return { userId, name: data.display_name as string, role: data.role as "owner" | "manager" | "developer", staffId };
 }

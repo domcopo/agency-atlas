@@ -6,7 +6,8 @@ const isDev = process.env.NODE_ENV !== "production";
 // The most important line is connect-src 'self' — the page can only send data
 // back to this app, never to any other website.
 // Known limitation: Next.js needs 'unsafe-inline' scripts unless we use per-request
-// nonces. We'll tighten this when sign-in arrives (Phase 2).
+// nonces. The browser never talks to Supabase, GoHighLevel or the AI directly
+// (all of that happens on the server), so connect-src stays 'self'.
 const contentSecurityPolicy = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
@@ -31,6 +32,10 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   },
+  // Private tool: ask search engines never to list any page.
+  { key: "X-Robots-Tag", value: "noindex, nofollow" },
+  // Once hosted: browsers must always use HTTPS for this site (2 years).
+  ...(process.env.VERCEL === "1" ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" }] : []),
 ];
 
 const nextConfig: NextConfig = {

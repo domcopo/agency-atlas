@@ -21,18 +21,22 @@ export function MyWork({
   buckets,
   load,
   canEdit,
+  personal = false,
 }: {
   who: string;
   staff: { id: string; name: string }[];
   buckets: Record<WorkBucket, PriorityItem[]>;
   load: { people: { id: string; name: string; open: number; overdue: number; clients: number }[]; unowned: { open: number; overdue: number; clients: number } };
   canEdit: boolean;
+  /** A developer's own view: no person picker, no team load, status-only buttons. */
+  personal?: boolean;
 }) {
-  const name = who === "all" ? "Everyone" : who === "none" ? "No owner" : (staff.find((m) => m.id === who)?.name ?? "Everyone");
+  const name = personal ? "your" : who === "all" ? "Everyone" : who === "none" ? "No owner" : (staff.find((m) => m.id === who)?.name ?? "Everyone");
   const total = BUCKETS.reduce((n, b) => n + buckets[b.id].length, 0);
   return (
     <section id="my-work" className="scroll-mt-16">
       <SectionTitle aside={`${total} items`}>My work</SectionTitle>
+      {!personal && (
       <form method="get" action="/work#my-work" className="mb-2.5 flex gap-2">
         <label className="sr-only" htmlFor="who">
           Whose work
@@ -50,6 +54,7 @@ export function MyWork({
           Show
         </button>
       </form>
+      )}
 
       <GlassCard className="grid grid-cols-4 gap-1 text-center">
         {BUCKETS.map((b) => (
@@ -61,7 +66,7 @@ export function MyWork({
       </GlassCard>
 
       {total === 0 ? (
-        <p className="glass mt-2.5 rounded-3xl px-4 py-3 text-sm text-muted">Nothing on {name}&apos;s list right now.</p>
+        <p className="glass mt-2.5 rounded-3xl px-4 py-3 text-sm text-muted">{personal ? "Nothing on your list right now." : `Nothing on ${name}'s list right now.`}</p>
       ) : (
         BUCKETS.filter((b) => buckets[b.id].length > 0).map((b) => (
           <div key={b.id} id={`work-${b.id}`} className="mt-2.5 scroll-mt-16">
@@ -71,7 +76,7 @@ export function MyWork({
             <ol className="glass divide-y divide-line overflow-hidden rounded-3xl">
               {buckets[b.id].map((i) => (
                 <li key={i.id}>
-                  <ActionRow item={i} staff={staff} canEdit={canEdit} />
+                  <ActionRow item={i} staff={staff} canEdit={canEdit} statusOnly={personal} />
                 </li>
               ))}
             </ol>
@@ -79,6 +84,7 @@ export function MyWork({
         ))
       )}
 
+      {!personal && (
       <details className="glass mt-2.5 rounded-3xl">
         <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold">
           Team load <span className="text-xs font-normal text-muted">open · overdue · clients</span>
@@ -96,6 +102,7 @@ export function MyWork({
           ))}
         </ul>
       </details>
+      )}
     </section>
   );
 }

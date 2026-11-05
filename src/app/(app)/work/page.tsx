@@ -4,7 +4,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { getDeveloperWork, getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
 import { myWork, teamLoad } from "@/lib/ops";
 import { cn } from "@/lib/format";
@@ -22,10 +22,24 @@ const roleInfo: Record<TeamRole, { label: string; icon: typeof Crown; color: str
 export default async function WorkPage({ searchParams }: { searchParams: Promise<{ who?: string }> }) {
   const today = getToday();
   const samples = showsSamples();
-  const ops = await getOps();
   const member = usesDatabase() ? await getMember() : null;
+  if (member?.role === "developer") {
+    const items = await getDeveloperWork();
+    return (
+      <>
+        <PageHeader title="Work" subtitle="Your follow-ups and issues" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        {member.staffId ? (
+          <MyWork who="me" staff={[]} buckets={myWork(items, undefined)} load={{ people: [], unowned: { open: 0, overdue: 0, clients: 0 } }} canEdit personal />
+        ) : (
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
+        )}
+      </>
+    );
+  }
+  const ops = await getOps();
   const staffList = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
-  const whoRaw = (await searchParams).who ?? "all";
+  // Opens to your own list when your login is linked to your team profile.
+  const whoRaw = (await searchParams).who ?? member?.staffId ?? "all";
   const who = whoRaw === "none" || staffList.some((m) => m.id === whoRaw) ? whoRaw : "all";
   const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
   const load = teamLoad(staffList, ops.clients, ops.actions, ops.today);
@@ -68,7 +82,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
         )}
       </div>
 
-      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member && member.role !== "developer")} />}
+      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} />}
 
       {samples && (
         <>

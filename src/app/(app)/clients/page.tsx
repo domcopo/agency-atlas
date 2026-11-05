@@ -1,5 +1,6 @@
 import { BellRing, ChevronRight, HeartPulse, Layers, RotateCcw } from "lucide-react";
 import type { Metadata } from "next";
+import { RoleNotice } from "@/components/shell/RoleNotice";
 import Link from "next/link";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { GlassCard } from "@/components/cards/GlassCard";
@@ -14,6 +15,7 @@ import type { HealthLevel } from "@/lib/types";
 export const metadata: Metadata = { title: "Clients" };
 
 export default async function ClientsPage() {
+  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Clients" />;
   const today = getToday();
   const summary = await getRosterSummary();
   const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c) }));

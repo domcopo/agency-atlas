@@ -1,5 +1,6 @@
 import { AlertTriangle, BellRing, CalendarDays, Clock, Layers } from "lucide-react";
 import type { Metadata } from "next";
+import { RoleNotice } from "@/components/shell/RoleNotice";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { CheckInForm } from "@/components/forms/CheckInForm";
@@ -33,6 +34,7 @@ const sourceLabel: Record<string, string> = {
 
 export default async function ClientPage({ params }: Props) {
   const { id } = await params;
+  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Client" />;
   const c = await getRosterClient(id);
   if (!c) notFound();
   const today = getToday();

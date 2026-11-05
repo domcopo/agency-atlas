@@ -1,5 +1,6 @@
 import { Bot, ChevronRight, ClipboardList, Layers, Link2, TrendingUp } from "lucide-react";
 import type { Metadata } from "next";
+import { RoleNotice } from "@/components/shell/RoleNotice";
 import Link from "next/link";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { InsightCard } from "@/components/cards/InsightCard";
@@ -12,6 +13,7 @@ import { opportunities } from "@/lib/ops";
 export const metadata: Metadata = { title: "Growth Lab" };
 
 export default async function GrowthPage() {
+  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Growth Lab" />;
   const samples = showsSamples();
   const ops = await getOps();
   const member = usesDatabase() ? await getMember() : null;

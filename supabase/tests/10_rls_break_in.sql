@@ -322,6 +322,64 @@ select test.expect('select * from public.activity', 0, 'owner without two-factor
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7d. Developer view (0007): own items only, status only, no client details.
+-- ---------------------------------------------------------------------------
+insert into public.staff (id, name, role) values ('00000000-0000-0000-0000-0000000000b3', 'Dev B (test)', 'seo_developer');
+update public.team_members set staff_id = '00000000-0000-0000-0000-0000000000b3' where user_id = '00000000-0000-0000-0000-0000000000a3';
+insert into public.actions (id, client_id, kind, title, owner_staff_id, priority, due_on, created_by) values
+  ('00000000-0000-0000-0000-00000000ad01', '00000000-0000-0000-0000-0000000000c1', 'issue', 'Fix tracking (test)', '00000000-0000-0000-0000-0000000000b3', 'high', '2026-11-05', '00000000-0000-0000-0000-0000000000a1'),
+  ('00000000-0000-0000-0000-00000000ad02', '00000000-0000-0000-0000-0000000000c1', 'follow_up', 'Someone else''s (test)', '00000000-0000-0000-0000-0000000000b2', 'normal', '2026-11-05', '00000000-0000-0000-0000-0000000000a1');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.actions', 1, 'developer sees only their own item');
+select test.expect('select * from public.my_work', 1, 'my_work lists only their own item');
+select test.expect($$select * from public.my_work where client_name = 'Pat Example (fictional)'$$, 1, 'my_work includes the client name');
+select test.expect('select * from public.clients', 0, 'developer still cannot read clients (no revenue)');
+select test.expect('select * from public.check_ins', 0, 'developer cannot read check-ins');
+select test.expect('select * from public.ghl_opportunities', 0, 'developer cannot read the sales pipeline');
+select test.expect('select * from public.ai_briefings', 0, 'developer cannot read AI briefings');
+select test.expect('select * from public.activity', 0, 'developer cannot read history');
+select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'developer updates the status of their own item');
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'developer marks their own item done');
+select test.expect($$update public.actions set title = 'changed' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot rename their item');
+select test.expect($$update public.actions set due_on = '2027-01-01' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot move their due date');
+select test.expect($$update public.actions set owner_staff_id = '00000000-0000-0000-0000-0000000000b2' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot hand their item to someone else');
+select test.expect($$update public.actions set status = 'done' where id = '00000000-0000-0000-0000-00000000ad02'$$, 0, 'developer cannot touch someone else''s item');
+select test.expect($$delete from public.actions$$, -1, 'developer cannot delete items');
+select test.expect($$insert into public.actions (client_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'developer cannot add items');
+select test.expect($$insert into public.activity (client_id, action_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000ad01', 'action_done', 'Done: Fix tracking (test)')$$, 1, 'developer logs history for their own item');
+select test.expect($$insert into public.activity (client_id, action_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000ad02', 'action_done', 'x')$$, -1, 'developer cannot log history for someone else''s item');
+select test.expect($$insert into public.activity (client_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', 'owner_changed', 'x')$$, -1, 'developer cannot log unrelated history');
+select test.expect($$update public.team_members set staff_id = '00000000-0000-0000-0000-0000000000b2'$$, -1, 'developer cannot re-link their login to someone else');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect('select * from public.my_work', 0, 'developer without two-factor gets nothing from my_work');
+select test.expect('select * from public.actions', 0, 'developer without two-factor sees no items');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.my_work', -1, 'signed out cannot read my_work');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.my_work', 0, 'non-team user gets nothing from my_work');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set title = 'Manager renames (test)' where id = '00000000-0000-0000-0000-00000000ad02'$$, 1, 'managers can still edit items fully');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
