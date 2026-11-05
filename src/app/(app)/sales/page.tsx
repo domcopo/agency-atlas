@@ -1,4 +1,4 @@
-import { ChevronDown, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { GhlPipelineCard } from "@/components/cards/GhlPipelineCard";
@@ -16,6 +16,7 @@ import {
   getRosterSource,
   getToday,
   getWinLoss,
+  showsSamples,
 } from "@/lib/data-source";
 import { formatUsd, formatUsdExact } from "@/lib/format";
 import type { ProspectStage } from "@/lib/types";
@@ -40,7 +41,7 @@ export default async function SalesPage() {
   const real = (await getRosterSource()) !== "demo";
   const ghl = await getGhlSummary();
 
-  const hasRealPipeline = ghl.lastSync !== null;
+  const showSamples = showsSamples();
   const samples = (
     <>
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
@@ -133,25 +134,14 @@ export default async function SalesPage() {
 
       <GhlPipelineCard ghl={ghl} />
 
-      {hasRealPipeline ? (
-        <details className="group mt-6 rounded-3xl border border-line">
-          <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm">
-            <span>
-              <span className="font-semibold">Sample data</span>{" "}
-              <span className="text-muted">(fictional prospects, numbers and chats)</span>
-            </span>
-            <ChevronDown aria-hidden className="size-4 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none" />
-          </summary>
-          <div className="px-3 pb-4">
-            <p className="px-1 pt-1 text-[11px] text-faint">
-              Hidden because your real GoHighLevel pipeline is above. Kept only to show what these screens will look like.
-            </p>
-            {samples}
-          </div>
-        </details>
-      ) : (
-        samples
+      {!ghl.lastSync && !showSamples && (
+        <GlassCard className="mt-6 text-sm text-muted">
+          Your GoHighLevel pipeline isn&apos;t synced yet. Press Sync on the Data Safety screen to copy it here
+          (read-only).
+        </GlassCard>
       )}
+
+      {showSamples && samples}
     </>
   );
 }

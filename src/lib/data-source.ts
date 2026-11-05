@@ -66,6 +66,15 @@ export function usesDatabase(): boolean {
   return isDatabaseConfigured();
 }
 
+/**
+ * Sample (made-up) records are only for the demo, when no database is connected.
+ * Once your real database is connected, every sample getter below returns nothing,
+ * so screens show real data or say plainly that something isn't connected yet.
+ */
+export function showsSamples(): boolean {
+  return !usesDatabase();
+}
+
 /** Today's date. Real date with the database; a fixed date for the sample/demo data. */
 function today(): string {
   if (!usesDatabase()) return missionControl.today;
@@ -371,11 +380,14 @@ export async function getMissionControl(): Promise<MissionControlData> {
       at: `${c.startDate}T12:00:00Z`,
     }));
 
+  const samples = showsSamples();
   return {
     ...missionControl,
     today: today(),
-    alerts: [...realAlerts, ...missionControl.alerts],
-    activity: [...realActivity, ...missionControl.activity].sort((a, b) => b.at.localeCompare(a.at)),
+    clientResults: samples ? missionControl.clientResults : [],
+    followUps: samples ? missionControl.followUps : [],
+    alerts: [...realAlerts, ...(samples ? missionControl.alerts : [])],
+    activity: [...realActivity, ...(samples ? missionControl.activity : [])].sort((a, b) => b.at.localeCompare(a.at)),
   };
 }
 
@@ -432,14 +444,14 @@ export async function getDetections(): Promise<Detection[]> {
     out.push({ id: "d_skip", kind: "problem", title: `${(await roster()).skipped} client records couldn't be read`, why: "They were left out. Check the private client file.", closeness: 0.95, confidence: 1, href: "/safety", isSynthetic: false });
 
   // Sample work orders: urgent = red, overdue = amber.
-  for (const w of workOrders.filter((x) => x.status !== "done")) {
+  for (const w of getWorkOrders().filter((x) => x.status !== "done")) {
     if (w.priority === "urgent")
       out.push({ id: `d_wo_${w.id}`, kind: "problem", title: w.title, why: `${w.clientLabel}. Urgent work order.`, closeness: 0.9, confidence: 0.8, href: `/work/${w.id}`, isSynthetic: true });
     else if (w.due < today())
       out.push({ id: `d_wo_${w.id}`, kind: "attention", title: w.title, why: `${w.clientLabel}. Overdue work order.`, closeness: clamp(0.5 + daysBetween(w.due, today()) / 14), confidence: 0.75, href: `/work/${w.id}`, isSynthetic: true });
   }
   // Sample prospects graded A: green opportunities.
-  for (const p of prospects.filter((x) => x.grade.letter === "A" && x.stage !== "won" && x.stage !== "lost")) {
+  for (const p of getProspects().filter((x) => x.grade.letter === "A" && x.stage !== "won" && x.stage !== "lost")) {
     out.push({ id: `d_pr_${p.id}`, kind: "opportunity", title: `Hot prospect: ${p.name}`, why: `Grade A (${p.grade.score}/100). ${p.wants.join(" + ")}.`, closeness: p.grade.score / 100, confidence: 0.6, href: `/sales/${p.id}`, isSynthetic: true });
   }
 
@@ -476,8 +488,8 @@ export async function getCoachHints() {
   const clients = (await roster()).clients;
   const worth = (await getDetections()).filter((d) => d.closeness * d.confidence >= COACH_RULES.radarWorthScore);
   const toWork = getProspectsToWork();
-  const replies = conversations.filter((c) => c.needsReply);
-  const work = workOrders.filter((w) => w.status !== "done" && (w.priority === "urgent" || w.due < today()));
+  const replies = getConversations().filter((c) => c.needsReply);
+  const work = getWorkOrders().filter((w) => w.status !== "done" && (w.priority === "urgent" || w.due < today()));
   const clientItems = clients.filter((c) => {
     const h = getClientHealth(c);
     return c.check || (c.followUp && h) || h?.level === "at_risk" || h?.checkIn.state === "overdue";
@@ -553,11 +565,12 @@ export async function getAtlasQuestions(limit = 3): Promise<AtlasQuestion[]> {
 
 /** Best grade first. */
 export function getProspects(): Prospect[] {
+  if (!showsSamples()) return [];
   return [...prospects].sort((a, b) => b.grade.score - a.grade.score);
 }
 
 export function getProspect(id: string): Prospect | undefined {
-  return prospects.find((p) => p.id === id);
+  return getProspects().find((p) => p.id === id);
 }
 
 /** Open prospects someone should work today. */
@@ -572,11 +585,12 @@ export function getProspectsToWork() {
 
 /** SAMPLE: how well the agency wins new clients. */
 export function getAgencySalesKpis() {
-  return agencySalesKpis;
+  return showsSamples() ? agencySalesKpis : [];
 }
 
 /** Newest first. */
 export function getConversations(): Conversation[] {
+  if (!showsSamples()) return [];
   return [...conversations].sort((a, b) => b.at.localeCompare(a.at));
 }
 
@@ -588,6 +602,7 @@ const priorityRank = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
 /** Open work first, then by priority, then by due date. */
 export function getWorkOrders(): WorkOrder[] {
+  if (!showsSamples()) return [];
   return [...workOrders].sort(
     (a, b) =>
       Number(a.status === "done") - Number(b.status === "done") ||
@@ -597,10 +612,11 @@ export function getWorkOrders(): WorkOrder[] {
 }
 
 export function getWorkOrder(id: string): WorkOrder | undefined {
-  return workOrders.find((w) => w.id === id);
+  return getWorkOrders().find((w) => w.id === id);
 }
 
 export function getSampleDevelopers() {
+  if (!showsSamples()) return [];
   return sampleDevelopers.map((d) => {
     const load = developerLoads.find((l) => l.memberId === d.id);
     const mine = workOrders.filter((w) => w.assignee === d.id && w.status !== "done");
@@ -623,19 +639,20 @@ export function getWorkRules() {
 // ---------------------------------------------------------------------------
 
 export function getBusinesses(): Business[] {
+  if (!showsSamples()) return [];
   return [...businesses].sort((a, b) => a.dexNumber - b.dexNumber);
 }
 
 export function getBusiness(id: string): Business | undefined {
-  return businesses.find((b) => b.id === id);
+  return getBusinesses().find((b) => b.id === id);
 }
 
 export function getCaseStudyHistory(id: string): MonthlyPoint[] {
-  return caseStudyHistory[id] ?? [];
+  return showsSamples() ? (caseStudyHistory[id] ?? []) : [];
 }
 
 export function getTrends(): Trend[] {
-  return trends;
+  return showsSamples() ? trends : [];
 }
 
 export function getSurveyQuestions(): SurveyQuestion[] {
@@ -643,17 +660,18 @@ export function getSurveyQuestions(): SurveyQuestion[] {
 }
 
 export function getSurveyResponses(businessId?: string): SurveyResponse[] {
+  if (!showsSamples()) return [];
   return businessId ? surveyResponses.filter((r) => r.businessId === businessId) : surveyResponses;
 }
 
 export function getInsights(): Insight[] {
-  return insights;
+  return showsSamples() ? insights : [];
 }
 
 /** Tags shared by two or more businesses, most common first. */
 export function getPatterns(): { tag: string; businessIds: string[] }[] {
   const byTag = new Map<string, string[]>();
-  for (const b of businesses) {
+  for (const b of getBusinesses()) {
     for (const tag of b.patternTags) byTag.set(tag, [...(byTag.get(tag) ?? []), b.id]);
   }
   return [...byTag.entries()]

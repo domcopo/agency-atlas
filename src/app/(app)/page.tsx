@@ -36,13 +36,15 @@ import {
   getConversations,
   getCoachHints,
   getDetections,
+  getGhlSummary,
   getMissionControl,
   getProspects,
   getProspectsToWork,
   getRosterSummary,
   getTrends,
+  showsSamples,
 } from "@/lib/data-source";
-import { formatShortDate, formatUsdExact } from "@/lib/format";
+import { formatShortDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type { ActivityKind } from "@/lib/types";
 
 const activityIcon: Record<ActivityKind, { icon: typeof CalendarCheck; color: string }> = {
@@ -80,134 +82,182 @@ export default async function MissionControlPage() {
   const briefing = await getLatestBriefing();
   const member = usesDatabase() ? await getMember() : null;
   const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady);
+  const samples = showsSamples();
+  const ghl = await getGhlSummary();
   const briefingIsToday = Boolean(briefing && new Date(briefing.createdAt).toDateString() === new Date().toDateString());
 
-  const tabs = [
-    {
-      id: "results",
-      label: "Results",
-      icon: <BadgeDollarSign aria-hidden />,
-      stat: `$${(summary.activeMrr / 1000).toFixed(1)}k`,
-      statLabel: `a month from ${summary.activeCount} active clients`,
-      panel: (
-        <div className="space-y-3">
-          <GlassCard className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">Your clients</p>
-              <Provenance kind={real ? "real" : "demo"} />
+  const resultsTab = {
+    id: "results",
+    label: "Results",
+    icon: <BadgeDollarSign aria-hidden />,
+    stat: `$${(summary.activeMrr / 1000).toFixed(1)}k`,
+    statLabel: `a month from ${summary.activeCount} active clients`,
+    panel: (
+      <div className="space-y-3">
+        <GlassCard className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold">Your clients</p>
+            <Provenance kind={real ? "real" : "demo"} />
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {(["high", "mid", "low"] as const).map((t) => (
+              <Link key={t} href={`/clients#${t}`} className="pressable rounded-2xl bg-white/[0.04] px-1 py-2">
+                <span className="block font-display text-lg font-bold">{summary.tiers[t].count}</span>
+                <span className="block text-[10px] text-muted">
+                  {t === "high" ? "$500+" : t === "mid" ? "$150–499" : "Under $150"}
+                </span>
+                <span className="block text-[11px] font-semibold">{formatUsdExact(summary.tiers[t].mrr)}</span>
+              </Link>
+            ))}
+          </div>
+          <p className="text-xs text-muted">
+            {summary.pausedCount} paused ({formatUsdExact(summary.pausedMrr)}/mo on hold) · avg{" "}
+            {summary.avgMonthsActive} months with you
+          </p>
+        </GlassCard>
+        {data.clientResults.length > 0 && (
+          <>
+            <div className="flex items-center justify-between px-1">
+              <p className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted">Lead results</p>
+              <Provenance kind="sample" />
             </div>
-            <div className="grid grid-cols-3 gap-2 text-center">
-              {(["high", "mid", "low"] as const).map((t) => (
-                <Link key={t} href={`/clients#${t}`} className="pressable rounded-2xl bg-white/[0.04] px-1 py-2">
-                  <span className="block font-display text-lg font-bold">{summary.tiers[t].count}</span>
-                  <span className="block text-[10px] text-muted">
-                    {t === "high" ? "$500+" : t === "mid" ? "$150–499" : "Under $150"}
-                  </span>
-                  <span className="block text-[11px] font-semibold">{formatUsdExact(summary.tiers[t].mrr)}</span>
-                </Link>
+            <div className="grid grid-cols-2 gap-2.5">
+              {data.clientResults.map((kpi) => (
+                <KpiTile key={kpi.id} kpi={kpi} />
               ))}
             </div>
-            <p className="text-xs text-muted">
-              {summary.pausedCount} paused ({formatUsdExact(summary.pausedMrr)}/mo on hold) · avg{" "}
-              {summary.avgMonthsActive} months with you
-            </p>
-          </GlassCard>
-          <div className="flex items-center justify-between px-1">
-            <p className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted">Lead results</p>
-            <Provenance kind="sample" />
-          </div>
-          <div className="grid grid-cols-2 gap-2.5">
-            {data.clientResults.map((kpi) => (
-              <KpiTile key={kpi.id} kpi={kpi} />
-            ))}
-          </div>
-          <p className="px-1 text-[11px] text-faint">
-            Lead results come from GoHighLevel (read-only) in Phase 3. Until then these are sample numbers.
+            <p className="px-1 text-[11px] text-faint">Sample numbers, shown only in the demo.</p>
+          </>
+        )}
+      </div>
+    ),
+  };
+  const casesTab = {
+    id: "case",
+    label: "Cases",
+    icon: <Sprout aria-hidden />,
+    stat: String(trends.length),
+    statLabel: "growth trends",
+    panel: (
+      <div className="glass overflow-hidden rounded-3xl">
+        <ul className="divide-y divide-line">
+          {trends.slice(0, 3).map((t) => (
+            <li key={t.id}>
+              <Link href={`/growth#${t.id}`} className="pressable block px-4 py-3 hover:bg-white/[0.03]">
+                <p className="text-sm font-semibold">{t.title}</p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-muted">{t.finding}</p>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">Sample trends from the Business Dex.</p>
+        <SeeAll href="/growth">Open Growth Lab</SeeAll>
+      </div>
+    ),
+  };
+  const leadsTab = {
+    id: "followups",
+    label: "Leads",
+    icon: <Users aria-hidden />,
+    stat: String(toWork.all.length),
+    statLabel: "prospects to work",
+    attention: toWork.overdue.length > 0,
+    coachSignature: coach.leads.signature,
+    panel: (
+      <div className="glass overflow-hidden rounded-3xl">
+        <div className="grid grid-cols-3 divide-x divide-line border-b border-line text-center">
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold text-rose">{toWork.overdue.length}</span>
+            <span className="text-[11px] text-muted">Overdue</span>
+          </p>
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold">{toWork.dueToday.length}</span>
+            <span className="text-[11px] text-muted">Due today</span>
+          </p>
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold text-violet">{toWork.uncontacted.length}</span>
+            <span className="text-[11px] text-muted">Never contacted</span>
           </p>
         </div>
-      ),
-    },
-    {
-      id: "case",
-      label: "Cases",
-      icon: <Sprout aria-hidden />,
-      stat: String(trends.length),
-      statLabel: "growth trends",
-      panel: (
-        <div className="glass overflow-hidden rounded-3xl">
-          <ul className="divide-y divide-line">
-            {trends.slice(0, 3).map((t) => (
-              <li key={t.id}>
-                <Link href={`/growth#${t.id}`} className="pressable block px-4 py-3 hover:bg-white/[0.03]">
-                  <p className="text-sm font-semibold">{t.title}</p>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-muted">{t.finding}</p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-          <p className="border-t border-line px-4 py-2 text-[11px] text-faint">Sample trends from the Business Dex.</p>
-          <SeeAll href="/growth">Open Growth Lab</SeeAll>
-        </div>
-      ),
-    },
-    {
-      id: "followups",
-      label: "Leads",
-      icon: <Users aria-hidden />,
-      stat: String(toWork.all.length),
-      statLabel: "prospects to work",
-      attention: toWork.overdue.length > 0,
-      coachSignature: coach.leads.signature,
-      panel: (
-        <div className="glass overflow-hidden rounded-3xl">
-          <div className="grid grid-cols-3 divide-x divide-line border-b border-line text-center">
-            <p className="px-2 py-3">
-              <span className="block font-display text-xl font-bold text-rose">{toWork.overdue.length}</span>
-              <span className="text-[11px] text-muted">Overdue</span>
-            </p>
-            <p className="px-2 py-3">
-              <span className="block font-display text-xl font-bold">{toWork.dueToday.length}</span>
-              <span className="text-[11px] text-muted">Due today</span>
-            </p>
-            <p className="px-2 py-3">
-              <span className="block font-display text-xl font-bold text-violet">{toWork.uncontacted.length}</span>
-              <span className="text-[11px] text-muted">Never contacted</span>
-            </p>
-          </div>
-          <ul className="space-y-2 p-3">
-            {toWork.all.slice(0, 4).map((p) => (
-              <li key={p.id}>
-                <ProspectCard prospect={p} today={data.today} />
-              </li>
-            ))}
-          </ul>
-          <SeeAll href="/sales">All prospects</SeeAll>
-        </div>
-      ),
-    },
-    {
-      id: "conversations",
-      label: "Chats",
-      icon: <MessagesSquare aria-hidden />,
-      stat: String(needsReply.length),
-      statLabel: "need a reply",
-      attention: needsReply.length > 0,
-      coachSignature: coach.chats.signature,
-      panel: (
-        <div className="glass overflow-hidden rounded-3xl">
-          <ul className="divide-y divide-line">
-            {needsReply.slice(0, 3).map((c) => (
-              <ConversationRow key={c.id} conversation={c} name={prospectById[c.prospectId]?.name ?? "Unknown"} />
-            ))}
-          </ul>
-          <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
-            Sample messages. Read-only: reply in GoHighLevel; this app never sends.
+        <ul className="space-y-2 p-3">
+          {toWork.all.slice(0, 4).map((p) => (
+            <li key={p.id}>
+              <ProspectCard prospect={p} today={data.today} />
+            </li>
+          ))}
+        </ul>
+        <SeeAll href="/sales">All prospects</SeeAll>
+      </div>
+    ),
+  };
+  const chatsTab = {
+    id: "conversations",
+    label: "Chats",
+    icon: <MessagesSquare aria-hidden />,
+    stat: String(needsReply.length),
+    statLabel: "need a reply",
+    attention: needsReply.length > 0,
+    coachSignature: coach.chats.signature,
+    panel: (
+      <div className="glass overflow-hidden rounded-3xl">
+        <ul className="divide-y divide-line">
+          {needsReply.slice(0, 3).map((c) => (
+            <ConversationRow key={c.id} conversation={c} name={prospectById[c.prospectId]?.name ?? "Unknown"} />
+          ))}
+        </ul>
+        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
+          Sample messages. Read-only: reply in GoHighLevel; this app never sends.
+        </p>
+        <SeeAll href="/sales#conversations">All conversations</SeeAll>
+      </div>
+    ),
+  };
+
+  // Real pipeline from GoHighLevel (read-only copy). Replaces the sample Leads tab.
+  const pipelineTab = {
+    id: "pipeline",
+    label: "Leads",
+    icon: <Users aria-hidden />,
+    stat: ghl.lastSync ? String(ghl.open.count) : "–",
+    statLabel: ghl.lastSync ? "open deals in GoHighLevel" : "GoHighLevel not synced",
+    panel: ghl.lastSync ? (
+      <div className="glass overflow-hidden rounded-3xl">
+        <div className="grid grid-cols-3 divide-x divide-line border-b border-line text-center">
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold">{ghl.newThisMonth}</span>
+            <span className="text-[11px] text-muted">New this month</span>
           </p>
-          <SeeAll href="/sales#conversations">All conversations</SeeAll>
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold text-lime">{ghl.wonThisMonth.count}</span>
+            <span className="text-[11px] text-muted">Won this month</span>
+          </p>
+          <p className="px-2 py-3">
+            <span className="block font-display text-xl font-bold">{ghl.upcoming7}</span>
+            <span className="text-[11px] text-muted">Calls next 7 days</span>
+          </p>
         </div>
-      ),
-    },
-  ];
+        <ul className="divide-y divide-line">
+          {ghl.byStage.map((st) => (
+            <li key={st.stage} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+              <span className="min-w-0 truncate">{st.stage}</span>
+              <span className="shrink-0 text-muted">
+                {st.count}
+                {st.value > 0 && ` · ${formatUsd(st.value)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="border-t border-line px-4 py-2 text-[11px] text-faint">Real · copied read-only from GoHighLevel.</p>
+        <SeeAll href="/sales">Your pipeline</SeeAll>
+      </div>
+    ) : (
+      <GlassCard className="text-sm text-muted">
+        No pipeline yet. Press Sync on the Data Safety screen to copy it from GoHighLevel (read-only).
+      </GlassCard>
+    ),
+  };
+
+  const tabs = samples ? [resultsTab, casesTab, leadsTab, chatsTab] : [resultsTab, pipelineTab];
 
   return (
     <>
@@ -254,17 +304,21 @@ export default async function MissionControlPage() {
 
       <AtlasAsks questions={await getAtlasQuestions(3)} today={data.today} />
 
-      <SectionTitle aside="Internal only, never sent">Top follow-ups today</SectionTitle>
-      <FollowUpList
-        items={data.followUps.slice(0, 3)}
-        today={data.today}
-        prospects={Object.fromEntries(
-          data.followUps.map((f) => [
-            f.prospectId,
-            { name: prospectById[f.prospectId]?.name ?? "Unknown", grade: prospectById[f.prospectId]?.grade.letter ?? "D" },
-          ]),
-        )}
-      />
+      {data.followUps.length > 0 && (
+        <>
+          <SectionTitle aside="Internal only, never sent">Top follow-ups today</SectionTitle>
+          <FollowUpList
+            items={data.followUps.slice(0, 3)}
+            today={data.today}
+            prospects={Object.fromEntries(
+              data.followUps.map((f) => [
+                f.prospectId,
+                { name: prospectById[f.prospectId]?.name ?? "Unknown", grade: prospectById[f.prospectId]?.grade.letter ?? "D" },
+              ]),
+            )}
+          />
+        </>
+      )}
 
       <SectionTitle>Recent activity</SectionTitle>
       <ol className="glass divide-y divide-line rounded-3xl">
@@ -296,7 +350,8 @@ export default async function MissionControlPage() {
         })}
       </ol>
       <p className="mt-2 flex items-center gap-1 px-1 text-[11px] text-faint">
-        <TrendingUp aria-hidden className="size-3" /> Real items come from your client list; others are samples.
+        <TrendingUp aria-hidden className="size-3" />{" "}
+        {samples ? "Real items come from your client list; others are samples." : "From your client list."}
       </p>
     </>
   );

@@ -4,7 +4,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules } from "@/lib/data-source";
+import { getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples } from "@/lib/data-source";
 import { cn } from "@/lib/format";
 import type { TeamRole, WorkPriority } from "@/lib/types";
 
@@ -19,6 +19,7 @@ const roleInfo: Record<TeamRole, { label: string; icon: typeof Crown; color: str
 
 export default async function WorkPage() {
   const today = getToday();
+  const samples = showsSamples();
   const orders = getWorkOrders();
   const rules = getWorkRules();
   const devs = getSampleDevelopers();
@@ -44,92 +45,103 @@ export default async function WorkPage() {
 
       <div className="flex gap-3 rounded-2xl border border-sky/30 bg-sky/8 p-3.5 text-xs text-muted">
         <Wrench aria-hidden className="mt-0.5 size-4 shrink-0 text-sky" />
-        <p>
-          <span className="font-semibold text-ink">Work still happens in GoHighLevel.</span> This tab is your
-          oversight view. Once GoHighLevel is connected read-only (Phase 3), it fills with your real queue. Below are
-          sample work orders on fictional clients, so no made-up numbers sit next to real people.
-        </p>
+        {samples ? (
+          <p>
+            <span className="font-semibold text-ink">Work still happens in GoHighLevel.</span> This is the demo: the
+            work orders and developer load below are made up, on fictional clients.
+          </p>
+        ) : (
+          <p>
+            <span className="font-semibold text-ink">Work orders aren&apos;t connected yet.</span> Work still happens
+            in GoHighLevel. Your real queue and developer load will show here once work orders are connected (a
+            later step, with your approval). Below are your real team, rules and daily order.
+          </p>
+        )}
       </div>
 
-      <SectionTitle aside={<Provenance kind="sample" />}>Today at a glance</SectionTitle>
-      <GlassCard className="grid grid-cols-4 gap-1 text-center">
-        {stats.map((s) => (
-          <div key={s.label}>
-            <p className={cn("font-display text-2xl font-bold", s.value > 0 && s.tone)}>{s.value}</p>
-            <p className="text-[10px] leading-tight text-muted">{s.label}</p>
-          </div>
-        ))}
-      </GlassCard>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">Goal: every work order touched daily.</p>
-
-      <SectionTitle>Needs attention</SectionTitle>
-      <ul className="space-y-2.5">
-        {needsAttention.map((o) => (
-          <li key={o.id}>
-            <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
-          </li>
-        ))}
-      </ul>
-
-      {rest.length > 0 && (
+      {samples && (
         <>
-          <SectionTitle>On track</SectionTitle>
+          <SectionTitle aside={<Provenance kind="sample" />}>Today at a glance</SectionTitle>
+          <GlassCard className="grid grid-cols-4 gap-1 text-center">
+            {stats.map((s) => (
+              <div key={s.label}>
+                <p className={cn("font-display text-2xl font-bold", s.value > 0 && s.tone)}>{s.value}</p>
+                <p className="text-[10px] leading-tight text-muted">{s.label}</p>
+              </div>
+            ))}
+          </GlassCard>
+          <p className="mt-1.5 px-1 text-[11px] text-faint">Goal: every work order touched daily.</p>
+
+          <SectionTitle>Needs attention</SectionTitle>
           <ul className="space-y-2.5">
-            {rest.map((o) => (
+            {needsAttention.map((o) => (
               <li key={o.id}>
                 <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
               </li>
             ))}
           </ul>
+
+          {rest.length > 0 && (
+            <>
+              <SectionTitle>On track</SectionTitle>
+              <ul className="space-y-2.5">
+                {rest.map((o) => (
+                  <li key={o.id}>
+                    <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          <SectionTitle aside={<Provenance kind="sample" />}>Developer load</SectionTitle>
+          <div className="space-y-2.5">
+            {devs.map((d) => {
+              const seo = d.load?.seoClients ?? 0;
+              const successful = d.load?.successfulThisMonth ?? 0;
+              const bonus = successful >= rules.bonusAfterSuccessfulClients;
+              return (
+                <GlassCard key={d.id} padding="tight" className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{d.name}</p>
+                    {bonus ? (
+                      <Pill color="lime">
+                        <Award aria-hidden className="size-3" /> Bonus: ${successful * rules.bonusPerClientUsd}
+                      </Pill>
+                    ) : (
+                      <Pill>{rules.bonusAfterSuccessfulClients - successful} more for bonus</Pill>
+                    )}
+                  </div>
+                  <div>
+                    <div className="mb-1 flex justify-between text-[11px] text-muted">
+                      <span>
+                        SEO clients {seo} / {rules.maxSeoClientsPerDeveloper}
+                      </span>
+                      <span>
+                        {d.load?.hoursLogged ?? 0} hrs logged · SEO budget {seo * rules.seoHoursPerClient} hrs
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className={cn("h-full rounded-full", seo >= rules.maxSeoClientsPerDeveloper ? "bg-amber" : "bg-teal")}
+                        style={{ width: `${(seo / rules.maxSeoClientsPerDeveloper) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    {d.openOrders} open work orders
+                    {d.overdue > 0 && <span className="font-semibold text-rose"> · {d.overdue} overdue</span>}
+                    {d.untouchedToday > 0 && <span className="text-amber"> · {d.untouchedToday} not touched today</span>}
+                  </p>
+                </GlassCard>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 px-1 text-[11px] text-faint">
+            Pay and bonus details will be visible to the owner only once sign-in exists (Phase 2).
+          </p>
         </>
       )}
-
-      <SectionTitle aside={<Provenance kind="sample" />}>Developer load</SectionTitle>
-      <div className="space-y-2.5">
-        {devs.map((d) => {
-          const seo = d.load?.seoClients ?? 0;
-          const successful = d.load?.successfulThisMonth ?? 0;
-          const bonus = successful >= rules.bonusAfterSuccessfulClients;
-          return (
-            <GlassCard key={d.id} padding="tight" className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold">{d.name}</p>
-                {bonus ? (
-                  <Pill color="lime">
-                    <Award aria-hidden className="size-3" /> Bonus: ${successful * rules.bonusPerClientUsd}
-                  </Pill>
-                ) : (
-                  <Pill>{rules.bonusAfterSuccessfulClients - successful} more for bonus</Pill>
-                )}
-              </div>
-              <div>
-                <div className="mb-1 flex justify-between text-[11px] text-muted">
-                  <span>
-                    SEO clients {seo} / {rules.maxSeoClientsPerDeveloper}
-                  </span>
-                  <span>
-                    {d.load?.hoursLogged ?? 0} hrs logged · SEO budget {seo * rules.seoHoursPerClient} hrs
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className={cn("h-full rounded-full", seo >= rules.maxSeoClientsPerDeveloper ? "bg-amber" : "bg-teal")}
-                    style={{ width: `${(seo / rules.maxSeoClientsPerDeveloper) * 100}%` }}
-                  />
-                </div>
-              </div>
-              <p className="text-[11px] text-muted">
-                {d.openOrders} open work orders
-                {d.overdue > 0 && <span className="font-semibold text-rose"> · {d.overdue} overdue</span>}
-                {d.untouchedToday > 0 && <span className="text-amber"> · {d.untouchedToday} not touched today</span>}
-              </p>
-            </GlassCard>
-          );
-        })}
-      </div>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">
-        Pay and bonus details will be visible to the owner only once sign-in exists (Phase 2).
-      </p>
 
       <SectionTitle aside={<Provenance kind={realTeam ? "real" : "demo"} what="your team" />}>Your team</SectionTitle>
       <div className="space-y-2.5">

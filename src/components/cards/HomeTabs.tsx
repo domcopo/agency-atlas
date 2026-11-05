@@ -26,6 +26,8 @@ export interface HomeTab {
   panel: ReactNode;
 }
 
+const COLS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3", 4: "grid-cols-4" };
+
 export function HomeTabs({ tabs }: { tabs: HomeTab[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const baseId = useId();
@@ -33,7 +35,7 @@ export function HomeTabs({ tabs }: { tabs: HomeTab[] }) {
 
   return (
     <section aria-label="Dashboard buttons">
-      <div className="grid grid-cols-4 gap-2">
+      <div className={`grid gap-2 ${COLS[tabs.length] ?? "grid-cols-4"}`}>
         {tabs.map((t) => (
           <CockpitButton
             key={t.id}

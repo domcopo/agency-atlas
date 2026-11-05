@@ -31,6 +31,8 @@ import {
   getTrends,
   getWinLoss,
   getWorkOrders,
+  getAgencySalesKpis,
+  showsSamples,
   tierOf,
 } from "@/lib/data-source";
 import { describeTenure, fingerprint, monthsBetween } from "@/lib/format";
@@ -496,5 +498,34 @@ describe("AI budget math and name protection", async () => {
     expect(b.priorities[0]?.when).toBe("this_week");
     expect(b.risks).toEqual([]);
     expect(b.drafts).toEqual([]);
+  });
+});
+
+describe("no sample data once the real database is connected", () => {
+  it("every sample getter returns nothing; real survey questions stay", () => {
+    const before = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_PUBLISHABLE_KEY };
+    // Fake, well-formed settings (no network is used by these getters).
+    process.env.SUPABASE_URL = "https://example-test-project.supabase.co";
+    process.env.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test_only_not_a_real_key";
+    try {
+      expect(showsSamples()).toBe(false);
+      expect(getProspects()).toEqual([]);
+      expect(getConversations()).toEqual([]);
+      expect(getWorkOrders()).toEqual([]);
+      expect(getSampleDevelopers()).toEqual([]);
+      expect(getBusinesses()).toEqual([]);
+      expect(getCaseStudyHistory("anything")).toEqual([]);
+      expect(getTrends()).toEqual([]);
+      expect(getInsights()).toEqual([]);
+      expect(getSurveyResponses()).toEqual([]);
+      expect(getAgencySalesKpis()).toEqual([]);
+      expect(getSurveyQuestions().length).toBeGreaterThan(0);
+    } finally {
+      if (before.url === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = before.url;
+      if (before.key === undefined) delete process.env.SUPABASE_PUBLISHABLE_KEY;
+      else process.env.SUPABASE_PUBLISHABLE_KEY = before.key;
+    }
+    expect(showsSamples()).toBe(true);
   });
 });
