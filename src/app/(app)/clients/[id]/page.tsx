@@ -96,6 +96,7 @@ export default async function ClientPage({ params }: Props) {
             canSetOwner={member?.role === "owner"}
             ready={Boolean(ops?.ready)}
             today={today}
+            ghl={c.ghl}
           />
         </div>
       )}

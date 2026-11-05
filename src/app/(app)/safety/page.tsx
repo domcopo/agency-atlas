@@ -10,6 +10,7 @@ import {
   Webhook,
 } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -66,7 +67,14 @@ export default async function SafetyPage() {
         </div>
         {ghl.configured && (
           <ul className="space-y-1 text-xs text-muted">
-            <li>• Reads only: pipeline (opportunities) and appointment times. No contact details or message text.</li>
+            <li>• Reads only: pipeline (opportunities), appointment times, and <span className="text-ink">when</span> matched clients were last called or messaged. Never message text, recordings, emails or phone numbers.</li>
+            <li>
+              • Which GoHighLevel contact is which client:{" "}
+              <Link href="/clients/ghl-matches" className="font-semibold text-violet underline-offset-2 hover:underline">
+                Match contacts
+              </Link>{" "}
+              (owner).
+            </li>
             <li>• Every request is a GET to a short allowed list; the token only has read-only permissions.</li>
             {ghl.lastSync && (
               <li>

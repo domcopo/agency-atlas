@@ -6,7 +6,7 @@ import { setClientOwner } from "@/app/actions";
 import { healthTone } from "@/components/cards/ActionRow";
 import { formatDate } from "@/lib/format";
 import { dueLabel } from "@/lib/ops";
-import type { ClientAction, HealthSummary } from "@/lib/types";
+import type { ClientAction, GhlContactTimes, HealthSummary } from "@/lib/types";
 import { cn } from "@/lib/format";
 
 export function ClientOpsCard({
@@ -22,6 +22,7 @@ export function ClientOpsCard({
   canSetOwner,
   ready,
   today,
+  ghl,
 }: {
   clientDbId?: string;
   slug: string;
@@ -35,7 +36,10 @@ export function ClientOpsCard({
   canSetOwner: boolean;
   ready: boolean;
   today: string;
+  /** Call/message times from GoHighLevel (no message text). */
+  ghl?: GhlContactTimes;
 }) {
+  const day = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10)) : "none");
   const tone = health ? healthTone[health.state] : null;
   return (
     <section aria-label="What's happening" className="glass space-y-3 rounded-3xl p-4">
@@ -92,6 +96,24 @@ export function ClientOpsCard({
           <dt className="text-xs text-muted">Open issues</dt>
           <dd className={openIssues ? "font-semibold text-amber" : "font-semibold"}>{openIssues}</dd>
         </div>
+        {ghl && (
+          <div className="col-span-2 text-xs">
+            <dt className="text-muted">From GoHighLevel (times only)</dt>
+            <dd className="mt-0.5 space-y-0.5">
+              <p>
+                Client reached out: <span className="font-semibold">{day(ghl.lastInboundAt)}</span> · We reached out:{" "}
+                <span className="font-semibold">{day(ghl.lastOutboundAt)}</span>
+              </p>
+              {ghl.lastCallAt && (
+                <p>
+                  Last call: <span className="font-semibold">{day(ghl.lastCallAt)}</span>
+                  {ghl.lastCallSeconds ? ` · ${Math.max(1, Math.round(ghl.lastCallSeconds / 60))} min` : ""}
+                </p>
+              )}
+              {ghl.unansweredOutbound >= 3 && <p className="text-amber">{ghl.unansweredOutbound} of our messages in a row have no reply</p>}
+            </dd>
+          </div>
+        )}
         <div className="col-span-2">
           <dt className="text-xs text-muted">Next action</dt>
           {next ? (

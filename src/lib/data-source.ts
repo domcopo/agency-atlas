@@ -44,6 +44,7 @@ import type {
   ClientAction,
   ClientHealth,
   ContactKind,
+  GhlContactTimes,
   HealthSummary,
   OpsBriefing,
   PriorityItem,
@@ -143,11 +144,33 @@ export async function getCheckInHistory(clientDbId: string | undefined, limit = 
 async function loadDatabaseRoster(): Promise<Roster> {
   const db = await createDatabaseClient();
   const cols = "id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date";
-  const [withOwner, checkIns, staff] = await Promise.all([
+  const [withOwner, checkIns, staff, ghlTimes] = await Promise.all([
     db.from("clients").select(`${cols}, owner_staff_id`),
     readCheckIns(db),
     db.from("staff").select("id, name"),
+    // Call/message times from GoHighLevel (0008). Missing table = none yet.
+    db
+      .from("ghl_contact_stats")
+      .select("client_id, last_inbound_at, last_outbound_at, last_call_at, last_call_seconds, last_channel, last_direction, unanswered_outbound, synced_at"),
   ]);
+  const timesByClient = new Map(
+    (ghlTimes.error ? [] : (ghlTimes.data ?? [])).map((t) => [
+      t.client_id as string,
+      {
+        lastInboundAt: t.last_inbound_at,
+        lastOutboundAt: t.last_outbound_at,
+        lastCallAt: t.last_call_at,
+        lastCallSeconds: t.last_call_seconds,
+        lastChannel: t.last_channel,
+        lastDirection: t.last_direction,
+        unansweredOutbound: Number(t.unanswered_outbound ?? 0),
+        syncedAt: t.synced_at,
+      } as GhlContactTimes,
+    ]),
+  );
+  /** Newest of: a logged contact, or a GoHighLevel call/message either way. */
+  const newest = (logged: string | undefined, t: GhlContactTimes | undefined) =>
+    [logged, t?.lastInboundAt?.slice(0, 10), t?.lastOutboundAt?.slice(0, 10)].filter((d): d is string => Boolean(d)).sort().pop();
   // Before 0006 there is no owner column: read without it.
   const clients = withOwner.error
     ? await db.from("clients").select(cols).then((r) => ({ ...r, data: r.data?.map((c) => ({ ...c, owner_staff_id: null as string | null })) ?? null }))
@@ -174,7 +197,8 @@ async function loadDatabaseRoster(): Promise<Roster> {
       check: r.check_note ?? undefined,
       followUp: r.follow_up ?? undefined,
       endDate: r.end_date ?? undefined,
-      lastContact: lastContact.get(r.id),
+      lastContact: newest(lastContact.get(r.id), timesByClient.get(r.id)),
+      ghl: timesByClient.get(r.id),
       lastMood: lastMood.get(r.id),
       ownerId: r.owner_staff_id ?? undefined,
       ownerName: r.owner_staff_id ? staffName.get(r.owner_staff_id) : undefined,
@@ -548,6 +572,9 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
   for (const r of act.data ?? []) {
     out.push({ at: r.at, kind: "action", title: r.summary, detail: null, tone: r.kind === "action_done" ? "good" : r.kind === "action_created" && /^Issue/.test(r.summary) ? "bad" : "info" });
   }
+  if (c.ghl?.lastInboundAt) out.push({ at: c.ghl.lastInboundAt, kind: "contact", title: "Client reached out (GoHighLevel)", detail: null, tone: "info" });
+  if (c.ghl?.lastOutboundAt) out.push({ at: c.ghl.lastOutboundAt, kind: "contact", title: `We reached out (GoHighLevel${c.ghl.lastDirection === "outbound" && c.ghl.lastChannel ? `, ${c.ghl.lastChannel}` : ""})`, detail: null, tone: "neutral" });
+  if (c.ghl?.lastCallAt) out.push({ at: c.ghl.lastCallAt, kind: "contact", title: `Call (GoHighLevel${c.ghl.lastCallSeconds ? `, ${Math.max(1, Math.round(c.ghl.lastCallSeconds / 60))} min` : ""})`, detail: null, tone: "neutral" });
   out.push({ at: c.startDate, kind: "account", title: "Became a client", detail: null, tone: "good" });
   if (c.endDate) out.push({ at: c.endDate, kind: "account", title: c.status === "paused" ? "Paused" : "Ended", detail: null, tone: "bad" });
   return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
@@ -602,6 +629,28 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
       } as PriorityItem;
     });
 });
+
+/** Owner's matching screen: each current client with its GoHighLevel contact match or suggestions. */
+export async function getContactMatches() {
+  if (!usesDatabase()) return { ready: false, rows: [] as { client: RosterClient; confirmed: { id: string; name: string | null } | null; suggestions: { id: string; name: string | null }[] }[] };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("ghl_contact_links").select("client_id, ghl_contact_id, contact_name, status");
+  if (error) return { ready: false, rows: [] };
+  const clients = (await roster()).clients.filter((c) => (c.status === "active" || c.status === "paused") && c.dbId);
+  const links = (data ?? []) as { client_id: string; ghl_contact_id: string; contact_name: string | null; status: string }[];
+  const rows = clients.map((c) => {
+    const mine = links.filter((l) => l.client_id === c.dbId);
+    const conf = mine.find((l) => l.status === "confirmed");
+    return {
+      client: c,
+      confirmed: conf ? { id: conf.ghl_contact_id, name: conf.contact_name } : null,
+      suggestions: conf ? [] : mine.filter((l) => l.status === "suggested").map((l) => ({ id: l.ghl_contact_id, name: l.contact_name })),
+    };
+  });
+  // Clients needing a decision first, then unmatched, then done.
+  const rank = (r: (typeof rows)[number]) => (r.confirmed ? 2 : r.suggestions.length ? 0 : 1);
+  return { ready: true, rows: rows.sort((a, b) => rank(a) - rank(b) || b.client.monthlyUsd - a.client.monthlyUsd) };
+}
 
 /** Recent contacts across all clients (calls, messages, check-ins...), newest first. */
 export async function getContactLog(days = 14, limit = 6) {

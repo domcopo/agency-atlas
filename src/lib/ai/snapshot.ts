@@ -196,6 +196,15 @@ export function opsClientFacts(input: {
       due: a.dueOn,
     })),
     owner_note: c.followUp ? redact(c.followUp, book) : null,
+    // GoHighLevel call/message TIMES only (no text).
+    ghl_contact: c.ghl
+      ? {
+          client_last_reached_out: c.ghl.lastInboundAt?.slice(0, 10) ?? null,
+          we_last_reached_out: c.ghl.lastOutboundAt?.slice(0, 10) ?? null,
+          last_call: c.ghl.lastCallAt?.slice(0, 10) ?? null,
+          our_messages_in_a_row_without_reply: c.ghl.unansweredOutbound,
+        }
+      : null,
     recent_contact_notes: notes.filter((n) => n.note).map((n) => ({ date: n.date, type: n.kind ?? "check_in", mood: n.mood, note: redact(clip(n.note, 300) ?? "", book) })),
   };
 }

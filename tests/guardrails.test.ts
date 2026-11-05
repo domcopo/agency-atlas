@@ -299,8 +299,22 @@ describe("GoHighLevel read-only (Phase 3)", () => {
     const allowed = ghl.slice(ghl.indexOf("const ALLOWED"), ghl.indexOf("];", ghl.indexOf("const ALLOWED")));
     const paths = [...allowed.matchAll(/pattern: \/\^(\\\/[^$]*)\$\//g)].map((m) => (m[1] ?? "").replace(/\\\//g, "/"));
     expect(paths.sort()).toEqual(
-      ["/calendars/", "/calendars/events", "/locations/[A-Za-z0-9]+", "/opportunities/pipelines", "/opportunities/search"].sort(),
+      [
+        "/calendars/",
+        "/calendars/events",
+        "/locations/[A-Za-z0-9]+",
+        "/opportunities/pipelines",
+        "/opportunities/search",
+        // Phase 6 (approved): conversation times only
+        "/conversations/search",
+        "/conversations/[A-Za-z0-9]{6,40}/messages",
+      ].sort(),
     );
+  });
+
+  it("never reads message text, emails or phone numbers from GoHighLevel (Phase 6: times only)", () => {
+    expect(ghl).not.toMatch(/\.(body|email|phone|lastMessageBody|from|to)\b/);
+    expect(ghl).not.toMatch(/\[\s*["'`](body|email|phone|lastMessageBody|from|to)["'`]\s*\]/);
   });
 
   it("no GoHighLevel SDK or write-capable package is installed", () => {

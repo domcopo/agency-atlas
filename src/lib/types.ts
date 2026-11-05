@@ -308,6 +308,19 @@ export interface RosterClient {
   /** Team member (staff) who owns this client. */
   ownerId?: string;
   ownerName?: string;
+  /** Call/message TIMES from GoHighLevel (0008), for a confirmed contact match. Never message text. */
+  ghl?: GhlContactTimes;
+}
+
+export interface GhlContactTimes {
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  lastCallAt: string | null;
+  lastCallSeconds: number | null;
+  lastChannel: string | null;
+  lastDirection: "inbound" | "outbound" | null;
+  unansweredOutbound: number;
+  syncedAt: string;
 }
 
 export type HealthLevel = "healthy" | "watch" | "at_risk";

@@ -9,7 +9,8 @@ create schema test;
 grant usage on schema test to anon, authenticated;
 
 -- Runs a statement and returns how many rows it touched/returned.
--- -1 = refused by permissions or a security rule; -2 = refused by a data check.
+-- -1 = refused by permissions or a security rule; -2 = refused by a data check;
+-- -3 = refused as a duplicate (a unique rule).
 -- Any OTHER error (e.g. a typo in a test) stops the run, so it can't pass by accident.
 create function test.rows(stmt text) returns bigint
 language plpgsql as $$
@@ -25,6 +26,7 @@ begin
 exception
   when insufficient_privilege then return -1;
   when check_violation then return -2;
+  when unique_violation then return -3;
 end;
 $$;
 
@@ -33,7 +35,7 @@ language plpgsql as $$
 declare got bigint := test.rows(stmt);
 begin
   if got is distinct from expected then
-    raise exception 'FAILED: % (expected %, got %; -1 = blocked, -2 = invalid data)', label, expected, got;
+    raise exception 'FAILED: % (expected %, got %; -1 = blocked, -2 = invalid data, -3 = duplicate)', label, expected, got;
   end if;
   raise notice 'ok: %', label;
 end;
@@ -377,6 +379,61 @@ begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
 select test.expect($$update public.actions set title = 'Manager renames (test)' where id = '00000000-0000-0000-0000-00000000ad02'$$, 1, 'managers can still edit items fully');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7e. GoHighLevel contact times (0008): owner syncs and confirms; managers read.
+-- ---------------------------------------------------------------------------
+begin;
+set local role anon;
+select test.expect('select * from public.ghl_contact_links', -1, 'signed out cannot read contact links');
+select test.expect('select * from public.ghl_contact_stats', -1, 'signed out cannot read contact times');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id, contact_name) values ('00000000-0000-0000-0000-0000000000c1', 'cont12345', 'Sample Contact (fictional)')$$, 1, 'owner saves a suggested match');
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id) values ('00000000-0000-0000-0000-0000000000c1', 'cont67890')$$, 1, 'owner saves a second suggestion');
+select test.expect($$update public.ghl_contact_links set status = 'confirmed', updated_at = now() where ghl_contact_id = 'cont12345'$$, 1, 'owner confirms a match');
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id, status) values ('00000000-0000-0000-0000-0000000000c1', 'cont00001', 'not-a-status')$$, -2, 'unknown match statuses are rejected');
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id) values ('00000000-0000-0000-0000-0000000000c1', 'bad id; drop')$$, -2, 'odd contact ids are rejected');
+select test.expect($$insert into public.ghl_contact_stats (client_id, ghl_contact_id, last_inbound_at, last_channel, unanswered_outbound) values ('00000000-0000-0000-0000-0000000000c1', 'cont12345', now(), 'text', 2)$$, 1, 'owner saves contact times');
+select test.expect($$insert into public.ghl_contact_stats (client_id, ghl_contact_id, last_channel) values ('00000000-0000-0000-0000-0000000000c1', 'cont12345', 'carrier pigeon')$$, -2, 'unknown channels are rejected');
+select test.expect($$insert into public.ghl_contact_stats (client_id, ghl_contact_id, unanswered_outbound) values ('00000000-0000-0000-0000-0000000000c1', 'cont12345', 3) on conflict (client_id) do update set client_id = excluded.client_id, ghl_contact_id = excluded.ghl_contact_id, unanswered_outbound = excluded.unanswered_outbound$$, 1, 'owner sync refreshes contact times (save or update)');
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id) values ('00000000-0000-0000-0000-0000000000c1', 'cont12345') on conflict do nothing$$, 0, 'adding an existing match again changes nothing');
+select test.expect($$update public.ghl_contact_links set client_id = gen_random_uuid()$$, -1, 'a match cannot be moved to another client');
+select test.expect($$delete from public.ghl_contact_links$$, -1, 'matches cannot be deleted');
+select test.expect($$delete from public.ghl_contact_stats$$, -1, 'contact times cannot be deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.ghl_contact_links set status = 'confirmed' where ghl_contact_id = 'cont67890'$$, -3, 'only one confirmed match per client');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.ghl_contact_stats', 1, 'manager reads contact times');
+select test.expect('select * from public.ghl_contact_links', 2, 'manager reads matches');
+select test.expect($$update public.ghl_contact_links set status = 'rejected'$$, 0, 'manager cannot change matches');
+select test.expect($$insert into public.ghl_contact_links (client_id, ghl_contact_id) values ('00000000-0000-0000-0000-0000000000c1', 'cont55555')$$, -1, 'manager cannot add matches');
+select test.expect($$update public.ghl_contact_stats set unanswered_outbound = 0$$, 0, 'manager cannot edit contact times');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.ghl_contact_stats', 0, 'developer cannot read contact times');
+select test.expect('select * from public.ghl_contact_links', 0, 'developer cannot read matches');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.ghl_contact_stats', 0, 'owner without two-factor sees no contact times');
 commit;
 
 -- ---------------------------------------------------------------------------

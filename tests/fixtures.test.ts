@@ -706,3 +706,63 @@ describe("sales stages", () => {
     for (const s of ["Onboarding scheduled", "Stepup / build in progress", "Needs review", "Completed", "Recurring", "", null]) expect(isSalesStage(s)).toBe(false);
   });
 });
+
+describe("GoHighLevel conversation times (Phase 6)", () => {
+  it("keeps only ids and names from conversation search", async () => {
+    const { parseConversationCandidates } = await import("@/lib/ghl/client");
+    const got = parseConversationCandidates([
+      { id: "conv12345", contactId: "cont12345", contactName: "Sample Contact (fictional)", email: "x@example.com", phone: "+15550100", lastMessageBody: "secret text" },
+      { id: "bad id!", contactId: "cont99999" },
+    ]);
+    expect(got).toEqual([{ contactId: "cont12345", conversationId: "conv12345", name: "Sample Contact (fictional)" }]);
+    expect(JSON.stringify(got)).not.toMatch(/secret|example\.com|5550100/);
+  });
+
+  it("summarizes times only, skips automated and system messages", async () => {
+    const { summarizeMessages } = await import("@/lib/ghl/client");
+    const s = summarizeMessages([
+      { dateAdded: "2026-11-01T10:00:00Z", direction: "inbound", messageType: "TYPE_SMS", body: "please call me" },
+      { dateAdded: "2026-11-02T10:00:00Z", direction: "outbound", messageType: "TYPE_CALL", meta: { callDuration: 125 } },
+      { dateAdded: "2026-11-03T10:00:00Z", direction: "outbound", messageType: "TYPE_SMS", body: "following up" },
+      { dateAdded: "2026-11-04T10:00:00Z", direction: "outbound", messageType: "TYPE_SMS", source: "workflow" },
+      { dateAdded: "2026-11-04T11:00:00Z", direction: "outbound", messageType: "TYPE_ACTIVITY_OPPORTUNITY" },
+      { dateAdded: "not a date", direction: "inbound", messageType: "TYPE_SMS" },
+    ]);
+    expect(s).toEqual({
+      lastInboundAt: "2026-11-01T10:00:00.000Z",
+      lastOutboundAt: "2026-11-03T10:00:00.000Z",
+      lastCallAt: "2026-11-02T10:00:00.000Z",
+      lastCallSeconds: 125,
+      lastChannel: "text",
+      lastDirection: "outbound",
+      unansweredOutbound: 2,
+    });
+    expect(JSON.stringify(s)).not.toMatch(/please|following/);
+  });
+});
+
+describe("reply flags from GoHighLevel times", () => {
+  const today = "2026-11-10";
+  const base = { id: "kim-sample", dbId: "db-kim", name: "Kim Sample (fictional)", monthlyUsd: 300, startDate: "2026-01-05", status: "active", listedIn: [], services: ["Ads"], lastContact: "2026-11-09" } as import("@/lib/types").RosterClient;
+  const times = (over: Partial<import("@/lib/types").GhlContactTimes>): import("@/lib/types").GhlContactTimes => ({
+    lastInboundAt: null, lastOutboundAt: null, lastCallAt: null, lastCallSeconds: null, lastChannel: null, lastDirection: null, unansweredOutbound: 0, syncedAt: "2026-11-10T00:00:00Z", ...over,
+  });
+  const ci = { cadenceDays: 14, state: "on_track" as const, last: "2026-11-09", due: "2026-11-23" };
+
+  it("flags a client waiting for our reply, then at risk when it drags on", async () => {
+    const { healthSummary, waitingDays } = await import("@/lib/ops");
+    const waiting2 = { ...base, ghl: times({ lastInboundAt: "2026-11-08T15:00:00Z", lastOutboundAt: "2026-11-07T10:00:00Z" }) };
+    expect(waitingDays(waiting2, today)).toBe(2);
+    expect(healthSummary(waiting2, ci, [], today)?.state).toBe("needs_attention");
+    const waiting5 = { ...base, ghl: times({ lastInboundAt: "2026-11-05T15:00:00Z" }) };
+    expect(healthSummary(waiting5, ci, [], today)?.state).toBe("at_risk");
+    const replied = { ...base, ghl: times({ lastInboundAt: "2026-11-05T15:00:00Z", lastOutboundAt: "2026-11-06T09:00:00Z" }) };
+    expect(waitingDays(replied, today)).toBeNull();
+  });
+
+  it("suggests a call after 3 unanswered messages", async () => {
+    const { healthSummary } = await import("@/lib/ops");
+    const h = healthSummary({ ...base, ghl: times({ unansweredOutbound: 3, lastOutboundAt: "2026-11-09T10:00:00Z" }) }, ci, [], today);
+    expect(h?.reasons).toContain("3 messages from us with no reply: try a call");
+  });
+});

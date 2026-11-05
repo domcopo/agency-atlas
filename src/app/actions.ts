@@ -24,7 +24,18 @@ import {
   getToday,
 } from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
-import { GhlError, isGhlConfigured, readAppointments, readLocationName, readOpportunities, type GhlAppointment, type GhlOpportunity } from "@/lib/ghl/client";
+import {
+  GhlError,
+  isGhlConfigured,
+  readAppointments,
+  readContactActivity,
+  readLocationName,
+  readOpportunities,
+  searchContacts,
+  type GhlAppointment,
+  type GhlContactActivity,
+  type GhlOpportunity,
+} from "@/lib/ghl/client";
 import { createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -593,10 +604,121 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
     }
   }
   await db.from("ghl_syncs").insert({ location_name: locationName, opportunities: opportunities.length, appointments: appointments.length });
+  // Phase 6: call/message TIMES for clients. A problem here never undoes the pipeline sync.
+  const times = await syncContactTimes(db);
   revalidatePath("/", "layout");
   return {
-    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. Nothing in GoHighLevel was changed.`,
+    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times} Nothing in GoHighLevel was changed.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: call and message TIMES (never message text). Owner only.
+// ---------------------------------------------------------------------------
+
+const GHL_ID = /^[A-Za-z0-9]{6,40}$/;
+
+function statsRow(clientId: string, contactId: string, a: GhlContactActivity) {
+  return {
+    client_id: clientId,
+    ghl_contact_id: contactId,
+    last_inbound_at: a.lastInboundAt,
+    last_outbound_at: a.lastOutboundAt,
+    last_call_at: a.lastCallAt,
+    last_call_seconds: a.lastCallSeconds,
+    last_channel: a.lastChannel,
+    last_direction: a.lastDirection,
+    unanswered_outbound: a.unansweredOutbound,
+    synced_at: new Date().toISOString(),
+  };
+}
+
+/** Name variants to search GoHighLevel with: the full name, then its first word. */
+function nameQueries(name: string): string[] {
+  const clean = name.replace(/\(.*?\)/g, " ").replace(/\s+/g, " ").trim();
+  const first = clean.split(" ")[0] ?? "";
+  return [...new Set([clean, first.length >= 3 ? first : ""].filter(Boolean))];
+}
+
+/** Reads times for confirmed matches and suggests matches for the rest. Returns a short summary. */
+async function syncContactTimes(db: Db): Promise<string> {
+  const links = await db.from("ghl_contact_links").select("client_id, ghl_contact_id, status");
+  if (links.error) return "Call/message times: run the 0008 setup step to turn them on.";
+  const clients = (await getRoster()).filter((c) => (c.status === "active" || c.status === "paused") && c.dbId);
+  const rows = (links.data ?? []) as { client_id: string; ghl_contact_id: string; status: string }[];
+  let read = 0;
+  let suggested = 0;
+  try {
+    for (const c of clients) {
+      const mine = rows.filter((r) => r.client_id === c.dbId);
+      const confirmed = mine.find((r) => r.status === "confirmed");
+      if (confirmed) {
+        const a = await readContactActivity(confirmed.ghl_contact_id);
+        if (!a) continue;
+        const { error } = await db.from("ghl_contact_stats").upsert(statsRow(c.dbId!, confirmed.ghl_contact_id, a), { onConflict: "client_id" });
+        if (!error) read++;
+        else console.warn(`Contact times save refused: ${error.code}`);
+      } else if (!mine.some((r) => r.status === "suggested")) {
+        // Suggest up to 3 contacts by name. Previously rejected ones are skipped.
+        const rejected = new Set(mine.map((r) => r.ghl_contact_id));
+        const seen = new Map<string, string | null>();
+        for (const q of nameQueries(c.name)) {
+          for (const cand of await searchContacts(q)) if (!rejected.has(cand.contactId)) seen.set(cand.contactId, cand.name);
+          if (seen.size) break;
+        }
+        const add = [...seen.entries()].slice(0, 3).map(([id, name]) => ({ client_id: c.dbId!, ghl_contact_id: id, contact_name: name, status: "suggested" }));
+        if (add.length) {
+          const { error } = await db.from("ghl_contact_links").upsert(add, { onConflict: "client_id,ghl_contact_id", ignoreDuplicates: true });
+          if (!error) suggested += add.length;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Contact times stopped: ${err instanceof GhlError ? err.status : "unknown"}`);
+    const why = err instanceof GhlError && err.status === 403 ? "the integration needs View Conversations + View Conversation Messages." : "GoHighLevel stopped answering; try again later.";
+    return `Call/message times: read ${read} clients, then stopped (${why})`;
+  }
+  return `Call/message times: read ${read} matched client${read === 1 ? "" : "s"}; ${suggested} new match suggestion${suggested === 1 ? "" : "s"} to review.`;
+}
+
+/** Confirm or reject a suggested GoHighLevel contact for a client, or link one by its id. */
+export async function decideContactMatch(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const clientId = text(form, "clientId", 40);
+  const contactId = text(form, "contactId", 40);
+  const decision = text(form, "decision", 10);
+  if (!isUuid(clientId) || !GHL_ID.test(contactId)) return;
+  if (decision !== "confirm" && decision !== "reject" && decision !== "link") return;
+  const db = await createDatabaseClient();
+  const now = new Date().toISOString();
+  if (decision === "reject") {
+    await db.from("ghl_contact_links").update({ status: "rejected", updated_at: now, updated_by: me.userId }).eq("client_id", clientId).eq("ghl_contact_id", contactId);
+  } else {
+    // Only one confirmed contact per client: the previous one (if any) becomes rejected.
+    await db.from("ghl_contact_links").update({ status: "rejected", updated_at: now, updated_by: me.userId }).eq("client_id", clientId).eq("status", "confirmed");
+    // Add the row if it's new (never rewrites ids), then mark it confirmed.
+    await db
+      .from("ghl_contact_links")
+      .upsert({ client_id: clientId, ghl_contact_id: contactId, status: "suggested", updated_by: me.userId }, { onConflict: "client_id,ghl_contact_id", ignoreDuplicates: true });
+    const { error } = await db
+      .from("ghl_contact_links")
+      .update({ status: "confirmed", updated_at: now, updated_by: me.userId })
+      .eq("client_id", clientId)
+      .eq("ghl_contact_id", contactId);
+    if (error) {
+      console.warn(`Match refused: ${error.code}`);
+      return;
+    }
+    // Read this client's times right away (read-only).
+    try {
+      const a = await readContactActivity(contactId);
+      if (a) await db.from("ghl_contact_stats").upsert(statsRow(clientId, contactId, a), { onConflict: "client_id" });
+    } catch {
+      // The next Sync will try again.
+    }
+  }
+  revalidatePath("/", "layout");
 }
 
 // ---------------------------------------------------------------------------

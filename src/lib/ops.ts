@@ -23,6 +23,10 @@ export const OPS_RULES = {
   upsellAfterMonths: 3,
   /** How many priorities Home shows before "Show all". */
   homeLimit: 5,
+  /** A client who reached out (GoHighLevel) and got no reply for this many days needs attention; double = at risk. */
+  replyWithinDays: 2,
+  /** This many of our messages in a row with no reply: suggest a call. */
+  unansweredForCall: 3,
 } as const;
 
 export const PRIORITY_RANK: Record<ActionPriority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
@@ -30,6 +34,14 @@ const WHEN_RANK = { overdue: 0, today: 1, upcoming: 2, none: 3 } as const;
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const usd = (n: number) => `$${n.toLocaleString("en-US")}`;
+
+/** Days a client has been waiting for our reply in GoHighLevel (null = not waiting). */
+export function waitingDays(c: RosterClient, today: string): number | null {
+  const g = c.ghl;
+  if (!g?.lastInboundAt) return null;
+  if (g.lastOutboundAt && g.lastOutboundAt > g.lastInboundAt) return null;
+  return daysBetween(g.lastInboundAt.slice(0, 10), today);
+}
 
 export function openActions(actions: ClientAction[], clientDbId: string | undefined): ClientAction[] {
   return clientDbId ? actions.filter((a) => a.client?.dbId === clientDbId && a.status !== "done") : [];
@@ -71,12 +83,14 @@ export function healthSummary(c: RosterClient, checkIn: CheckIn, actions: Client
   const mine = openActions(actions, c.dbId);
   const issues = mine.filter((a) => a.kind === "issue");
   const daysSince = c.lastContact ? daysBetween(c.lastContact, today) : null;
+  const waiting = waitingDays(c, today);
 
   const risk: string[] = [];
   if (c.status === "paused") risk.push(`Paused: ${usd(c.monthlyUsd)}/mo on hold`);
   if (c.lastMood?.mood === "worse") risk.push(`Last check-in (${c.lastMood.date}): things got worse`);
   if (daysSince !== null && daysSince > checkIn.cadenceDays * OPS_RULES.longGapMultiple)
     risk.push(`No contact in ${daysSince} days (check in every ${checkIn.cadenceDays})`);
+  if (waiting !== null && waiting >= OPS_RULES.replyWithinDays * 2) risk.push(`Client reached out ${waiting} days ago; no reply yet`);
   if (issues.length >= OPS_RULES.issuesForRisk) risk.push(`${issues.length} open issues`);
   for (const i of issues.filter((x) => x.priority === "critical")) risk.push(`Critical issue: ${i.title}`);
   for (const i of issues.filter((x) => x.priority !== "critical" && x.dueOn && x.dueOn < today))
@@ -85,6 +99,10 @@ export function healthSummary(c: RosterClient, checkIn: CheckIn, actions: Client
 
   const attention: string[] = [];
   const isNew = daysBetween(c.startDate, today) <= OPS_RULES.newClientDays && c.startDate <= today;
+  if (waiting !== null && waiting >= OPS_RULES.replyWithinDays && waiting < OPS_RULES.replyWithinDays * 2)
+    attention.push(`Client reached out ${waiting} days ago; no reply yet`);
+  if (c.ghl && c.ghl.unansweredOutbound >= OPS_RULES.unansweredForCall)
+    attention.push(`${c.ghl.unansweredOutbound} messages from us with no reply: try a call`);
   if (isNew && !c.lastContact) attention.push("New client: first-month check-in not done");
   else if (!c.lastContact) attention.push("No contact logged yet");
   else if (checkIn.state === "overdue") attention.push(`Check-in overdue: last contact ${daysSince} days ago`);
@@ -153,7 +171,10 @@ export function buildPriorities(input: {
     const ci = checkIns.get(c.id);
     const base = { href: `/clients/${c.id}`, ownerName: c.ownerName ?? null, ownerId: c.ownerId ?? null, dueOn: null, clientSlug: c.id };
     const isNew = daysBetween(c.startDate, today) <= OPS_RULES.newClientDays && c.startDate <= today;
-    if (h?.state === "at_risk") {
+    const wait = waitingDays(c, today);
+    if (wait !== null && wait >= OPS_RULES.replyWithinDays) {
+      items.push({ ...base, id: `f_reply_${c.id}`, title: `Reply to ${c.name}`, reason: `They reached out ${wait} days ago; no reply yet`, when: "overdue", priority: "high" });
+    } else if (h?.state === "at_risk") {
       items.push({ ...base, id: `f_risk_${c.id}`, title: `Check on ${c.name}`, reason: `At risk: ${h.reasons[0]}`, when: "today", priority: "high" });
     } else if (isNew && !c.lastContact) {
       items.push({ ...base, id: `f_new_${c.id}`, title: `First-month check-in: ${c.name}`, reason: `Started ${c.startDate}; no contact logged yet`, when: "today", priority: "high" });

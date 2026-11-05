@@ -22,6 +22,9 @@ const ALLOWED: { pattern: RegExp; version: string }[] = [
   { pattern: /^\/opportunities\/search$/, version: "2021-07-28" },
   { pattern: /^\/calendars\/$/, version: "2021-04-15" },
   { pattern: /^\/calendars\/events$/, version: "2021-04-15" },
+  // Phase 6: conversation TIMES only (scopes conversations.readonly + conversations/message.readonly).
+  { pattern: /^\/conversations\/search$/, version: "2021-04-15" },
+  { pattern: /^\/conversations\/[A-Za-z0-9]{6,40}\/messages$/, version: "2021-04-15" },
 ];
 
 const MAX_PAGES = 20; // 20 x 100 = 2,000 opportunities, plenty for one agency pipeline
@@ -255,4 +258,116 @@ export async function readAppointments(now = new Date()): Promise<GhlAppointment
     out.push(...parseAppointments(list(isObj(ev) ? ev.events : null), cleanText(c.name, 100)));
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: when clients were last called / messaged. TIMES ONLY.
+// GoHighLevel also sends message text, emails and phone numbers. This code never
+// reads those fields: it picks out ids, a contact name (for matching), dates,
+// direction, channel and call length, and drops everything else immediately.
+// ---------------------------------------------------------------------------
+
+export interface GhlContactCandidate {
+  contactId: string;
+  conversationId: string;
+  name: string | null;
+}
+
+export interface GhlContactActivity {
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  lastCallAt: string | null;
+  lastCallSeconds: number | null;
+  lastChannel: string | null;
+  lastDirection: "inbound" | "outbound" | null;
+  /** Our messages/calls since the client last reached out (newest first, stops at their last one). */
+  unansweredOutbound: number;
+}
+
+/** Conversation search results → contact candidates. Only ids and the contact's name are kept. */
+export function parseConversationCandidates(raw: unknown[]): GhlContactCandidate[] {
+  const out: GhlContactCandidate[] = [];
+  for (const c of raw.filter(isObj)) {
+    const contactId = typeof c.contactId === "string" && /^[A-Za-z0-9]{6,40}$/.test(c.contactId) ? c.contactId : null;
+    const conversationId = typeof c.id === "string" && /^[A-Za-z0-9]{6,40}$/.test(c.id) ? c.id : null;
+    if (!contactId || !conversationId) continue;
+    out.push({ contactId, conversationId, name: cleanText(c.contactName, 120) ?? cleanText(c.fullName, 120) });
+  }
+  return out;
+}
+
+const AUTOMATED = new Set(["workflow", "campaign", "bulk_actions", "bulk_action", "trigger"]);
+
+function channelOf(m: Obj): string | null {
+  const t = `${typeof m.messageType === "string" ? m.messageType : ""}`.toUpperCase();
+  if (!t || t.includes("ACTIVITY")) return null; // system notes, not real contact
+  if (t.includes("CALL")) return "call";
+  if (t.includes("SMS")) return "text";
+  if (t.includes("EMAIL")) return "email";
+  if (t.includes("WHATSAPP")) return "whatsapp";
+  if (t.includes("FACEBOOK") || t.includes("INSTAGRAM") || t.includes("GMB") || t.includes("LIVE_CHAT") || t.includes("WEBCHAT")) return "chat";
+  return "other";
+}
+
+/** Messages → times only. Message text is never read. Automated outbound messages don't count as contact. */
+export function summarizeMessages(raw: unknown[]): GhlContactActivity {
+  type Meta = { at: string; dir: "inbound" | "outbound"; channel: string; callSeconds: number | null };
+  const metas: Meta[] = [];
+  for (const m of raw.filter(isObj)) {
+    const at = cleanTime(m.dateAdded);
+    const dir = m.direction === "inbound" || m.direction === "outbound" ? m.direction : null;
+    const channel = channelOf(m);
+    if (!at || !dir || !channel) continue;
+    if (dir === "outbound" && typeof m.source === "string" && AUTOMATED.has(m.source.toLowerCase())) continue;
+    const meta = isObj(m.meta) ? m.meta : {};
+    const d = typeof meta.callDuration === "number" && meta.callDuration >= 0 && meta.callDuration < 86_400 ? Math.round(meta.callDuration) : null;
+    metas.push({ at, dir, channel, callSeconds: channel === "call" ? d : null });
+  }
+  metas.sort((a, b) => b.at.localeCompare(a.at));
+  const lastIn = metas.find((m) => m.dir === "inbound");
+  const lastOut = metas.find((m) => m.dir === "outbound");
+  const lastCall = metas.find((m) => m.channel === "call");
+  let unanswered = 0;
+  for (const m of metas) {
+    if (m.dir === "inbound") break;
+    unanswered++;
+  }
+  return {
+    lastInboundAt: lastIn?.at ?? null,
+    lastOutboundAt: lastOut?.at ?? null,
+    lastCallAt: lastCall?.at ?? null,
+    lastCallSeconds: lastCall?.callSeconds ?? null,
+    lastChannel: metas[0]?.channel ?? null,
+    lastDirection: metas[0]?.dir ?? null,
+    unansweredOutbound: Math.min(unanswered, 1000),
+  };
+}
+
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Up to 5 contacts whose conversations match a name (for match suggestions). */
+export async function searchContacts(name: string): Promise<GhlContactCandidate[]> {
+  const s = settings();
+  const q = cleanText(name, 60);
+  if (!s || !q) return [];
+  await pause(150); // stay well under GoHighLevel's request limit
+  const data = await get("/conversations/search", { locationId: s.locationId, query: q, limit: "5" });
+  return parseConversationCandidates(list(isObj(data) ? data.conversations : null));
+}
+
+/** Times of the latest calls/messages with one contact (up to 3 conversations x 50 messages). */
+export async function readContactActivity(contactId: string): Promise<GhlContactActivity | null> {
+  const s = settings();
+  if (!s || !/^[A-Za-z0-9]{6,40}$/.test(contactId)) return null;
+  await pause(150);
+  const found = await get("/conversations/search", { locationId: s.locationId, contactId, limit: "3" });
+  const convos = parseConversationCandidates(list(isObj(found) ? found.conversations : null)).filter((c) => c.contactId === contactId);
+  const all: unknown[] = [];
+  for (const c of convos.slice(0, 3)) {
+    await pause(150);
+    const page = await get(`/conversations/${c.conversationId}/messages`, { limit: "50" });
+    const box = isObj(page) && isObj(page.messages) ? page.messages : null;
+    all.push(...list(box ? box.messages : null));
+  }
+  return summarizeMessages(all);
 }
