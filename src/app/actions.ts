@@ -440,6 +440,33 @@ export async function updateAction(form: FormData) {
   refreshOps(text(form, "slug", 90));
 }
 
+/** "Set up clients" screen: owner and plan for one client in one save (owner only). */
+export async function saveClientSetup(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const clientId = text(form, "clientId", 40);
+  const ownerId = text(form, "ownerId", 40);
+  if (!isUuid(clientId)) return;
+  const db = await createDatabaseClient();
+  const ownerName = ownerId ? await staffExists(db, ownerId) : null;
+  if (ownerId && !ownerName) return;
+  const picked = SERVICES.filter((sv) => form.getAll("services").includes(sv));
+  const { data: before } = await db.from("clients").select("owner_staff_id, services").eq("id", clientId).maybeSingle();
+  const prev = before as { owner_staff_id: string | null; services: string[] | null } | null;
+  if (!prev) return;
+  const { error } = await db.from("clients").update({ owner_staff_id: ownerId || null, services: picked }).eq("id", clientId);
+  if (error) {
+    console.warn(`Client setup refused: ${error.code}`);
+    return;
+  }
+  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
+  if ((prev.owner_staff_id ?? "") !== (ownerId || ""))
+    await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: ownerName ? `Owner set to ${ownerName}` : "Owner removed" });
+  if ([...(prev.services ?? [])].sort().join() !== [...picked].sort().join())
+    await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `Plan set to: ${picked.map((p) => names[p]).join(" + ") || "no services"}` });
+  revalidatePath("/", "layout");
+}
+
 /** Which services a client buys (owner only; the database enforces this too). */
 export async function setClientServices(form: FormData) {
   const me = await getCurrentMember();

@@ -65,6 +65,13 @@ export default async function ClientsPage() {
       </GlassCard>
 
       {member?.role === "owner" && (
+        <Link href="/clients/setup" className="pressable glass mt-3 flex min-h-11 items-center justify-between rounded-2xl border border-violet/30 px-4 text-sm">
+          <span className="font-semibold">Set up clients</span>
+          <span className="text-xs text-violet">Owners + plans, one screen →</span>
+        </Link>
+      )}
+
+      {member?.role === "owner" && (
         <Link href="/clients/ghl-matches" className="pressable glass mt-3 flex min-h-11 items-center justify-between rounded-2xl px-4 text-sm">
           <span>Match clients to GoHighLevel contacts</span>
           <span className="text-xs text-violet">For call &amp; message times →</span>

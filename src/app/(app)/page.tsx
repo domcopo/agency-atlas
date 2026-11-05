@@ -29,6 +29,7 @@ import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard } from "@/components/cards/ProspectCard";
 import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
 import { MyWork } from "@/components/cards/MyWork";
+import { Fold } from "@/components/shell/Fold";
 import { myWork } from "@/lib/ops";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -110,6 +111,7 @@ export default async function MissionControlPage() {
   ]);
   const completions = showsSamples() ? [] : await getCompletions();
   const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
+  const overdueCount = ops.priorities.filter((p) => p.when === "overdue").length;
   const doneToday = completions.filter((x) => localDay(x.at) === localDay(new Date().toISOString())).length;
   const prospects = getProspects();
   const prospectById = Object.fromEntries(prospects.map((p) => [p.id, p]));
@@ -401,30 +403,49 @@ export default async function MissionControlPage() {
       </div>
 
       {!samples && (
-        <section aria-label="Today's priorities">
-          <SectionTitle aside={`${doneToday} done today · ${ops.priorities.filter((p) => p.when === "overdue").length} overdue`}>
-            Today&apos;s priorities
-          </SectionTitle>
+        <Fold
+          label="Today's priorities"
+          title="Today's priorities"
+          summary={
+            ops.ready
+              ? ops.priorities[0]
+                ? <>Next: <span className="font-semibold">{ops.priorities[0].title}</span></>
+                : "Nothing needs action right now."
+              : "Turns on after the 0006 setup step."
+          }
+          badge={
+            <>
+              <span className={overdueCount ? "font-semibold text-rose" : ""}>{overdueCount} overdue</span> · {doneToday} done
+            </>
+          }
+        >
           {ops.ready ? (
-            <PriorityList
-              items={ops.priorities}
-              staff={staff}
-              canEdit={canWork}
-              limit={5}
-              empty="Nothing needs action right now."
-            />
+            <PriorityList items={ops.priorities} staff={staff} canEdit={canWork} limit={5} empty="Nothing needs action right now." />
           ) : (
             <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">
               Owners and next actions turn on after one setup step: run{" "}
               <span className="font-mono text-xs">0006_owners_and_next_actions.sql</span> in Supabase.
             </p>
           )}
-        </section>
+        </Fold>
       )}
 
       {(canUseAi || briefing) && (
-        <>
-          <SectionTitle aside={ai.tablesReady ? <Link href="/safety#ai" className="block w-36"><AiMeter ai={ai} compact /></Link> : undefined}>AI briefing</SectionTitle>
+        <Fold
+          label="AI briefing"
+          title="AI briefing"
+          summary={
+            briefing
+              ? <>{briefingIsToday ? "" : "Earlier: "}{briefing.content.headline}</>
+              : "No briefing yet today."
+          }
+          badge={ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} / $${ai.budgetUsd.toFixed(0)}` : undefined}
+        >
+          {ai.tablesReady && (
+            <Link href="/safety#ai" className="mb-2.5 block">
+              <AiMeter ai={ai} compact />
+            </Link>
+          )}
           {briefing &&
             ("version" in briefing.content && briefing.content.version === 2 ? (
               <OpsBriefingCard
@@ -443,7 +464,7 @@ export default async function MissionControlPage() {
               <BriefingButton label={briefingIsToday ? "Refresh today's briefing" : "Get today's briefing"} disabled={ai.level === "blocked"} />
             </div>
           )}
-        </>
+        </Fold>
       )}
 
       <AtlasAsks questions={atlasQuestions} today={data.today} />
