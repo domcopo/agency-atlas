@@ -1,4 +1,4 @@
-import { ShieldCheck } from "lucide-react";
+import { ChevronDown, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 import { ConversationRow } from "@/components/cards/ConversationRow";
 import { GhlPipelineCard } from "@/components/cards/GhlPipelineCard";
@@ -40,41 +40,9 @@ export default async function SalesPage() {
   const real = (await getRosterSource()) !== "demo";
   const ghl = await getGhlSummary();
 
-  return (
+  const hasRealPipeline = ghl.lastSync !== null;
+  const samples = (
     <>
-      <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
-
-      <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients won &amp; lost</SectionTitle>
-      <GlassCard>
-        <WinLossChart
-          months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))}
-          lostWithoutDate={winLoss.lostWithoutDate}
-          hasRealData={real}
-        />
-      </GlassCard>
-      <div className="mt-2.5 grid grid-cols-3 gap-2.5 text-center">
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold text-rose">{winLoss.lostTotal}</p>
-          <p className="text-[10px] leading-tight text-muted">Lost all-time</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>
-        </GlassCard>
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold text-amber">{winLoss.pausedCount}</p>
-          <p className="text-[10px] leading-tight text-muted">Paused (at risk)</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>
-        </GlassCard>
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold">{winLoss.lifetimeChurnPct}%</p>
-          <p className="text-[10px] leading-tight text-muted">Lifetime churn</p>
-          <p className="text-[11px] text-faint">lost ÷ ever signed</p>
-        </GlassCard>
-      </div>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">
-        Lost = canceled or expired. Paused clients are shown separately because they may come back.
-      </p>
-
-      <GhlPipelineCard ghl={ghl} />
-
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
       <div className="grid grid-cols-2 gap-2.5">
         {getAgencySalesKpis().map((k) => (
@@ -127,6 +95,63 @@ export default async function SalesPage() {
           </ul>
         </div>
       </section>
+    </>
+  );
+
+  return (
+    <>
+      <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
+
+      <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients won &amp; lost</SectionTitle>
+      <GlassCard>
+        <WinLossChart
+          months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))}
+          lostWithoutDate={winLoss.lostWithoutDate}
+          hasRealData={real}
+        />
+      </GlassCard>
+      <div className="mt-2.5 grid grid-cols-3 gap-2.5 text-center">
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold text-rose">{winLoss.lostTotal}</p>
+          <p className="text-[10px] leading-tight text-muted">Lost all-time</p>
+          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>
+        </GlassCard>
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold text-amber">{winLoss.pausedCount}</p>
+          <p className="text-[10px] leading-tight text-muted">Paused (at risk)</p>
+          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>
+        </GlassCard>
+        <GlassCard padding="tight">
+          <p className="font-display text-xl font-bold">{winLoss.lifetimeChurnPct}%</p>
+          <p className="text-[10px] leading-tight text-muted">Lifetime churn</p>
+          <p className="text-[11px] text-faint">lost ÷ ever signed</p>
+        </GlassCard>
+      </div>
+      <p className="mt-1.5 px-1 text-[11px] text-faint">
+        Lost = canceled or expired. Paused clients are shown separately because they may come back.
+      </p>
+
+      <GhlPipelineCard ghl={ghl} />
+
+      {hasRealPipeline ? (
+        <details className="group mt-6 rounded-3xl border border-line">
+          <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm">
+            <span>
+              <span className="font-semibold">Sample data</span>{" "}
+              <span className="text-muted">(fictional prospects, numbers and chats)</span>
+            </span>
+            <ChevronDown aria-hidden className="size-4 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+          </summary>
+          <div className="px-3 pb-4">
+            <p className="px-1 pt-1 text-[11px] text-faint">
+              Hidden because your real GoHighLevel pipeline is above. Kept only to show what these screens will look like.
+            </p>
+            {samples}
+          </div>
+        </details>
+      ) : (
+        samples
+      )}
     </>
   );
 }
