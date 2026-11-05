@@ -51,5 +51,5 @@ function redirectTo(path: string, request: NextRequest, from: NextResponse) {
 
 export const config = {
   // Everything except Next's own files and icons.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest|robots.txt).*)"],
 };

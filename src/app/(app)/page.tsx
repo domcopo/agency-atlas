@@ -93,24 +93,30 @@ export default async function MissionControlPage() {
       </>
     );
   }
-  const data = await getMissionControl();
-  const summary = await getRosterSummary();
+  // Independent reads run at the same time (each is also shared within this request).
+  const [data, summary, coach, ai, briefing, ghl, ops, contacts, team, detections, atlasQuestions] = await Promise.all([
+    getMissionControl(),
+    getRosterSummary(),
+    getCoachHints(),
+    getAiStatus(),
+    getLatestBriefing(),
+    getGhlSummary(),
+    getOps(),
+    getContactLog(14, 5),
+    getTeam(),
+    getDetections(),
+    getAtlasQuestions(3),
+  ]);
   const prospects = getProspects();
   const prospectById = Object.fromEntries(prospects.map((p) => [p.id, p]));
   const toWork = getProspectsToWork();
   const needsReply = getConversations().filter((c) => c.needsReply);
   const trends = getTrends();
   const real = summary.source !== "demo";
-  const coach = await getCoachHints();
-  const ai = await getAiStatus();
-  const briefing = await getLatestBriefing();
-  const member = usesDatabase() ? await getMember() : null;
+  const member = me;
   const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady);
   const samples = showsSamples();
-  const ghl = await getGhlSummary();
-  const ops = await getOps();
-  const contacts = await getContactLog(14, 5);
-  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const staff = team.members.map((m) => ({ id: m.id, name: m.name }));
   const canWork = Boolean(member && member.role !== "developer");
   const openIssues = ops.actions
     .filter((a) => a.kind === "issue" && a.status !== "done")
@@ -387,7 +393,7 @@ export default async function MissionControlPage() {
       <HomeTabs tabs={tabs} />
 
       <div className="mt-3">
-        <DetectionRadar detections={await getDetections()} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />
+        <DetectionRadar detections={detections} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />
       </div>
 
       {!samples && (
@@ -436,7 +442,7 @@ export default async function MissionControlPage() {
         </>
       )}
 
-      <AtlasAsks questions={await getAtlasQuestions(3)} today={data.today} />
+      <AtlasAsks questions={atlasQuestions} today={data.today} />
 
       {data.followUps.length > 0 && (
         <>

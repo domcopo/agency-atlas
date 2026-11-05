@@ -360,7 +360,7 @@ export async function getWinBackList() {
 // Team
 // ---------------------------------------------------------------------------
 
-export async function getTeam(): Promise<{ source: RosterSource; members: TeamMember[] }> {
+export const getTeam = cache(async (): Promise<{ source: RosterSource; members: TeamMember[] }> => {
   if (usesDatabase()) {
     const db = await createDatabaseClient();
     const { data } = await db.from("staff").select("id, name, role, handles").order("created_at");
@@ -369,7 +369,7 @@ export async function getTeam(): Promise<{ source: RosterSource; members: TeamMe
   }
   const real = loadPrivateTeam();
   return real ? { source: "private_file", members: real } : { source: "demo", members: demoTeam };
-}
+});
 
 // ---------------------------------------------------------------------------
 // Home
@@ -488,12 +488,11 @@ export const getOpenDeals = cache(async (): Promise<OpenDeal[]> => {
 
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const clients = (await roster()).clients;
-  const { ready, actions } = await getActions();
+  const [{ clients }, { ready, actions }, allDeals] = await Promise.all([roster(), getActions(), getOpenDeals()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
-  const deals = ready ? await getOpenDeals() : [];
+  const deals = ready ? allDeals : [];
   const leadNames = new Map(deals.map((d) => [d.ghlId, d.name]));
   const withAction = new Set(actions.filter((a) => a.leadGhlId).map((a) => a.leadGhlId));
   const weekAgo = new Date(Date.parse(t) - 7 * 86_400_000).toISOString().slice(0, 10);

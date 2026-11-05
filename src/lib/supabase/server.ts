@@ -8,6 +8,7 @@
 
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 let warned = false;
 /** Logs (this Mac only) why the settings were refused. Never logs the values. */
@@ -64,8 +65,8 @@ export function databaseSettings() {
  */
 export const COOKIE_OPTIONS = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: process.env.VERCEL === "1" };
 
-/** A database client acting as the signed-in person. Call once per request. */
-export async function createDatabaseClient() {
+/** A database client acting as the signed-in person. Shared within one request (React cache). */
+export const createDatabaseClient = cache(async function createDatabaseClient() {
   const s = settings();
   if (!s) throw new Error("Database is not configured");
   const cookieStore = await cookies();
@@ -84,7 +85,7 @@ export async function createDatabaseClient() {
       },
     },
   });
-}
+});
 
 /**
  * Two-factor status for the signed-in person: "enabled" (an authenticator app is set
