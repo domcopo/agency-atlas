@@ -533,7 +533,7 @@ describe("no sample data once the real database is connected", () => {
 // ---------------------------------------------------------------------------
 // Operations rules (src/lib/ops.ts): health words, flags, priorities.
 // ---------------------------------------------------------------------------
-import { buildPriorities, dueLabel, healthSummary, ownershipGaps } from "@/lib/ops";
+import { boardColumns, buildPriorities, dueLabel, HEALTH_POINTS, healthScore, healthSummary, ownershipGaps } from "@/lib/ops";
 import type { CheckIn, ClientAction, RosterClient } from "@/lib/types";
 
 describe("operations rules", () => {
@@ -566,6 +566,51 @@ describe("operations rules", () => {
     client: { slug: "sam-sample", dbId: "00000000-0000-0000-0000-0000000000c1", name: "Sam Sample (fictional)" },
     leadGhlId: null,
     ...over,
+  });
+
+  it("health score uses issues, overdue items and GoHighLevel reply times, with a source on every factor", () => {
+    const fine = healthScore(client(), ci(), [], today)!;
+    expect(fine.score).toBe(100);
+    expect(fine.factors.every((f) => f.source)).toBe(true);
+    // Two open issues (one critical, one overdue) take points off, capped per rule.
+    const issues = [
+      action({ id: "i1", kind: "issue", priority: "critical", dueOn: "2026-11-10" }),
+      action({ id: "i2", kind: "issue", dueOn: "2026-11-01" }),
+    ];
+    const withIssues = healthScore(client(), ci(), issues, today)!;
+    expect(withIssues.score).toBe(100 + 2 * HEALTH_POINTS.openIssue + HEALTH_POINTS.criticalIssue + HEALTH_POINTS.overdueItem);
+    // Done items don't count; other clients' items don't count.
+    expect(healthScore(client(), ci(), [action({ status: "done", kind: "issue" })], today)!.score).toBe(100);
+    expect(healthScore(client(), ci(), [action({ kind: "issue", client: { slug: "x", dbId: "00000000-0000-0000-0000-0000000000c2", name: "Other (fictional)" } })], today)!.score).toBe(100);
+    // Client waiting 5 days for a reply (GoHighLevel times) and 3 unanswered messages.
+    const ghl = { lastInboundAt: "2026-10-30T10:00:00Z", lastOutboundAt: null, lastCallAt: null, lastCallSeconds: null, lastChannel: null, lastDirection: null, unansweredOutbound: 3, syncedAt: "2026-11-04T00:00:00Z" };
+    const waiting = healthScore(client({ ghl, lastLogged: "2026-10-20" }), ci(), [], today)!;
+    expect(waiting.score).toBe(100 + HEALTH_POINTS.replyWaitingLong + HEALTH_POINTS.unanswered);
+    expect(waiting.factors.filter((f) => f.impact < 0).every((f) => f.source === "GoHighLevel (times)")).toBe(true);
+    // Never below 0, and past clients get no score.
+    const awful = healthScore(client({ status: "paused", lastMood: { mood: "worse", date: "2026-10-01" } }), ci({ state: "overdue" }), issues, today)!;
+    expect(awful.score).toBeGreaterThanOrEqual(0);
+    expect(awful.level).toBe("at_risk");
+    expect(healthScore(client({ status: "canceled" }), ci(), [], today)).toBeNull();
+  });
+
+  it("work board puts each item in its status column, filters by owner, and keeps 7 days of done", () => {
+    const items = [
+      action({ id: "o1", status: "open", dueOn: "2026-11-10" }),
+      action({ id: "o2", status: "open", dueOn: "2026-11-01" }), // overdue: first
+      action({ id: "p1", status: "in_progress" }),
+      action({ id: "w1", status: "waiting", ownerId: null, ownerName: null }),
+      action({ id: "d1", status: "done", doneAt: "2026-11-02T10:00:00Z" }),
+      action({ id: "d_old", status: "done", doneAt: "2026-10-01T10:00:00Z" }),
+    ];
+    const all = boardColumns(items, undefined, today);
+    expect(all.open.map((a) => a.id)).toEqual(["o2", "o1"]);
+    expect(all.in_progress.map((a) => a.id)).toEqual(["p1"]);
+    expect(all.waiting.map((a) => a.id)).toEqual(["w1"]);
+    expect(all.done.map((a) => a.id)).toEqual(["d1"]);
+    expect(boardColumns(items, null, today).waiting.map((a) => a.id)).toEqual(["w1"]);
+    expect(boardColumns(items, null, today).open).toHaveLength(0);
+    expect(boardColumns(items, "o1", today).waiting).toHaveLength(0);
   });
 
   it("is healthy when contact is recent and nothing is open", () => {

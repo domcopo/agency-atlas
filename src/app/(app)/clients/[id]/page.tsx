@@ -10,7 +10,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getAiStatus, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getActions, getAiStatus, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
 import { setClientServices } from "@/app/actions";
 import { planLabel } from "@/lib/ops";
@@ -41,7 +41,7 @@ export default async function ClientPage({ params }: Props) {
   if (!c) notFound();
   const today = getToday();
   const real = (await getRosterSource()) !== "demo";
-  const health = getClientHealth(c);
+  const health = getClientHealth(c, (await getActions()).actions);
   const winBack = (await getWinBackList()).find((w) => w.client.id === c.id);
   const ci = health?.checkIn;
   const member = await getMember();
@@ -228,14 +228,17 @@ export default async function ClientPage({ params }: Props) {
             <ul className="space-y-1.5 border-t border-line pt-3 text-xs">
               {health.factors.map((f) => (
                 <li key={f.label} className="flex justify-between gap-3">
-                  <span className="text-muted">{f.label}</span>
+                  <span className="text-muted">
+                    {f.label}
+                    {f.source && <span className="block text-[10px] text-faint">{f.source}</span>}
+                  </span>
                   <span className={f.impact < 0 ? "shrink-0 font-semibold text-rose" : f.impact > 0 ? "shrink-0 font-semibold text-lime" : "shrink-0 text-faint"}>
                     {f.impact < 0 ? f.impact : f.impact > 0 ? `+${f.impact}` : "—"}
                   </span>
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] text-faint">Starts at 100; each risk takes points off. The AI uses this score; the word at the top of the page is what to act on.</p>
+            <p className="text-[11px] text-faint">Starts at 100; each fact takes points off. Every line is a recorded fact (no AI guesses); the small grey text says where it came from. The word at the top of the page is what to act on.</p>
           </div>
         </details>
       )}

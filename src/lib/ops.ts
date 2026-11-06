@@ -7,6 +7,7 @@ import type {
   ActionPriority,
   CheckIn,
   ClientAction,
+  ClientHealth,
   HealthSummary,
   PriorityItem,
   RosterClient,
@@ -131,6 +132,81 @@ export function healthSummary(c: RosterClient, checkIn: CheckIn, actions: Client
   const opps = opportunities(c, today);
   if (opps.length) return { state: "opportunity", reasons: opps };
   return { state: "healthy", reasons: c.lastContact ? [`Last contact ${c.lastContact}`] : [] };
+}
+
+/**
+ * Points for the 0–100 health score. Starts at 100; each fact takes points off
+ * (or adds a few). Change a number here to tune it. Every factor shows on the
+ * client page with where the fact came from.
+ */
+export const HEALTH_POINTS = {
+  paused: -50,
+  checkInOverdue: -25,
+  longGap: -15, // extra, when the gap is longGapMultiple x the check-in rhythm
+  neverLogged: -10,
+  newClient: -10, // first 2 months
+  newClientMonths: 2,
+  openNote: -10,
+  recordCheck: -5,
+  moodWorse: -20,
+  moodBetter: 10,
+  replyWaiting: -15, // client reached out, no reply for replyWithinDays
+  replyWaitingLong: -25, // ... for twice that
+  unanswered: -10, // unansweredForCall of our messages in a row, no reply
+  openIssue: -8,
+  openIssueMax: -24,
+  criticalIssue: -15,
+  overdueItem: -5,
+  overdueItemMax: -15,
+  /** Score bands: at or above healthy = healthy, at or above watch = watch, else at risk. */
+  healthy: 75,
+  watch: 50,
+} as const;
+
+export type HealthSource = "Client list" | "Logged in app" | "GoHighLevel (times)" | "Not connected";
+
+/**
+ * The 0–100 score, from the same facts as the health word. Pure function.
+ * All factors are confirmed facts (no AI); the source says where each came from.
+ */
+export function healthScore(c: RosterClient, checkIn: CheckIn, actions: ClientAction[], today: string): ClientHealth | null {
+  if (c.status === "canceled" || c.status === "incomplete_expired") return null;
+  const P = HEALTH_POINTS;
+  const f: ClientHealth["factors"] = [];
+  const add = (label: string, impact: number, source: HealthSource) => f.push({ label, impact, source });
+
+  if (c.status === "paused") add("Paused: not paying right now", P.paused, "Client list");
+  if (checkIn.state === "overdue") add(`Check-in overdue (every ${checkIn.cadenceDays} days)`, P.checkInOverdue, "Logged in app");
+  if (checkIn.state === "never_logged") add("No check-in logged yet", P.neverLogged, "Logged in app");
+  const gap = c.lastContact ? daysBetween(c.lastContact, today) : null;
+  if (gap !== null && gap > checkIn.cadenceDays * OPS_RULES.longGapMultiple)
+    add(`No contact in ${gap} days`, P.longGap, "Logged in app");
+  const months = monthsBetween(c.startDate, today);
+  if (months < P.newClientMonths) add("New client: the first 2 months need extra care", P.newClient, "Client list");
+  if (c.followUp && !noteDone(c, actions)) add(`Open follow-up: ${c.followUp}`, P.openNote, "Client list");
+  if (c.check) add("Record needs checking", P.recordCheck, "Client list");
+  if (c.lastMood?.mood === "worse") add(`Last check-in (${c.lastMood.date}): things got worse`, P.moodWorse, "Logged in app");
+  if (c.lastMood?.mood === "better") add(`Last check-in (${c.lastMood.date}): things are getting better`, P.moodBetter, "Logged in app");
+  if (c.lastMood?.mood === "same") add(`Last check-in (${c.lastMood.date}): holding steady`, 0, "Logged in app");
+
+  const wait = waitingDays(c, today);
+  if (wait !== null && wait >= OPS_RULES.replyWithinDays * 2) add(`Client reached out ${wait} days ago; no reply yet`, P.replyWaitingLong, "GoHighLevel (times)");
+  else if (wait !== null && wait >= OPS_RULES.replyWithinDays) add(`Client reached out ${wait} days ago; no reply yet`, P.replyWaiting, "GoHighLevel (times)");
+  if (c.ghl && c.ghl.unansweredOutbound >= OPS_RULES.unansweredForCall)
+    add(`${c.ghl.unansweredOutbound} of our messages in a row with no reply`, P.unanswered, "GoHighLevel (times)");
+
+  const mine = openActions(actions, c.dbId);
+  const issues = mine.filter((a) => a.kind === "issue");
+  if (issues.length) add(plural(issues.length, "open issue"), Math.max(P.openIssueMax, issues.length * P.openIssue), "Logged in app");
+  for (const i of issues.filter((x) => x.priority === "critical")) add(`Critical issue: ${i.title}`, P.criticalIssue, "Logged in app");
+  const overdue = mine.filter((a) => a.dueOn !== null && a.dueOn < today);
+  if (overdue.length) add(`${plural(overdue.length, "item")} past due`, Math.max(P.overdueItemMax, overdue.length * P.overdueItem), "Logged in app");
+
+  if (months >= 12) add(`Long-term client (${months} months)`, 0, "Client list");
+  add("SEO, ads and website results: not connected yet", 0, "Not connected");
+
+  const score = Math.min(100, Math.max(0, 100 + f.reduce((n, x) => n + x.impact, 0)));
+  return { score, level: score >= P.healthy ? "healthy" : score >= P.watch ? "watch" : "at_risk", factors: f, checkIn };
 }
 
 /** Flags about missing ownership. Shown once, as an item, never repeated per client. */
@@ -282,4 +358,28 @@ const NOT_SALES_WORDS = /(onboard|build|step ?up|review|complete|recurring|launc
 export function isSalesStage(stage: string | null | undefined): boolean {
   if (!stage) return false;
   return SALES_WORDS.test(stage) && !NOT_SALES_WORDS.test(stage);
+}
+
+export type BoardColumn = "open" | "in_progress" | "waiting" | "done";
+
+/**
+ * Work board columns from the saved follow-ups and issues (same status as everywhere
+ * else, so the board and lists always agree). ownerId: undefined = everyone, null = no owner.
+ * Done shows only the last 7 days. Each column: overdue first, then by due date.
+ */
+export function boardColumns(actions: ClientAction[], ownerId: string | null | undefined, today: string): Record<BoardColumn, ClientAction[]> {
+  const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
+  const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], done: [] };
+  for (const a of actions) {
+    if (ownerId !== undefined && (a.ownerId ?? null) !== ownerId) continue;
+    if (a.status === "done") {
+      if (a.doneAt && a.doneAt >= weekAgo) cols.done.push(a);
+    } else cols[a.status].push(a);
+  }
+  const byDue = (x: ClientAction, y: ClientAction) =>
+    PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999");
+  for (const k of ["open", "in_progress", "waiting"] as const)
+    cols[k].sort((x, y) => Number(dueWhen(y.dueOn, today) === "overdue") - Number(dueWhen(x.dueOn, today) === "overdue") || byDue(x, y));
+  cols.done.sort((x, y) => (y.doneAt ?? "").localeCompare(x.doneAt ?? ""));
+  return cols;
 }

@@ -6,7 +6,9 @@ import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getCompletions, getDeveloperWork, getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
-import { myWork, teamLoad } from "@/lib/ops";
+import { TaskBoard } from "@/components/cards/TaskBoard";
+import { Fold } from "@/components/shell/Fold";
+import { boardColumns, myWork, teamLoad } from "@/lib/ops";
 import { cn } from "@/lib/format";
 import type { TeamRole, WorkPriority } from "@/lib/types";
 
@@ -44,6 +46,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
   const completions = await getCompletions();
   const load = teamLoad(staffList, ops.clients, ops.actions, ops.today, completions);
+  const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
   const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
   const orders = getWorkOrders();
   const rules = getWorkRules();
@@ -85,6 +88,18 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       </div>
 
       {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} done={doneForView} />}
+
+      {ops.ready && (
+        <Fold
+          label="Work board"
+          title="Board"
+          summary={`${board.open.length} open · ${board.in_progress.length} in progress · ${board.waiting.length} waiting`}
+          badge={who === "all" ? "Everyone" : who === "none" ? "No owner" : staffList.find((m) => m.id === who)?.name}
+        >
+          <TaskBoard columns={board} today={ops.today} canEdit={Boolean(member)} leadNames={ops.leadNames} />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">Same items as the list above, by status. Pick a person above to see just theirs. Saved in this app only.</p>
+        </Fold>
+      )}
 
       {samples && (
         <>

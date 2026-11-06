@@ -28,6 +28,7 @@ import { HomeTabs } from "@/components/cards/HomeTabs";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard } from "@/components/cards/ProspectCard";
 import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
+import { PulseStrip, type PulseTile } from "@/components/cards/PulseStrip";
 import { MyWork } from "@/components/cards/MyWork";
 import { Fold } from "@/components/shell/Fold";
 import { myWork } from "@/lib/ops";
@@ -371,6 +372,18 @@ export default async function MissionControlPage() {
 
   const tabs = samples ? [resultsTab, casesTab, leadsTab, chatsTab] : [resultsTab, issuesTab, pipelineTab, contactsTab];
 
+  // Top numbers (real data only). Each names its source; "–" = not connected or not synced yet.
+  const overdueItems = ops.actions.filter((a) => a.status !== "done" && a.dueOn !== null && a.dueOn < ops.today).length;
+  const synced = Boolean(ghl.lastSync);
+  const pulse: PulseTile[] = [
+    { label: "Monthly plans", value: `$${(summary.activeMrr / 1000).toFixed(1)}k`, source: "Client plans · not payments", href: "/clients", tone: "teal" },
+    { label: "Active clients", value: String(summary.activeCount), source: "Client list", href: "/clients" },
+    { label: "New deals (month)", value: synced ? String(ghl.newThisMonth) : "–", source: synced ? "GoHighLevel" : "Not synced", href: "/sales", tone: "lime" },
+    { label: "Pipeline value", value: synced ? formatUsd(ghl.open.value) : "–", source: synced ? "Open deals · not revenue" : "Not synced", href: "/sales", tone: "amber" },
+    { label: "Overdue items", value: ops.ready ? String(overdueItems) : "–", source: "Follow-ups + issues", href: "/work", tone: overdueItems ? "rose" : "plain" },
+    { label: "At-risk clients", value: String(ops.counts.at_risk), source: "Health rules", href: "/clients#checkins", tone: ops.counts.at_risk ? "rose" : "plain" },
+  ];
+
   return (
     <>
       <PageHeader
@@ -395,6 +408,8 @@ export default async function MissionControlPage() {
           </span>
         </Link>
       )}
+
+      {!samples && <PulseStrip tiles={pulse} />}
 
       <HomeTabs tabs={tabs} />
 

@@ -15,6 +15,7 @@ import {
   getAiStatus,
   getAtlasQuestions,
   getCheckInHistory,
+  getActions,
   getClientHealth,
   getGhlSummary,
   getOps,
@@ -895,7 +896,7 @@ export async function generateClientProfile(_prev: { error?: string; message?: s
   const today = getToday();
   const book = buildCodebook(roster);
   const history = await getCheckInHistory(client.dbId, 20);
-  const data = { today, client: clientFacts(client, getClientHealth(client), history, book, today), pipeline: pipelineFacts(await getGhlSummary()) };
+  const data = { today, client: clientFacts(client, getClientHealth(client, (await getActions()).actions), history, book, today), pipeline: pipelineFacts(await getGhlSummary()) };
 
   const result = await askAi({ task: PROFILE_TASK, data, schema: PROFILE_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining });
   const db = await createDatabaseClient();

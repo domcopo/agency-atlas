@@ -19,7 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
-import { buildPriorities, healthSummary, isSalesStage, opportunities, ownershipGaps } from "@/lib/ops";
+import { buildPriorities, healthScore, healthSummary, isSalesStage, opportunities, ownershipGaps } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
@@ -346,24 +346,9 @@ export function getCheckIn(c: RosterClient): CheckIn {
 }
 
 /** Health for active and paused clients (null for past clients). Starts at 100; each risk takes points off. */
-export function getClientHealth(c: RosterClient): ClientHealth | null {
-  if (c.status === "canceled" || c.status === "incomplete_expired") return null;
-  const checkIn = getCheckIn(c);
-  const factors: { label: string; impact: number }[] = [];
-  if (c.status === "paused") factors.push({ label: "Paused: not paying right now", impact: -50 });
-  if (checkIn.state === "overdue") factors.push({ label: `Check-in overdue (every ${checkIn.cadenceDays} days)`, impact: -25 });
-  if (checkIn.state === "never_logged") factors.push({ label: "No check-in logged yet", impact: -10 });
-  const months = monthsBetween(c.startDate, today());
-  if (months < 2) factors.push({ label: "New client: the first 2 months need extra care", impact: -10 });
-  if (c.followUp) factors.push({ label: `Open follow-up: ${c.followUp}`, impact: -10 });
-  if (c.check) factors.push({ label: "Record needs checking", impact: -5 });
-  if (c.lastMood?.mood === "worse") factors.push({ label: `Last check-in (${c.lastMood.date}): things got worse`, impact: -20 });
-  if (c.lastMood?.mood === "better") factors.push({ label: `Last check-in (${c.lastMood.date}): things are getting better`, impact: 10 });
-  if (c.lastMood?.mood === "same") factors.push({ label: `Last check-in (${c.lastMood.date}): holding steady`, impact: 0 });
-  if (months >= 12) factors.push({ label: `Long-term client (${months} months)`, impact: 0 });
-  factors.push({ label: "Lead results: not connected yet (client sub-accounts come later)", impact: 0 });
-  const score = Math.min(100, Math.max(0, 100 + factors.reduce((n, f) => n + f.impact, 0)));
-  return { score, level: score >= 75 ? "healthy" : score >= 50 ? "watch" : "at_risk", factors, checkIn };
+/** The 0–100 score (rules in ops.ts). Pass the open actions so issues and overdue items count. */
+export function getClientHealth(c: RosterClient, actions: ClientAction[] = []): ClientHealth | null {
+  return healthScore(c, getCheckIn(c), actions, today());
 }
 
 /** Paused clients, biggest first, with a copy-only message to start the conversation. */

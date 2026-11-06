@@ -5,7 +5,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getClientHealth, getRosterSource, getServiceGroup, getToday, tierOf } from "@/lib/data-source";
+import { getActions, getClientHealth, getRosterSource, getServiceGroup, getToday, tierOf } from "@/lib/data-source";
 import { describeTenure, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
 
@@ -22,7 +22,8 @@ export default async function ServiceGroupPage({ params }: Props) {
   if (!group) notFound();
   const today = getToday();
   const real = (await getRosterSource()) !== "demo";
-  const withHealth = group.clients.map((c) => ({ c, h: getClientHealth(c) }));
+  const { actions } = await getActions();
+  const withHealth = group.clients.map((c) => ({ c, h: getClientHealth(c, actions) }));
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),

@@ -340,7 +340,8 @@ export interface CheckIn {
 export interface ClientHealth {
   score: number;
   level: HealthLevel;
-  factors: { label: string; impact: number }[];
+  /** source: where the fact came from (all factors are facts, not AI guesses). */
+  factors: { label: string; impact: number; source?: string }[];
   checkIn: CheckIn;
 }
 

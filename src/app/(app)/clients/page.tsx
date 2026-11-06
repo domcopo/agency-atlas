@@ -7,7 +7,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { CHECK_IN_DAYS, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
+import { CHECK_IN_DAYS, getActions, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
 import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
@@ -18,7 +18,8 @@ export default async function ClientsPage() {
   if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Clients" />;
   const today = getToday();
   const summary = await getRosterSummary();
-  const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c) }));
+  const { actions } = await getActions();
+  const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c, actions) }));
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
