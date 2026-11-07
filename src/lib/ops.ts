@@ -76,6 +76,99 @@ export function dueLabel(dueOn: string | null, today: string): string {
   return d === 1 ? "Due tomorrow" : `Due in ${d} days`;
 }
 
+const shortDay = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+/** Was a promise to the client missed (date passed, not done)? */
+export function promiseMissed(a: ClientAction, today: string): boolean {
+  return Boolean(a.promisedOn && a.status !== "done" && a.promisedOn < today);
+}
+
+/** " · blocked: needs logins · promised by Nov 8" etc. Empty when nothing to add. */
+export function statusNote(a: ClientAction, today: string): string {
+  let out = "";
+  if (a.status === "waiting") out += " · waiting on client";
+  else if (a.status === "in_progress") out += " · in progress";
+  else if (a.status === "blocked") out += a.blockedReason ? ` · blocked: ${a.blockedReason}` : " · blocked";
+  if (a.promisedOn && a.status !== "done")
+    out += promiseMissed(a, today) ? ` · promise missed (was ${shortDay(a.promisedOn)})` : ` · promised by ${shortDay(a.promisedOn)}`;
+  return out;
+}
+
+/**
+ * Points for the ranked daily list (0–100). Higher = do it first. Change a number to tune.
+ * Every point added shows as a plain "why" on screen. All inputs are recorded facts.
+ */
+export const PRIORITY_POINTS = {
+  overdue: 40,
+  overduePerDay: 2,
+  overdueDayMax: 10,
+  today: 30,
+  upcoming: 12,
+  none: 6,
+  critical: 25,
+  high: 15,
+  normal: 6,
+  low: 0,
+  promiseMissed: 15,
+  promiseSoon: 8, // promised within promiseSoonDays
+  promiseSoonDays: 3,
+  moneyPer: 60, // +1 point per $60/mo the client pays...
+  moneyMax: 12, // ...up to this
+  clientAtRisk: 12,
+  clientNeedsAttention: 5,
+  scoreDrop: 8, // health score fell by scoreDropPoints or more in 7 days
+  scoreDropPoints: 15,
+  blocked: 5, // someone needs to unblock it
+} as const;
+
+/** Score one item and say why. ctx = facts about the client the item is for. */
+export function scorePriority(
+  item: Pick<PriorityItem, "when" | "priority" | "dueOn" | "action">,
+  ctx: { today: string; monthlyUsd?: number; health?: HealthSummary | null; drop?: number | null },
+): { score: number; why: string[] } {
+  const P = PRIORITY_POINTS;
+  const why: string[] = [];
+  let n = 0;
+  if (item.when === "overdue") {
+    const days = item.dueOn ? Math.max(0, daysBetween(item.dueOn, ctx.today)) : 0;
+    n += P.overdue + Math.min(P.overdueDayMax, days * P.overduePerDay);
+    why.push(days ? `overdue ${plural(days, "day")}` : "overdue");
+  } else if (item.when === "today") {
+    n += P.today;
+    why.push("due today");
+  } else n += item.when === "upcoming" ? P.upcoming : P.none;
+  n += P[item.priority];
+  if (item.priority === "critical" || item.priority === "high") why.push(`${item.priority} priority`);
+  const a = item.action;
+  if (a && promiseMissed(a, ctx.today)) {
+    n += P.promiseMissed;
+    why.push("promise to client missed");
+  } else if (a?.promisedOn && a.status !== "done" && daysBetween(ctx.today, a.promisedOn) <= P.promiseSoonDays) {
+    n += P.promiseSoon;
+    why.push(`promised by ${shortDay(a.promisedOn)}`);
+  }
+  if (a?.status === "blocked") {
+    n += P.blocked;
+    why.push("blocked: needs unblocking");
+  }
+  if (ctx.monthlyUsd) {
+    const m = Math.min(P.moneyMax, Math.round(ctx.monthlyUsd / P.moneyPer));
+    if (m > 0) {
+      n += m;
+      if (m >= 5) why.push(`${usd(ctx.monthlyUsd)}/mo client`);
+    }
+  }
+  if (ctx.health?.state === "at_risk") {
+    n += P.clientAtRisk;
+    why.push("client at risk");
+  } else if (ctx.health?.state === "needs_attention") n += P.clientNeedsAttention;
+  if (ctx.drop !== null && ctx.drop !== undefined && ctx.drop >= P.scoreDropPoints) {
+    n += P.scoreDrop;
+    why.push(`health down ${ctx.drop} pts this week`);
+  }
+  return { score: Math.min(100, n), why };
+}
+
 /** Upsell / referral ideas for one client (plain rules). */
 export function opportunities(c: RosterClient, today: string): string[] {
   if (c.status !== "active") return [];
@@ -158,6 +251,8 @@ export const HEALTH_POINTS = {
   criticalIssue: -15,
   overdueItem: -5,
   overdueItemMax: -15,
+  promiseMissed: -15, // each, up to promiseMissedMax
+  promiseMissedMax: -30,
   /** Score bands: at or above healthy = healthy, at or above watch = watch, else at risk. */
   healthy: 75,
   watch: 50,
@@ -201,6 +296,9 @@ export function healthScore(c: RosterClient, checkIn: CheckIn, actions: ClientAc
   for (const i of issues.filter((x) => x.priority === "critical")) add(`Critical issue: ${i.title}`, P.criticalIssue, "Logged in app");
   const overdue = mine.filter((a) => a.dueOn !== null && a.dueOn < today);
   if (overdue.length) add(`${plural(overdue.length, "item")} past due`, Math.max(P.overdueItemMax, overdue.length * P.overdueItem), "Logged in app");
+  const missed = mine.filter((a) => promiseMissed(a, today));
+  for (const [i, a] of missed.entries())
+    add(`Promise missed: ${a.title} (was ${shortDay(a.promisedOn!)})`, (i + 1) * P.promiseMissed >= P.promiseMissedMax ? P.promiseMissed : 0, "Logged in app");
 
   if (months >= 12) add(`Long-term client (${months} months)`, 0, "Client list");
   add("SEO, ads and website results: not connected yet", 0, "Not connected");
@@ -233,15 +331,19 @@ export function buildPriorities(input: {
   leadNames?: Map<string, string>;
   /** New deals (last 7 days) with no follow-up yet. */
   newLeadsWithoutAction?: number;
+  /** Health score points lost in the last 7 days, per client slug (from the daily history). */
+  drops?: Map<string, number>;
 }): PriorityItem[] {
-  const { clients, actions, health, checkIns, today, leadNames, newLeadsWithoutAction } = input;
+  const { clients, actions, health, checkIns, today, leadNames, newLeadsWithoutAction, drops } = input;
   const items: PriorityItem[] = [];
   const planOf = new Map(clients.map((c) => [c.id, planLabel(c)]));
 
   for (const a of actions.filter((x) => x.status !== "done")) {
-    const when = dueWhen(a.dueOn, today);
+    // A missed promise is overdue even if the internal due date isn't.
+    const due = dueWhen(a.dueOn, today);
+    const when = promiseMissed(a, today) ? "overdue" : due;
     const label = a.kind === "issue" ? "Issue" : "Follow-up";
-    const status = a.status === "waiting" ? " · waiting on client" : a.status === "in_progress" ? " · in progress" : "";
+    const status = statusNote(a, today);
     items.push({
       id: `a_${a.id}`,
       title: a.client ? `${a.client.name}: ${a.title}` : a.leadGhlId ? `${leadNames?.get(a.leadGhlId) ?? "Lead"}: ${a.title}` : a.title,
@@ -294,8 +396,18 @@ export function buildPriorities(input: {
   if (gaps.noNextAction.length)
     items.push({ id: "g_next", title: `Add next actions for ${plural(gaps.noNextAction.length, "active client")}`, reason: "Every active client should have a next step", href: "/clients#owners", ownerName: null, dueOn: null, when: "none", priority: "low" });
 
+  // Rank: priority score (urgency, money, client risk, promises), then the old tie-breakers.
+  const byClient = new Map(clients.map((c) => [c.id, c]));
+  for (const i of items) {
+    const slug = i.clientSlug ?? i.action?.client?.slug;
+    const c = slug ? byClient.get(slug) : undefined;
+    const r = scorePriority(i, { today, monthlyUsd: c?.monthlyUsd, health: slug ? health.get(slug) : null, drop: slug ? (drops?.get(slug) ?? null) : null });
+    i.score = r.score;
+    i.why = r.why;
+  }
   return items.sort(
     (a, b) =>
+      (b.score ?? 0) - (a.score ?? 0) ||
       WHEN_RANK[a.when] - WHEN_RANK[b.when] ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       Number(!a.action) - Number(!b.action) ||
@@ -303,14 +415,15 @@ export function buildPriorities(input: {
   );
 }
 
-export type WorkBucket = "overdue" | "today" | "upcoming" | "waiting";
+export type WorkBucket = "overdue" | "today" | "upcoming" | "waiting" | "blocked";
 
 /** One person's queue (or everyone's when ownerId is undefined; null = unowned). */
 export function myWork(items: PriorityItem[], ownerId: string | null | undefined) {
   const mine = items.filter((i) => !i.id.startsWith("g_") && (ownerId === undefined || (i.ownerId ?? null) === ownerId));
-  const buckets: Record<WorkBucket, PriorityItem[]> = { overdue: [], today: [], upcoming: [], waiting: [] };
+  const buckets: Record<WorkBucket, PriorityItem[]> = { overdue: [], today: [], upcoming: [], waiting: [], blocked: [] };
   for (const i of mine) {
-    if (i.action?.status === "waiting") buckets.waiting.push(i);
+    if (i.action?.status === "blocked") buckets.blocked.push(i);
+    else if (i.action?.status === "waiting") buckets.waiting.push(i);
     else if (i.when === "overdue") buckets.overdue.push(i);
     else if (i.when === "today") buckets.today.push(i);
     else buckets.upcoming.push(i);
@@ -360,7 +473,7 @@ export function isSalesStage(stage: string | null | undefined): boolean {
   return SALES_WORDS.test(stage) && !NOT_SALES_WORDS.test(stage);
 }
 
-export type BoardColumn = "open" | "in_progress" | "waiting" | "done";
+export type BoardColumn = "open" | "in_progress" | "waiting" | "blocked" | "done";
 
 /**
  * Work board columns from the saved follow-ups and issues (same status as everywhere
@@ -369,7 +482,7 @@ export type BoardColumn = "open" | "in_progress" | "waiting" | "done";
  */
 export function boardColumns(actions: ClientAction[], ownerId: string | null | undefined, today: string): Record<BoardColumn, ClientAction[]> {
   const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
-  const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], done: [] };
+  const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], blocked: [], done: [] };
   for (const a of actions) {
     if (ownerId !== undefined && (a.ownerId ?? null) !== ownerId) continue;
     if (a.status === "done") {
@@ -378,8 +491,103 @@ export function boardColumns(actions: ClientAction[], ownerId: string | null | u
   }
   const byDue = (x: ClientAction, y: ClientAction) =>
     PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999");
-  for (const k of ["open", "in_progress", "waiting"] as const)
+  for (const k of ["open", "in_progress", "waiting", "blocked"] as const)
     cols[k].sort((x, y) => Number(dueWhen(y.dueOn, today) === "overdue") - Number(dueWhen(x.dueOn, today) === "overdue") || byDue(x, y));
   cols.done.sort((x, y) => (y.doneAt ?? "").localeCompare(x.doneAt ?? ""));
   return cols;
+}
+
+
+/** Health score change vs. about a week ago, from the saved daily history (null = not enough history yet). */
+export function scoreTrend(history: { day: string; score: number }[], todayScore: number, today: string): { change: number; since: string } | null {
+  const past = history.filter((h) => h.day < today && daysBetween(h.day, today) >= 2).sort((a, b) => b.day.localeCompare(a.day));
+  if (!past.length) return null;
+  // Prefer the newest row at least 7 days old; otherwise the oldest we have (2+ days old).
+  const base = past.find((h) => daysBetween(h.day, today) >= 7) ?? past[past.length - 1]!;
+  return { change: todayScore - base.score, since: base.day };
+}
+
+export interface RiskAlert {
+  id: string;
+  severity: "critical" | "high" | "medium";
+  client: { slug: string; name: string; monthlyUsd: number; ownerName: string | null };
+  problem: string;
+  /** The recorded facts behind it (each with its source). */
+  evidence: { label: string; impact: number; source?: string }[];
+  /** Every alert here is built from records, never an AI guess. */
+  confidence: "Confirmed facts";
+  action: string;
+  score: number;
+  trend: { change: number; since: string } | null;
+  /** First day the score history shows this client in the at-risk band (today if no history). */
+  detectedOn: string;
+  href: string;
+}
+
+/** What to do first, from the biggest problem. Plain rules; edit freely. */
+function riskAction(top: string): string {
+  if (/promise missed/i.test(top)) return "Deliver it or call the client today with a new date";
+  if (/reached out|no reply/i.test(top)) return "Reply today; call if messages go unanswered";
+  if (/messages in a row/i.test(top)) return "Try a phone call instead of another message";
+  if (/paused/i.test(top)) return "Win-back call: ask what would bring them back";
+  if (/got worse/i.test(top)) return "Call to ask what changed and agree a fix";
+  if (/issue/i.test(top)) return "Fix or update the client on the open issues";
+  if (/check-in|contact/i.test(top)) return "Call to check in this week";
+  if (/past due/i.test(top)) return "Clear the overdue items or reset dates with the client";
+  return "Review the account and add a next action";
+}
+
+/**
+ * One alert per client that may cancel: at-risk health word, at-risk score band, or a
+ * score drop of PRIORITY_POINTS.scoreDropPoints+ in a week. Never duplicated.
+ */
+export function riskAlerts(input: {
+  clients: RosterClient[];
+  scores: Map<string, ClientHealth | null>;
+  health: Map<string, HealthSummary | null>;
+  history: Map<string, { day: string; score: number; level: string }[]>;
+  today: string;
+}): RiskAlert[] {
+  const { clients, scores, health, history, today } = input;
+  const out: RiskAlert[] = [];
+  for (const c of clients.filter((x) => x.status === "active" || x.status === "paused")) {
+    const sc = scores.get(c.id);
+    if (!sc) continue;
+    const h = health.get(c.id);
+    const hist = c.dbId ? (history.get(c.dbId) ?? []) : [];
+    const trend = scoreTrend(hist, sc.score, today);
+    const dropped = trend !== null && -trend.change >= PRIORITY_POINTS.scoreDropPoints;
+    if (h?.state !== "at_risk" && sc.level !== "at_risk" && !dropped) continue;
+    const evidence = sc.factors.filter((f) => f.impact < 0).sort((a, b) => a.impact - b.impact);
+    const problem: string = h?.state === "at_risk" && h.reasons[0] ? h.reasons[0] : dropped ? `Health score down ${-trend!.change} points since ${shortDay(trend!.since)}` : (evidence[0]?.label ?? "Low health score");
+    // Paused clients already stopped paying: a win-back, never above "high". Active clients come first.
+    const severity =
+      c.status !== "paused" && (sc.score < 40 || (h?.state === "at_risk" && c.monthlyUsd >= 500))
+        ? "critical"
+        : h?.state === "at_risk" || sc.level === "at_risk"
+          ? "high"
+          : "medium";
+    // Detected: start of the latest unbroken run of at-risk days in the history.
+    let detectedOn = today;
+    for (const r of [...hist].sort((a, b) => b.day.localeCompare(a.day))) {
+      if (r.level !== "at_risk") break;
+      detectedOn = r.day;
+    }
+    out.push({
+      id: `risk_${c.id}`,
+      severity,
+      client: { slug: c.id, name: c.name, monthlyUsd: c.monthlyUsd, ownerName: c.ownerName ?? null },
+      problem,
+      evidence,
+      confidence: "Confirmed facts",
+      action: riskAction(problem),
+      score: sc.score,
+      trend,
+      detectedOn,
+      href: `/clients/${c.id}`,
+    });
+  }
+  const sev = { critical: 0, high: 1, medium: 2 } as const;
+  const paused = new Set(clients.filter((c) => c.status === "paused").map((c) => c.id));
+  return out.sort((a, b) => Number(paused.has(a.client.slug)) - Number(paused.has(b.client.slug)) || sev[a.severity] - sev[b.severity] || b.client.monthlyUsd - a.client.monthlyUsd || a.score - b.score);
 }

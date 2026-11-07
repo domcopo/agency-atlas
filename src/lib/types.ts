@@ -624,7 +624,7 @@ export interface ClientProfile {
 
 export type ActionKind = "follow_up" | "issue";
 export type ActionPriority = "critical" | "high" | "normal" | "low";
-export type ActionStatus = "open" | "in_progress" | "waiting" | "done";
+export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "done";
 
 export interface ClientAction {
   id: string;
@@ -641,6 +641,10 @@ export interface ClientAction {
   /** Client slug + name (when tied to a client). */
   client: { slug: string; dbId: string; name: string } | null;
   leadGhlId: string | null;
+  /** Why it's stuck (status "blocked"). Needs 0009. */
+  blockedReason?: string | null;
+  /** The date we promised the client. Empty = not a promise. Needs 0009. */
+  promisedOn?: ISODate | null;
 }
 
 /** The one health word shown for a client. Reasons explain it. */
@@ -672,6 +676,9 @@ export interface PriorityItem {
   plan?: string;
   /** For rule-based reminders: what "Done" means (log a contact, or finish your note). */
   flagKind?: "contact" | "note";
+  /** Rank score 0–100 (ops.ts scorePriority) and the plain reasons behind it. */
+  score?: number;
+  why?: string[];
 }
 
 /** AI briefing, operations format (version 2): a short ranked list, not paragraphs. */

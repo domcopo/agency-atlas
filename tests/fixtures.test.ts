@@ -533,7 +533,7 @@ describe("no sample data once the real database is connected", () => {
 // ---------------------------------------------------------------------------
 // Operations rules (src/lib/ops.ts): health words, flags, priorities.
 // ---------------------------------------------------------------------------
-import { boardColumns, buildPriorities, dueLabel, HEALTH_POINTS, healthScore, healthSummary, ownershipGaps } from "@/lib/ops";
+import { boardColumns, buildPriorities, dueLabel, HEALTH_POINTS, healthScore, healthSummary, myWork as myWorkRule, ownershipGaps, PRIORITY_POINTS, promiseMissed, riskAlerts, scorePriority, scoreTrend, statusNote } from "@/lib/ops";
 import type { CheckIn, ClientAction, RosterClient } from "@/lib/types";
 
 describe("operations rules", () => {
@@ -611,6 +611,95 @@ describe("operations rules", () => {
     expect(boardColumns(items, null, today).waiting.map((a) => a.id)).toEqual(["w1"]);
     expect(boardColumns(items, null, today).open).toHaveLength(0);
     expect(boardColumns(items, "o1", today).waiting).toHaveLength(0);
+  });
+
+  it("promises and blockers: notes, missed promises, and the health score", () => {
+    const missed = action({ promisedOn: "2026-11-02" });
+    const soon = action({ id: "a2", promisedOn: "2026-11-06" });
+    const blocked = action({ id: "a3", status: "blocked", blockedReason: "Needs logins (test)" });
+    expect(promiseMissed(missed, today)).toBe(true);
+    expect(promiseMissed(soon, today)).toBe(false);
+    expect(promiseMissed({ ...missed, status: "done" }, today)).toBe(false);
+    expect(statusNote(missed, today)).toMatch(/promise missed \(was Nov 2\)/);
+    expect(statusNote(soon, today)).toMatch(/promised by Nov 6/);
+    expect(statusNote(blocked, today)).toBe(" · blocked: Needs logins (test)");
+    // Missed promises cost points, capped at two.
+    const three = [missed, { ...missed, id: "m2" }, { ...missed, id: "m3" }];
+    const sc = healthScore(client(), ci(), three, today)!;
+    const promisePts = sc.factors.filter((f) => /Promise missed/.test(f.label)).reduce((n, f) => n + f.impact, 0);
+    expect(promisePts).toBe(HEALTH_POINTS.promiseMissedMax);
+    // A missed promise is treated as overdue in Today's priorities and ranks first.
+    const items = buildPriorities({ clients: [client()], actions: [soon, missed], health: new Map(), checkIns: new Map([["sam-sample", ci()]]), today });
+    expect(items[0]?.id).toBe("a_a1");
+    expect(items[0]?.when).toBe("overdue");
+    expect(items[0]?.why).toContain("promise to client missed");
+    // Blocked items get their own bucket in My Work.
+    const mine = myWorkRule(buildPriorities({ clients: [client()], actions: [blocked], health: new Map(), checkIns: new Map([["sam-sample", ci()]]), today }), undefined);
+    expect(mine.blocked.map((i) => i.id)).toEqual(["a_a3"]);
+    expect(boardColumns([blocked], undefined, today).blocked).toHaveLength(1);
+  });
+
+  it("priority score: urgency, level, client value and risk add up, capped at 100, with reasons", () => {
+    const base = { when: "today" as const, priority: "normal" as const, dueOn: today, action: undefined };
+    expect(scorePriority(base, { today }).score).toBe(PRIORITY_POINTS.today + PRIORITY_POINTS.normal);
+    const rich = scorePriority(base, { today, monthlyUsd: 750, health: { state: "at_risk", reasons: ["x"] }, drop: 20 });
+    expect(rich.score).toBe(PRIORITY_POINTS.today + PRIORITY_POINTS.normal + PRIORITY_POINTS.moneyMax + PRIORITY_POINTS.clientAtRisk + PRIORITY_POINTS.scoreDrop);
+    expect(rich.why).toEqual(["due today", "$750/mo client", "client at risk", "health down 20 pts this week"]);
+    const late = scorePriority({ when: "overdue", priority: "critical", dueOn: "2026-10-01", action: action({ promisedOn: "2026-10-01" }) }, { today, monthlyUsd: 5000, health: { state: "at_risk", reasons: [] }, drop: 50 });
+    expect(late.score).toBe(100);
+  });
+
+  it("score trend compares with about a week ago, and needs 2+ days of history", () => {
+    expect(scoreTrend([], 80, today)).toBeNull();
+    expect(scoreTrend([{ day: "2026-11-03", score: 90 }], 80, today)).toBeNull(); // only 1 day old
+    expect(scoreTrend([{ day: "2026-11-01", score: 90 }], 80, today)).toEqual({ change: -10, since: "2026-11-01" });
+    const h = [{ day: "2026-10-20", score: 95 }, { day: "2026-10-28", score: 85 }, { day: "2026-11-02", score: 70 }];
+    expect(scoreTrend(h, 60, today)).toEqual({ change: -25, since: "2026-10-28" }); // newest 7+ days old
+  });
+
+  it("risk alerts: one per client, with evidence and sources, sorted by severity", () => {
+    const risky = client({ id: "risky", dbId: "00000000-0000-0000-0000-0000000000d1", status: "paused", monthlyUsd: 900 });
+    const fine = client({ id: "fine", dbId: "00000000-0000-0000-0000-0000000000d2" });
+    const dropping = client({ id: "drop", dbId: "00000000-0000-0000-0000-0000000000d3" });
+    const scores = new Map([
+      ["risky", healthScore(risky, ci(), [], today)],
+      ["fine", healthScore(fine, ci(), [], today)],
+      ["drop", healthScore(dropping, ci(), [], today)],
+    ]);
+    const health = new Map([
+      ["risky", healthSummary(risky, ci(), [], today)],
+      ["fine", healthSummary(fine, ci(), [], today)],
+      ["drop", healthSummary(dropping, ci(), [], today)],
+    ]);
+    // "fine" and "drop" score 100 with no history: no alert. "risky" is paused and was at risk on the last two saved days.
+    const history = new Map([["00000000-0000-0000-0000-0000000000d1", [{ day: "2026-11-01", score: 50, level: "at_risk" }, { day: "2026-11-02", score: 50, level: "at_risk" }]]]);
+    const alerts = riskAlerts({ clients: [risky, fine, dropping], scores, health, history, today });
+    expect(alerts.map((a) => a.client.slug)).toEqual(["risky"]);
+    const a = alerts[0]!;
+    expect(a.severity).toBe("high"); // paused = win-back, capped at high
+    expect(a.confidence).toBe("Confirmed facts");
+    expect(a.evidence.length).toBeGreaterThan(0);
+    expect(a.evidence.every((e) => e.impact < 0 && e.source)).toBe(true);
+    expect(a.detectedOn).toBe("2026-11-01");
+    expect(a.action).toMatch(/Win-back/);
+    // An ACTIVE at-risk client paying $500+ is critical and comes before paused ones.
+    const activeRisk = client({ id: "act", dbId: "00000000-0000-0000-0000-0000000000d4", monthlyUsd: 600, lastMood: { mood: "worse", date: "2026-11-01" } });
+    const both = riskAlerts({
+      clients: [risky, activeRisk],
+      scores: new Map([["risky", scores.get("risky")!], ["act", healthScore(activeRisk, ci(), [], today)]]),
+      health: new Map([["risky", health.get("risky")!], ["act", healthSummary(activeRisk, ci(), [], today)]]),
+      history: new Map(),
+      today,
+    });
+    expect(both.map((x) => [x.client.slug, x.severity])).toEqual([["act", "critical"], ["risky", "high"]]);
+    // A drop of 15+ points alone raises a "Watch" alert.
+    const dropHist = new Map([["00000000-0000-0000-0000-0000000000d3", [{ day: "2026-10-28", score: 100, level: "healthy" }]]]);
+    const lower = new Map(scores);
+    lower.set("drop", { ...scores.get("drop")!, score: 80, level: "healthy" });
+    const d = riskAlerts({ clients: [dropping], scores: lower, health, history: dropHist, today });
+    expect(d).toHaveLength(1);
+    expect(d[0]!.severity).toBe("medium");
+    expect(d[0]!.problem).toMatch(/down 20 points since Oct 28/);
   });
 
   it("is healthy when contact is recent and nothing is open", () => {

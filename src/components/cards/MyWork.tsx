@@ -13,6 +13,7 @@ const BUCKETS: { id: WorkBucket; label: string; tone: string }[] = [
   { id: "today", label: "Today", tone: "text-amber" },
   { id: "upcoming", label: "Upcoming", tone: "" },
   { id: "waiting", label: "Waiting", tone: "text-sky" },
+  { id: "blocked", label: "Blocked", tone: "text-rose" },
 ];
 
 export function MyWork({
@@ -62,7 +63,7 @@ export function MyWork({
       </form>
       )}
 
-      <GlassCard className="grid grid-cols-4 gap-1 text-center">
+      <GlassCard className="grid grid-cols-5 gap-1 text-center">
         {BUCKETS.map((b) => (
           <a key={b.id} href={`#work-${b.id}`} className="pressable rounded-xl py-1">
             <span className={cn("block font-display text-2xl font-bold", buckets[b.id].length > 0 && b.tone)}>{buckets[b.id].length}</span>

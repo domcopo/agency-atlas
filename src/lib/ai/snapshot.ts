@@ -173,8 +173,10 @@ export function opsClientFacts(input: {
   book: Codebook;
   staff: StaffBook;
   today: string;
+  /** 0–100 score and its change over about a week (null = no history yet). */
+  score?: { value: number; change: number | null } | null;
 }) {
-  const { c, health, checkIn, open, notes, book, staff, today } = input;
+  const { c, health, checkIn, open, notes, book, staff, today, score } = input;
   const days = c.lastContact ? Math.round((Date.parse(today) - Date.parse(c.lastContact)) / 86_400_000) : null;
   return {
     code: book.codeOf.get(c.id),
@@ -184,6 +186,7 @@ export function opsClientFacts(input: {
     started: c.startDate,
     owner: c.ownerId ? (staff.codeOf.get(c.ownerId) ?? "unknown") : "none",
     health: health ? { word: health.state, reasons: health.reasons.map((r) => redact(r, book)) } : null,
+    health_score: score ? { value: score.value, change_about_7_days: score.change } : null,
     days_since_contact: days,
     check_in_every_days: checkIn.cadenceDays,
     last_mood: c.lastMood ?? null,
@@ -194,6 +197,8 @@ export function opsClientFacts(input: {
       priority: a.priority,
       status: a.status,
       due: a.dueOn,
+      promised_to_client_by: a.promisedOn ?? null,
+      blocked_by: a.status === "blocked" ? redact(clip(a.blockedReason ?? "", 200) ?? "", book) || "not given" : null,
     })),
     owner_note: c.followUp ? redact(c.followUp, book) : null,
     // GoHighLevel call/message TIMES only (no text).

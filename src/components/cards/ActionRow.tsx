@@ -47,6 +47,11 @@ export function ActionRow({
           </Link>
           <p className={cn("mt-0.5 text-xs", whenTone[item.when])}>{item.reason}</p>
           {item.plan && <p className="mt-0.5 text-[11px] text-faint">{item.plan}</p>}
+          {item.why && item.why.length > 0 && (
+            <p className="mt-0.5 text-[11px] text-violet/90" title={`Rank score ${item.score ?? 0} of 100`}>
+              Why here: {item.why.slice(0, 3).join(" · ")}
+            </p>
+          )}
           {a?.notes && <p className="mt-0.5 line-clamp-2 break-words text-xs text-muted">{a.notes}</p>}
           <p className="mt-1 flex items-center gap-1 text-[11px]">
             <UserRound aria-hidden className="size-3 text-faint" />
@@ -93,6 +98,16 @@ export function ActionRow({
                   Set
                 </button>
               </form>
+              <form action={updateAction} className="flex w-full flex-wrap items-center gap-1.5">
+                <input type="hidden" name="actionId" value={a.id} />
+                <input type="hidden" name="op" value="promise" />
+                {slug && <input type="hidden" name="slug" value={slug} />}
+                <span className="text-[11px] text-muted">Promised to client by</span>
+                <input type="date" name="promised" defaultValue={a.promisedOn ?? ""} aria-label="Promised to client by" className={input} />
+                <button type="submit" className={btn}>
+                  Save
+                </button>
+              </form>
             </div>
           </details>
           <details className="group">
@@ -118,22 +133,22 @@ export function ActionRow({
           </details>
           </>
           )}
-          {(a.kind === "issue" || statusOnly) && (
-            <form action={updateAction} className="flex gap-1.5">
+          <form action={updateAction} className="flex flex-wrap gap-1.5">
               <input type="hidden" name="actionId" value={a.id} />
               <input type="hidden" name="op" value="status" />
               {slug && <input type="hidden" name="slug" value={slug} />}
-              <select name="status" defaultValue={a.status} aria-label="Issue status" className={input}>
+              <select name="status" defaultValue={a.status} aria-label="Status" className={input}>
                 <option value="open">Open</option>
                 <option value="in_progress">In progress</option>
                 <option value="waiting">Waiting</option>
+                <option value="blocked">Blocked</option>
                 <option value="done">Done</option>
               </select>
+              <input name="reason" maxLength={200} defaultValue={a.blockedReason ?? ""} placeholder="If blocked: by what?" aria-label="What is blocking it" className={cn(input, "w-36")} />
               <button type="submit" className={btn}>
                 Update
               </button>
             </form>
-          )}
         </div>
       )}
 

@@ -19,7 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
-import { buildPriorities, healthScore, healthSummary, isSalesStage, opportunities, ownershipGaps } from "@/lib/ops";
+import { buildPriorities, healthScore, healthSummary, isSalesStage, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
@@ -429,20 +429,28 @@ export async function getMissionControl(): Promise<MissionControlData> {
 
 const ACTION_COLS = "id, client_id, lead_ghl_id, kind, title, notes, owner_staff_id, priority, status, due_on, done_at, created_at";
 
-/** All actions (open and done), read as the signed-in person. ready=false before 0006 is run. */
-export const getActions = cache(async (): Promise<{ ready: boolean; actions: ClientAction[] }> => {
-  if (!usesDatabase()) return { ready: false, actions: [] };
+/**
+ * All actions (open and done), read as the signed-in person. ready=false before 0006 is run.
+ * promises=false before 0009 (no blocked reason / promise date yet): reads still work.
+ */
+export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; actions: ClientAction[] }> => {
+  if (!usesDatabase()) return { ready: false, promises: false, actions: [] };
   const db = await createDatabaseClient();
-  const [res, team] = await Promise.all([
-    db.from("actions").select(ACTION_COLS).order("created_at", { ascending: false }).limit(2000),
-    getTeam(),
-  ]);
-  if (res.error) return { ready: false, actions: [] };
+  const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
+  const [first, team] = await Promise.all([read(`${ACTION_COLS}, blocked_reason, promised_on`), getTeam()]);
+  let res = first;
+  let promises = !first.error;
+  if (first.error) {
+    res = await read(ACTION_COLS);
+    promises = false;
+  }
+  if (res.error) return { ready: false, promises: false, actions: [] };
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
   return {
     ready: true,
-    actions: (res.data ?? []).map((r) => {
+    promises,
+    actions: ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
       const c = r.client_id ? byDbId.get(r.client_id) : undefined;
       return {
         id: r.id,
@@ -458,6 +466,8 @@ export const getActions = cache(async (): Promise<{ ready: boolean; actions: Cli
         ownerName: r.owner_staff_id ? (staffName.get(r.owner_staff_id) ?? null) : null,
         client: c?.dbId ? { slug: c.id, dbId: c.dbId, name: c.name } : null,
         leadGhlId: r.lead_ghl_id,
+        blockedReason: r.blocked_reason ?? null,
+        promisedOn: r.promised_on ?? null,
       } as ClientAction;
     }),
   };
@@ -496,12 +506,39 @@ export const getOpenDeals = cache(async (): Promise<OpenDeal[]> => {
     }));
 });
 
+/** Daily health scores, last 21 days, per client database id. ready=false before 0009. */
+export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClient: Map<string, { day: string; score: number; level: string }[]> }> => {
+  const byClient = new Map<string, { day: string; score: number; level: string }[]>();
+  if (!usesDatabase()) return { ready: false, byClient };
+  const db = await createDatabaseClient();
+  const since = new Date(Date.parse(today()) - 21 * 86_400_000).toISOString().slice(0, 10);
+  const { data, error } = await db.from("client_health_daily").select("client_id, day, score, level").gte("day", since).limit(5000);
+  if (error) return { ready: false, byClient };
+  for (const r of data ?? []) {
+    const list = byClient.get(r.client_id) ?? [];
+    list.push({ day: r.day, score: r.score, level: r.level });
+    byClient.set(r.client_id, list);
+  }
+  return { ready: true, byClient };
+});
+
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const [{ clients }, { ready, actions }, allDeals] = await Promise.all([roster(), getActions(), getOpenDeals()]);
+  const [{ clients }, { ready, promises, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
+  // 0–100 scores, week-over-week change, and one risk alert per client that may cancel.
+  const scores = new Map(clients.map((c) => [c.id, healthScore(c, checkIns.get(c.id)!, actions, t)]));
+  const trends = new Map(
+    clients.map((c) => {
+      const sc = scores.get(c.id);
+      return [c.id, sc && c.dbId ? scoreTrend(history.byClient.get(c.dbId) ?? [], sc.score, t) : null] as const;
+    }),
+  );
+  const drops = new Map<string, number>();
+  for (const [slug, tr] of trends) if (tr && tr.change < 0) drops.set(slug, -tr.change);
+  const risks = riskAlerts({ clients, scores, health, history: history.byClient, today: t });
   const deals = ready ? allDeals : [];
   const leadNames = new Map(deals.map((d) => [d.ghlId, d.name]));
   const withAction = new Set(actions.filter((a) => a.leadGhlId).map((a) => a.leadGhlId));
@@ -509,11 +546,11 @@ export const getOps = cache(async () => {
   // Only deals in selling stages count as leads (onboarding/delivery deals don't).
   const newLeads = deals.filter((d) => isSalesStage(d.stage) && (d.createdAt ?? "").slice(0, 10) >= weekAgo && !withAction.has(d.ghlId));
   const priorities: PriorityItem[] = ready
-    ? buildPriorities({ clients, actions, health, checkIns, today: t, leadNames, newLeadsWithoutAction: newLeads.length })
+    ? buildPriorities({ clients, actions, health, checkIns, today: t, leadNames, newLeadsWithoutAction: newLeads.length, drops })
     : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { ready, clients, actions, health, checkIns, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
+  return { ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -525,6 +562,7 @@ export async function getClientOps(slug: string) {
   return {
     ready: ops.ready,
     health: ops.health.get(slug) ?? null,
+    trend: ops.trends.get(slug) ?? null,
     open: mine.filter((a) => a.status !== "done"),
     done: mine.filter((a) => a.status === "done").slice(0, 5),
     priorities: ops.priorities.filter((p) => p.clientSlug === slug || p.action?.client?.slug === slug),
@@ -573,14 +611,14 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
 export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
   if (!usesDatabase()) return [];
   const db = await createDatabaseClient();
-  const { data, error } = await db
-    .from("my_work")
-    .select("id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name")
-    .order("due_on", { ascending: true, nullsFirst: false });
+  const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
+  const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
+  let { data, error } = await read(`${base}, blocked_reason, promised_on`);
+  if (error) ({ data, error } = await read(base)); // before 0009
   if (error || !Array.isArray(data)) return [];
   const t = today();
   const me = await getMember();
-  return (data as Record<string, unknown>[])
+  return (data as unknown as Record<string, unknown>[])
     .filter((r) => r.status !== "done")
     .map((r) => {
       const action: ClientAction = {
@@ -589,7 +627,7 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         title: String(r.title ?? ""),
         notes: (r.notes as string | null) ?? null,
         priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
-        status: (["open", "in_progress", "waiting", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
+        status: (["open", "in_progress", "waiting", "blocked", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
         dueOn: (r.due_on as string | null) ?? null,
         doneAt: (r.done_at as string | null) ?? null,
         createdAt: String(r.created_at ?? ""),
@@ -597,14 +635,15 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         ownerName: me?.name ?? null,
         client: null,
         leadGhlId: null,
+        blockedReason: (r.blocked_reason as string | null) ?? null,
+        promisedOn: (r.promised_on as string | null) ?? null,
       };
       const when = !action.dueOn ? "none" : action.dueOn < t ? "overdue" : action.dueOn === t ? "today" : "upcoming";
       const due = !action.dueOn ? "No due date" : when === "overdue" ? `Overdue (was due ${action.dueOn})` : when === "today" ? "Due today" : `Due ${action.dueOn}`;
-      const status = action.status === "waiting" ? " · waiting on client" : action.status === "in_progress" ? " · in progress" : "";
       return {
         id: `a_${action.id}`,
         title: r.client_name ? `${String(r.client_name)}: ${action.title}` : action.title,
-        reason: `${action.kind === "issue" ? "Issue" : "Follow-up"} · ${due}${status}`,
+        reason: `${action.kind === "issue" ? "Issue" : "Follow-up"} · ${due}${statusNote(action, t)}`,
         href: "/work#my-work",
         ownerName: action.ownerName,
         ownerId: action.ownerId,

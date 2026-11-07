@@ -1,3 +1,4 @@
+import { RiskAlerts } from "@/components/cards/RiskAlerts";
 import { BellRing, ChevronRight, HeartPulse, Layers, RotateCcw } from "lucide-react";
 import type { Metadata } from "next";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -77,6 +78,13 @@ export default async function ClientsPage() {
           <span>Match clients to GoHighLevel contacts</span>
           <span className="text-xs text-violet">For call &amp; message times →</span>
         </Link>
+      )}
+
+      {usesDatabase() && (
+        <section id="risk" className="scroll-mt-16">
+          <SectionTitle aside={`${ops.risks.length} ${ops.risks.length === 1 ? "client" : "clients"}`}>Risk alerts</SectionTitle>
+          <RiskAlerts alerts={ops.risks} historyReady={ops.historyReady} />
+        </section>
       )}
 
       {ops.ready && (

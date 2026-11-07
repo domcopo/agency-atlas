@@ -190,6 +190,9 @@ export const OPS_BRIEFING_SCHEMA = obj({
 export const OPS_BRIEFING_TASK = `Answer "What should we pay attention to today?" for the agency owner, from the data below.
 Team members are coded like T2; refer to them as [T2]. Clients are coded like C7; refer to them as [C7].
 - headline: ONE short sentence (under 25 words) on the single most important thing.
+- ranked_plan is the order computed by fixed rules (urgency, client value, client risk, promises). Follow it: your priorities should mostly be its top items, in that order. Move one only if the client facts show a clear reason, and say that reason.
+- risk_alerts are clients who may cancel (score 0-100, change over about a week). Mention the most serious ones.
+- A missed promise to a client (promised_to_client_by in the past) and blocked items (blocked_by) are urgent: name them.
 - priorities: up to 7, most urgent first. Each is one client ("client" is the code like C7; use "" only for a team-wide item).
   - reason: the specific evidence with numbers, e.g. "No contact logged in 16 days and 2 open issues", "Issue overdue by 4 days", "Owner's note: ...". Never vague ("consider checking in").
   - action: a short imperative the owner of the client can do, e.g. "Review ad results with the client". Under 12 words.

@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { recordHealthSnapshot } from "@/app/actions";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { BriefingCard } from "@/components/cards/BriefingCard";
@@ -96,6 +97,8 @@ export default async function MissionControlPage() {
       </>
     );
   }
+  // Saves today's health scores once a day (owner/manager only; checked on the server).
+  const snapshot = recordHealthSnapshot().catch(() => undefined);
   // Independent reads run at the same time (each is also shared within this request).
   const [data, summary, coach, ai, briefing, ghl, ops, contacts, team, detections, atlasQuestions] = await Promise.all([
     getMissionControl(),
@@ -111,6 +114,7 @@ export default async function MissionControlPage() {
     getAtlasQuestions(3),
   ]);
   const completions = showsSamples() ? [] : await getCompletions();
+  await snapshot;
   const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
   const overdueCount = ops.priorities.filter((p) => p.when === "overdue").length;
   const doneToday = completions.filter((x) => localDay(x.at) === localDay(new Date().toISOString())).length;
@@ -381,7 +385,7 @@ export default async function MissionControlPage() {
     { label: "New deals (month)", value: synced ? String(ghl.newThisMonth) : "–", source: synced ? "GoHighLevel" : "Not synced", href: "/sales", tone: "lime" },
     { label: "Pipeline value", value: synced ? formatUsd(ghl.open.value) : "–", source: synced ? "Open deals · not revenue" : "Not synced", href: "/sales", tone: "amber" },
     { label: "Overdue items", value: ops.ready ? String(overdueItems) : "–", source: "Follow-ups + issues", href: "/work", tone: overdueItems ? "rose" : "plain" },
-    { label: "At-risk clients", value: String(ops.counts.at_risk), source: "Health rules", href: "/clients#checkins", tone: ops.counts.at_risk ? "rose" : "plain" },
+    { label: "At-risk clients", value: String(ops.counts.at_risk), source: "Health rules", href: "/clients#risk", tone: ops.counts.at_risk ? "rose" : "plain" },
   ];
 
   return (

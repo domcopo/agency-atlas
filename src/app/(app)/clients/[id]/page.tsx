@@ -12,6 +12,7 @@ import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/l
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getActions, getAiStatus, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
+import { ScoreTrend } from "@/components/cards/RiskAlerts";
 import { setClientServices } from "@/app/actions";
 import { planLabel } from "@/lib/ops";
 import { PriorityList } from "@/components/cards/ActionRow";
@@ -214,7 +215,10 @@ export default async function ClientPage({ params }: Props) {
         <details className="glass mt-2.5 rounded-3xl px-4 py-1" open={!usesDatabase()}>
           <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between text-sm font-semibold">
             Health score details
-            <span className={`text-xs ${healthStyle[health.level].text}`}>{health.score}/100</span>
+            <span className="flex items-center gap-2">
+              <ScoreTrend trend={ops?.trend ?? null} />
+              <span className={`text-xs ${healthStyle[health.level].text}`}>{health.score}/100</span>
+            </span>
           </summary>
           <div className="space-y-3 pb-3">
             <div className="flex items-center gap-4">

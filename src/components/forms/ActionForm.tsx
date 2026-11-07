@@ -79,6 +79,11 @@ export function ActionForm({
         </label>
       </div>
       <label className="block text-xs text-muted">
+        Promised to the client by (optional)
+        <input name="promised" type="date" className={field} />
+        <span className="mt-0.5 block text-[11px] text-faint">Only if you told the client a date. Missed promises rank first.</span>
+      </label>
+      <label className="block text-xs text-muted">
         Priority
         <select name="priority" defaultValue="normal" className={field}>
           <option value="critical">Critical</option>

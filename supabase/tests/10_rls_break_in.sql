@@ -437,6 +437,47 @@ select test.expect('select * from public.ghl_contact_stats', 0, 'owner without t
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7f. Promises, blockers and health history (0009).
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set promised_on = current_date + 3 where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'manager sets a promise date');
+select test.expect($$update public.actions set status = 'blocked', blocked_reason = 'Waiting on logins (test)' where id = '00000000-0000-0000-0000-00000000ad02'$$, 1, 'manager marks an item blocked with a reason');
+select test.expect($$update public.actions set status = 'stuck' where id = '00000000-0000-0000-0000-00000000ad02'$$, -2, 'unknown statuses are still rejected');
+select test.expect($$update public.actions set blocked_reason = repeat('x', 201) where id = '00000000-0000-0000-0000-00000000ad02'$$, -2, 'blocked reason is length-limited');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level) values ('00000000-0000-0000-0000-0000000000c1', current_date, 70, 'watch')$$, 1, 'manager saves today''s score');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level) values ('00000000-0000-0000-0000-0000000000c1', current_date, 90, 'healthy') on conflict do nothing$$, 0, 'a second score the same day changes nothing');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level) values ('00000000-0000-0000-0000-0000000000c1', current_date - 30, 95, 'healthy')$$, -1, 'old history cannot be backfilled');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level, recorded_by) values ('00000000-0000-0000-0000-0000000000c1', current_date + 1, 50, 'watch', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'cannot save a score as someone else');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level) values ('00000000-0000-0000-0000-0000000000c1', current_date + 1, 150, 'watch')$$, -2, 'scores above 100 are rejected');
+select test.expect($$update public.client_health_daily set score = 100$$, -1, 'score history cannot be edited');
+select test.expect($$delete from public.client_health_daily$$, -1, 'score history cannot be deleted');
+select test.expect('select * from public.client_health_daily', 1, 'manager reads score history');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'blocked', blocked_reason = 'Need access (test)' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'developer marks their own item blocked with a reason');
+select test.expect($$update public.actions set promised_on = current_date + 30 where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot move the promise date');
+select test.expect($$select * from public.my_work where status = 'blocked' and blocked_reason is not null and promised_on is not null$$, 1, 'my_work shows blocked reason and promise date');
+select test.expect('select * from public.client_health_daily', 0, 'developer cannot read score history');
+select test.expect($$insert into public.client_health_daily (client_id, day, score, level) values ('00000000-0000-0000-0000-0000000000c1', current_date - 1, 10, 'at_risk')$$, -1, 'developer cannot save scores');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.client_health_daily', 0, 'owner without two-factor sees no score history');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.client_health_daily', -1, 'signed out cannot read score history');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

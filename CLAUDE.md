@@ -19,6 +19,7 @@ Phase 2 rules:
 - Two-factor is required: `src/proxy.ts` sends any session below `aal2` to `/mfa`, and `0002_require_two_factor.sql` adds a restrictive `aal2` rule to every table. Every new table needs one too (tests check).
 - Status (2026-11-04): connected to the user's project; real list imported (33 clients, 7 team). `private-data/` was moved to the user's Trash, so the database is now the only live copy. Two-factor is on for everyone; Supabase Pro (daily backups) since 2026-11-04.
 - Atlas OS plan (2026-11-05): `docs/ATLAS_OS_PLAN.md` = audit, rule conflicts, phases A–D. Built so far: Phase A slice 1 (`healthScore` + `HEALTH_POINTS` in ops.ts, used by `getClientHealth`; Mission Control `PulseStrip`; Work `TaskBoard` via `boardColumns`). Every later slice/phase needs approval.
+- Modules 1, 2, 5 (approved 2026-11-05): `0009` adds `actions.status` 'blocked' + `blocked_reason`, `actions.promised_on` (typed by people, never read from messages), and insert-only `client_health_daily` (only today's row can be added). Rules in ops.ts: `promiseMissed`, `statusNote`, `scorePriority`/`PRIORITY_POINTS` (rank + "why"), `scoreTrend`, `riskAlerts` (one per client, evidence + source, active before paused). `recordHealthSnapshot` (actions.ts) saves scores when owner/manager opens Home. AI briefing gets `ranked_plan` + `risk_alerts` and keeps the order. Code works before `0009` is run.
 
 ## Non-negotiable rules
 

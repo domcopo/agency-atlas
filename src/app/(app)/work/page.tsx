@@ -8,7 +8,8 @@ import { getCompletions, getDeveloperWork, getMember, getOps, getSampleDeveloper
 import { MyWork } from "@/components/cards/MyWork";
 import { TaskBoard } from "@/components/cards/TaskBoard";
 import { Fold } from "@/components/shell/Fold";
-import { boardColumns, myWork, teamLoad } from "@/lib/ops";
+import { boardColumns, myWork, promiseMissed, teamLoad } from "@/lib/ops";
+import { PriorityList } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
 import type { TeamRole, WorkPriority } from "@/lib/types";
 
@@ -46,6 +47,13 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
   const completions = await getCompletions();
   const load = teamLoad(staffList, ops.clients, ops.actions, ops.today, completions);
+  // Promises to clients and blocked items, for the chosen person (missed promises first).
+  const inView = (ownerId: string | null | undefined) => who === "all" || (who === "none" ? !ownerId : ownerId === who);
+  const promiseItems = ops.priorities
+    .filter((p) => p.action && inView(p.action.ownerId) && (p.action.status === "blocked" || p.action.promisedOn))
+    .sort((x, y) => Number(promiseMissed(y.action!, ops.today)) - Number(promiseMissed(x.action!, ops.today)) || (x.action!.promisedOn ?? "9999").localeCompare(y.action!.promisedOn ?? "9999"));
+  const missedCount = promiseItems.filter((p) => promiseMissed(p.action!, ops.today)).length;
+  const blockedCount = promiseItems.filter((p) => p.action!.status === "blocked").length;
   const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
   const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
   const orders = getWorkOrders();
@@ -86,6 +94,24 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           </p>
         )}
       </div>
+
+      {ops.ready && (
+        <Fold
+          label="Promises and blockers"
+          title="Promises & blockers"
+          defaultOpen={missedCount + blockedCount > 0}
+          summary={
+            !ops.promises
+              ? "Turns on after one setup step (0009 SQL)."
+              : promiseItems.length
+                ? `${promiseItems.filter((p) => p.action!.promisedOn).length} promised to clients · ${blockedCount} blocked`
+                : "No promises or blocked items. Add a promise date when you tell a client a date."
+          }
+          badge={missedCount ? <span className="font-semibold text-rose">{missedCount} missed</span> : undefined}
+        >
+          <PriorityList items={promiseItems} staff={staffList} canEdit={Boolean(member)} limit={6} empty="Nothing promised or blocked right now." />
+        </Fold>
+      )}
 
       {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} done={doneForView} />}
 

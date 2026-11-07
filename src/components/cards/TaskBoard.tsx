@@ -13,6 +13,7 @@ const COLUMNS: { id: BoardColumn; label: string; tone: string }[] = [
   { id: "open", label: "Open", tone: "text-ink" },
   { id: "in_progress", label: "In progress", tone: "text-teal" },
   { id: "waiting", label: "Waiting on client", tone: "text-amber" },
+  { id: "blocked", label: "Blocked", tone: "text-rose" },
   { id: "done", label: "Done · 7 days", tone: "text-lime" },
 ];
 
@@ -58,6 +59,14 @@ export function TaskBoard({
                               {who ? `${who} · ` : ""}
                               {a.kind === "issue" ? "Issue" : "Follow-up"}
                             </p>
+                            {a.status === "blocked" && (
+                              <p className="mt-0.5 text-[11px] text-rose">Blocked{a.blockedReason ? `: ${a.blockedReason}` : " (no reason given)"}</p>
+                            )}
+                            {a.promisedOn && a.status !== "done" && (
+                              <p className={cn("mt-0.5 text-[11px]", a.promisedOn < today ? "font-semibold text-rose" : "text-amber")}>
+                                {a.promisedOn < today ? "Promise missed" : "Promised to client"} · {a.promisedOn}
+                              </p>
+                            )}
                             <p className="mt-0.5 text-[11px]">
                               {col.id === "done" ? (
                                 <span className="text-faint">Done {a.doneAt ? a.doneAt.slice(0, 10) : ""}</span>
@@ -71,18 +80,20 @@ export function TaskBoard({
                           </div>
                         </div>
                         {canEdit && (
-                          <form action={updateAction} className="mt-2 flex gap-1.5">
+                          <form action={updateAction} className="mt-2 flex flex-wrap gap-1.5">
                             <input type="hidden" name="actionId" value={a.id} />
                             <input type="hidden" name="op" value="status" />
                             <select name="status" defaultValue={a.status} aria-label={`Move "${a.title}" to`} className={input}>
                               <option value="open">Open</option>
                               <option value="in_progress">In progress</option>
                               <option value="waiting">Waiting on client</option>
+                              <option value="blocked">Blocked</option>
                               <option value="done">Done</option>
                             </select>
                             <button type="submit" className={btn}>
                               Move
                             </button>
+                            <input name="reason" maxLength={200} defaultValue={a.blockedReason ?? ""} placeholder="If blocked: by what?" aria-label={`What is blocking "${a.title}"`} className={cn(input, "basis-full")} />
                           </form>
                         )}
                       </li>

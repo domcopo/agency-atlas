@@ -10,7 +10,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, type AiResult } from "@/lib/ai/client";
-import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, restoreOpsBriefing, restoreProfile } from "@/lib/ai/snapshot";
+import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, restoreOpsBriefing, restoreProfile } from "@/lib/ai/snapshot";
 import {
   getAiStatus,
   getAtlasQuestions,
@@ -69,10 +69,12 @@ function anyDate(value: string): string | null {
 
 const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const PRIORITIES = ["critical", "high", "normal", "low"] as const;
-const STATUSES = ["open", "in_progress", "waiting", "done"] as const;
+const STATUSES = ["open", "in_progress", "waiting", "blocked", "done"] as const;
 const CONTACT_KINDS = ["check_in", "call", "message", "email", "meeting", "note"] as const;
 const oneOf = <T extends string>(list: readonly T[], v: string): T | null => (list.includes(v as T) ? (v as T) : null);
 const MISSING_TABLE = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
+/** A column added by a later setup step isn't there yet. */
+const MISSING_COLUMN = new Set(["42703", "PGRST204"]);
 
 // ---------------------------------------------------------------------------
 // Sign in / out
@@ -244,11 +246,12 @@ async function logActivity(db: Db, row: { client_id: string | null; lead_ghl_id?
 
 async function saveAction(
   db: Db,
-  row: { client_id?: string; lead_ghl_id?: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null },
+  row: { client_id?: string; lead_ghl_id?: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null; promised_on?: string },
 ): Promise<{ error?: string }> {
   const { data, error } = await db.from("actions").insert(row).select("id").single();
   if (error || !data) {
     console.warn(`Action refused: ${error?.code}`);
+    if (row.promised_on && MISSING_COLUMN.has(error?.code ?? "")) return { error: "Promise dates need one setup step first (0009 SQL)." };
     return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
   }
   await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : "Next action added"}: ${row.title}` });
@@ -271,14 +274,17 @@ export async function createAction(_prev: { error?: string; ok?: boolean } | und
   const notes = text(form, "notes", 500);
   const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
   const dueRaw = text(form, "due", 10);
+  const promisedRaw = text(form, "promised", 10);
   const ownerRaw = text(form, "ownerId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
   if (!title) return { error: "Say what needs to happen." };
   const due = dueRaw ? anyDate(dueRaw) : null;
   if (dueRaw && !due) return { error: "Pick a real due date." };
+  const promised = promisedRaw ? anyDate(promisedRaw) : null;
+  if (promisedRaw && !promised) return { error: "Pick a real promise date." };
   const db = await createDatabaseClient();
   if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
-  const saved = await saveAction(db, { client_id: clientId, kind, title, notes: notes || null, owner_staff_id: ownerRaw || null, priority, due_on: due });
+  const saved = await saveAction(db, { client_id: clientId, kind, title, notes: notes || null, owner_staff_id: ownerRaw || null, priority, due_on: due, ...(promised ? { promised_on: promised } : {}) });
   if (saved.error) return { error: saved.error };
   refreshOps(slug);
   return { ok: true };
@@ -381,7 +387,7 @@ export async function updateAction(form: FormData) {
   const id = text(form, "actionId", 40);
   const op = text(form, "op", 12);
   if (!isUuid(id)) return;
-  // Developers may only change the status of their own items (the database enforces this too).
+  // Developers may only change the status of their own items, and say why it's blocked (the database enforces this too).
   if (me.role === "developer" && op !== "done" && op !== "status") return;
   const db = await createDatabaseClient();
   const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, title, status").eq("id", id).maybeSingle();
@@ -423,8 +429,19 @@ export async function updateAction(form: FormData) {
     const status = oneOf(STATUSES, text(form, "status", 12));
     if (!status) return;
     patch = status === "done" ? { status, done_at: new Date().toISOString() } : { status, done_at: null };
-    summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "done" ? "Done" : "Open"}: ${a.title}`;
+    // Blocked: keep a short reason. Other statuses clear it.
+    const reason = text(form, "reason", 200);
+    patch.blocked_reason = status === "blocked" ? reason || null : null;
+    summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "blocked" ? "Blocked" : status === "done" ? "Done" : "Open"}: ${a.title}`;
     kind = status === "done" ? "action_done" : "action_status";
+  } else if (op === "promise") {
+    if (me.role === "developer") return;
+    const raw = text(form, "promised", 10);
+    const promised = raw ? anyDate(raw) : null;
+    if (raw && !promised) return;
+    patch = { promised_on: promised };
+    summary = promised ? `Promised to client by ${promised}: ${a.title}` : `Promise date removed: ${a.title}`;
+    kind = "action_rescheduled";
   } else if (op === "priority") {
     const priority = oneOf(PRIORITIES, text(form, "priority", 10));
     if (!priority) return;
@@ -432,7 +449,13 @@ export async function updateAction(form: FormData) {
     summary = `Priority ${priority}: ${a.title}`;
   }
   if (!patch) return;
-  const { error } = await db.from("actions").update(patch).eq("id", id);
+  let { error } = await db.from("actions").update(patch).eq("id", id);
+  // Before 0009 there's no blocked_reason column: save the status change without it.
+  if (error && MISSING_COLUMN.has(error.code ?? "") && "blocked_reason" in patch) {
+    const { blocked_reason: _skip, ...rest } = patch;
+    void _skip;
+    ({ error } = await db.from("actions").update(rest).eq("id", id));
+  }
   if (error) {
     console.warn(`Action update refused: ${error.code}`);
     return;
@@ -860,8 +883,30 @@ export async function generateBriefing(): Promise<{ error?: string; message?: st
         book,
         staff,
         today,
+        score: ops.scores.get(c.id) ? { value: ops.scores.get(c.id)!.score, change: ops.trends.get(c.id)?.change ?? null } : null,
       }),
     ),
+    // The order computed by fixed rules (urgency, money, client risk, promises). The AI keeps it.
+    ranked_plan: ops.priorities.slice(0, 12).map((p, i) => {
+      const slug = p.clientSlug ?? p.action?.client?.slug;
+      return {
+        rank: i + 1,
+        score: p.score ?? 0,
+        why: p.why ?? [],
+        client: slug ? (book.codeOf.get(slug) ?? null) : null,
+        // Saved items: just their title. Lead items never include the deal (person) name.
+        item: redact(p.action ? p.action.title : p.title, book),
+        type: p.action ? (p.action.leadGhlId ? "lead_follow_up" : p.action.kind) : "reminder",
+        owner: p.ownerId ? (staff.codeOf.get(p.ownerId) ?? "unknown") : "none",
+      };
+    }),
+    risk_alerts: ops.risks.slice(0, 8).map((r) => ({
+      client: book.codeOf.get(r.client.slug) ?? null,
+      severity: r.severity,
+      score: r.score,
+      change: r.trend?.change ?? null,
+      problem: redact(r.problem, book),
+    })),
     team: [...staff.codeOf.entries()].map(([id, code]) => ({
       code,
       open_items: open.filter((a) => a.ownerId === id).length,
@@ -934,4 +979,32 @@ export async function setAiBudget(_prev: { error?: string; ok?: boolean } | unde
   if (error) return { error: "Couldn't save the budget." };
   revalidatePath("/", "layout");
   return { ok: true };
+}
+
+/**
+ * Saves today's 0–100 health score for every current client, once a day (later calls
+ * that day change nothing). Run when the owner or a manager opens Home. Takes no input:
+ * the scores are worked out here on the server from the database. Quietly does nothing
+ * before 0009 is run. The database only accepts today's rows (history can't be faked).
+ */
+export async function recordHealthSnapshot(): Promise<void> {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const ops = await getOps();
+  if (!ops.historyReady) return;
+  const day = getToday();
+  const missing = new Set(ops.clients.filter((c) => c.dbId && ops.scores.get(c.id)).map((c) => c.dbId!));
+  // Skip clients that already have today's row (no write at all on most page loads).
+  const { data: done } = await (await createDatabaseClient()).from("client_health_daily").select("client_id").eq("day", day);
+  for (const r of done ?? []) missing.delete(r.client_id);
+  const rows = ops.clients
+    .filter((c) => c.dbId && missing.has(c.dbId))
+    .map((c) => {
+      const sc = ops.scores.get(c.id)!;
+      return { client_id: c.dbId!, day, score: sc.score, level: sc.level, recorded_by: me.userId };
+    });
+  if (!rows.length) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("client_health_daily").upsert(rows, { onConflict: "client_id,day", ignoreDuplicates: true });
+  if (error) console.warn(`Health history not saved: ${error.code}`);
 }
