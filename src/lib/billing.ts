@@ -290,3 +290,31 @@ export function unmatchedGroups(records: BillingRecord[], state: BillingState): 
   }
   return [...groups.values()].map((g) => ({ contactId: g.contactId, label: g.label, count: g.count, amountUsd: usd(g.cents) })).sort((a, b) => b.amountUsd - a.amountUsd);
 }
+
+// ---------------------------------------------------------------------------
+// Match suggestions (shown only; the owner confirms each one with a tap)
+// ---------------------------------------------------------------------------
+
+/** Lowercase, no accents, letters and digits only, single spaces. */
+export function normalizeName(s: string): string {
+  return s
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * A client whose name is EXACTLY the name on the invoice (ignoring capitals, accents and
+ * punctuation), and only when exactly one client has that name. Anything less certain
+ * ("John" vs "Jack", a business name vs a person) gets no suggestion. Nothing is saved
+ * until the owner taps to confirm.
+ */
+export function suggestBillingMatch<T extends { slug: string; name: string }>(label: string | null, clients: T[]): T | null {
+  if (!label) return null;
+  const want = normalizeName(label);
+  if (want.length < 4 || !want.includes(" ")) return null; // a single word is too vague
+  const hits = clients.filter((c) => normalizeName(c.name) === want);
+  return hits.length === 1 ? hits[0]! : null;
+}

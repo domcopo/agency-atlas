@@ -1582,7 +1582,8 @@ export async function syncBilling(): Promise<{ error?: string; message?: string 
   // History line: counts only, never money (managers can read the history).
   await logActivity(db, { client_id: null, kind: "billing_sync", summary: `Billing refreshed: ${rows.length} records read, ${unmatched} unmatched${read.unknown ? `, ${read.unknown} skipped (unrecognised)` : ""}` });
   revalidatePath("/", "layout");
-  return { message: `Read ${read.invoicesRead} invoices and ${read.paymentsRead} payments. ${unmatched} unmatched${read.unknown ? `, ${read.unknown} skipped because Atlas didn't recognise their status` : ""}. Nothing in GoHighLevel was changed.` };
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return { message: `Read ${plural(read.invoicesRead, "invoice")} and ${plural(read.paymentsRead, "payment")}. ${unmatched} unmatched${read.unknown ? `, ${read.unknown} skipped because Atlas didn't recognise their status` : ""}. Nothing in GoHighLevel was changed.` };
 }
 
 /** Match a GoHighLevel billing contact to a client, by hand. Owner only. */

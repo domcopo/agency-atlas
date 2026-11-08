@@ -5,7 +5,7 @@ import { BillingChip } from "@/components/cards/BillingChip";
 import { MatchBillingForm, RefreshBillingButton } from "@/components/forms/BillingForms";
 import { Fold } from "@/components/shell/Fold";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { BILLING_RULES, stateNote } from "@/lib/billing";
+import { BILLING_RULES, stateNote, suggestBillingMatch } from "@/lib/billing";
 import { getBilling, getRoster } from "@/lib/data-source";
 import { formatUsdExact } from "@/lib/format";
 
@@ -42,6 +42,11 @@ export default async function BillingPage() {
   const clients = (await getRoster()).filter((c) => c.dbId && c.status !== "incomplete_expired").map((c) => ({ slug: c.id, name: c.name }));
   const chips = [...billing.byClient.entries()].filter(([, b]) => b.chip && b.chip !== "paid");
   const nameOf = new Map(clients.map((c) => [c.slug, c.name]));
+  // Exact, unique name matches are offered first; the owner still confirms each one.
+  const unmatched = billing.unmatched
+    .map((u) => ({ ...u, suggested: u.contactId ? suggestBillingMatch(u.label, clients) : null }))
+    .sort((a, b) => Number(Boolean(b.suggested)) - Number(Boolean(a.suggested)));
+  const suggestedCount = unmatched.filter((u) => u.suggested).length;
 
   return (
     <>
@@ -121,10 +126,15 @@ export default async function BillingPage() {
         </>
       )}
 
-      <SectionTitle>Unmatched {billing.unmatched.length ? `(${billing.unmatched.length})` : ""}</SectionTitle>
-      {billing.unmatched.length ? (
+      <SectionTitle>Unmatched {unmatched.length ? `(${unmatched.length})` : ""}</SectionTitle>
+      {suggestedCount > 0 && (
+        <p className="mb-2 px-1 text-xs text-muted">
+          <span className="font-semibold text-violet">{suggestedCount} have the exact same name as one of your clients.</span> Check each and tap &ldquo;Yes, that&apos;s them&rdquo;.
+        </p>
+      )}
+      {unmatched.length ? (
         <ul className="space-y-2">
-          {billing.unmatched.map((u, i) => (
+          {unmatched.map((u, i) => (
             <li key={u.contactId ?? `none-${i}`} className="glass rounded-2xl p-3 text-sm">
               <p>
                 <span className="font-semibold">{u.label ?? "No name on it"}</span>{" "}
@@ -133,7 +143,7 @@ export default async function BillingPage() {
                 </span>
               </p>
               {u.contactId ? (
-                <MatchBillingForm contactId={u.contactId} clients={clients} />
+                <MatchBillingForm contactId={u.contactId} clients={clients} suggested={u.suggested} />
               ) : (
                 <p className="mt-1 text-[11px] text-faint">GoHighLevel didn&apos;t say which contact this is, so it can&apos;t be matched here.</p>
               )}
@@ -143,7 +153,7 @@ export default async function BillingPage() {
       ) : (
         <p className="glass rounded-2xl px-4 py-3 text-sm text-muted">{state.known ? "Everything is matched to a client." : "Nothing to match yet."}</p>
       )}
-      <p className="mt-1 px-1 text-[11px] text-faint">Matching is by hand only: Atlas never guesses who an invoice belongs to. Once matched, the name on the invoice is cleared.</p>
+      <p className="mt-1 px-1 text-[11px] text-faint">Atlas never matches on its own: suggestions appear only when the name is exactly the same as one client&apos;s, and you confirm each. Once matched, the name on the invoice is cleared.</p>
 
       <div className="mt-4">
         <RefreshBillingButton disabled={!billing.configured || !billing.tablesReady} />

@@ -25,7 +25,50 @@ export function RefreshBillingButton({ disabled }: { disabled?: boolean }) {
   );
 }
 
-export function MatchBillingForm({ contactId, clients }: { contactId: string; clients: { slug: string; name: string }[] }) {
+/**
+ * Match by hand. When Atlas found a client with exactly the same name, it offers that one
+ * first ("Yes, that's them"); nothing is saved until the owner taps.
+ */
+export function MatchBillingForm({
+  contactId,
+  clients,
+  suggested,
+}: {
+  contactId: string;
+  clients: { slug: string; name: string }[];
+  suggested?: { slug: string; name: string } | null;
+}) {
+  if (!suggested) return <PickClientForm contactId={contactId} clients={clients} />;
+  return (
+    <div className="mt-2 space-y-1.5">
+      <ConfirmSuggestion contactId={contactId} suggested={suggested} />
+      <details>
+        <summary className="pressable inline-flex min-h-10 cursor-pointer list-none items-center text-xs text-muted underline-offset-2 hover:underline">Someone else?</summary>
+        <PickClientForm contactId={contactId} clients={clients} />
+      </details>
+    </div>
+  );
+}
+
+function ConfirmSuggestion({ contactId, suggested }: { contactId: string; suggested: { slug: string; name: string } }) {
+  const [state, action, pending] = useActionState(matchBillingContact, undefined);
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-2 rounded-xl border border-violet/30 bg-violet/5 p-2">
+      <input type="hidden" name="contact_id" value={contactId} />
+      <input type="hidden" name="client" value={suggested.slug} />
+      <span className="min-w-0 flex-1 text-xs">
+        Same name as your client <span className="font-semibold">{suggested.name}</span>
+      </span>
+      <button type="submit" disabled={pending || Boolean(state?.message)} className="pressable min-h-11 rounded-xl bg-violet-deep px-3 text-xs font-semibold disabled:opacity-60">
+        {pending ? "Matching…" : state?.message ? "Matched" : "Yes, that's them"}
+      </button>
+      {state?.message && <p role="status" className="w-full text-xs text-lime">{state.message}</p>}
+      {state?.error && <p role="alert" className="w-full text-xs text-rose">{state.error}</p>}
+    </form>
+  );
+}
+
+function PickClientForm({ contactId, clients }: { contactId: string; clients: { slug: string; name: string }[] }) {
   const [state, action, pending] = useActionState(matchBillingContact, undefined);
   return (
     <form action={action} className="mt-2 flex flex-wrap items-center gap-2">

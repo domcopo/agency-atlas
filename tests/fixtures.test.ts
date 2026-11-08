@@ -5,7 +5,7 @@
 // - untrusted message text can't change anything
 
 import { describe, expect, it } from "vitest";
-import { billingState, billingTotals, clientBilling, collectedBetween, invoiceStatus, matchClient, overdueDetail, paymentAlerts, paymentStatus, planVsCollected, safeLabel, toCents, unmatchedGroups, type BillingRecord, type BillingSync } from "@/lib/billing";
+import { billingState, billingTotals, clientBilling, collectedBetween, invoiceStatus, matchClient, overdueDetail, paymentAlerts, paymentStatus, planVsCollected, safeLabel, suggestBillingMatch, toCents, unmatchedGroups, type BillingRecord, type BillingSync } from "@/lib/billing";
 import { demoRosterRaw } from "@/fixtures/demo-roster";
 import { missionControl as sampleHome } from "@/fixtures/mission-control";
 import {
@@ -1412,5 +1412,22 @@ describe("billing, read-only and owner-only (0015)", () => {
     const later = clientBilling([rec({ providerId: "late", dueOn: "2026-09-30", status: "overdue" })], state, today);
     expect(paymentAlerts(later)[0]?.severity).toBe("urgent"); // 39 days late
     expect(unmatchedGroups(records, state)).toEqual([{ contactId: "contactB2", label: "Sample Bakery (fictional)", count: 1, amountUsd: 300 }]);
+  });
+
+  it("suggests a client only on an exact, unique name (the owner still confirms)", () => {
+    const clients = [
+      { slug: "pat-example", name: "Pat Example (fictional)" },
+      { slug: "jo-sample", name: "José Sample" },
+      { slug: "jack-test", name: "Jack Test" },
+      { slug: "twin-1", name: "Sam Twin" },
+      { slug: "twin-2", name: "Sam  twin" },
+    ];
+    expect(suggestBillingMatch("pat example (FICTIONAL)", clients)?.slug).toBe("pat-example");
+    expect(suggestBillingMatch("Jose Sample", clients)?.slug).toBe("jo-sample"); // accents ignored
+    expect(suggestBillingMatch("John Test", clients)).toBeNull(); // close is not enough
+    expect(suggestBillingMatch("Jack Test LLC", clients)).toBeNull(); // extra words: no
+    expect(suggestBillingMatch("Sam Twin", clients)).toBeNull(); // two clients share it: no
+    expect(suggestBillingMatch("Pat", clients)).toBeNull(); // one word: too vague
+    expect(suggestBillingMatch(null, clients)).toBeNull();
   });
 });
