@@ -1,3 +1,5 @@
+import { BillingChip } from "@/components/cards/BillingChip";
+import Link from "next/link";
 import { AlertTriangle, BellRing, CalendarDays, Clock, Layers } from "lucide-react";
 import type { Metadata } from "next";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -10,7 +12,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getActions, getAiStatus, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getActions, getAiStatus, getBilling, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
 import { ScoreTrend } from "@/components/cards/RiskAlerts";
 import { setClientServices } from "@/app/actions";
@@ -55,6 +57,8 @@ export default async function ClientPage({ params }: Props) {
   const nextAction = [...(ops?.open ?? [])].sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))[0] ?? null;
   const isCurrent = c.status !== "canceled" && c.status !== "incomplete_expired";
   const timeline = await getClientTimeline(c.id);
+  // Owner only: null for everyone else (and the database returns them nothing).
+  const pay = (await getBilling())?.byClient.get(c.id) ?? null;
 
   return (
     <>
@@ -65,6 +69,14 @@ export default async function ClientPage({ params }: Props) {
         backLabel="Clients"
         action={<StatusPill status={c.status} />}
       />
+
+      {pay?.chip && (
+        <Link href="/billing" className="mb-4 flex items-center gap-2 rounded-2xl border border-line bg-white/[0.03] p-3 text-sm">
+          <BillingChip chip={pay.chip} />
+          <span className="min-w-0 flex-1 text-muted">{pay.detail ?? "Payments are up to date."}</span>
+          <span className="text-[11px] text-faint">Owner only</span>
+        </Link>
+      )}
 
       {c.check && (
         <div className="mb-4 flex gap-3 rounded-2xl border border-amber/35 bg-amber/8 p-3.5 text-sm">

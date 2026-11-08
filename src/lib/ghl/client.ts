@@ -11,12 +11,20 @@
 // 5. Everything GHL returns is untrusted data: it's checked, trimmed, and treated
 //    as plain text. It can never control what the app does.
 //
+// 6. Billing (0015, owner only) uses a SEPARATE token (GHL_BILLING_READONLY_TOKEN,
+//    scopes invoices.readonly + payments/transactions.readonly), and only for the two
+//    billing addresses below. The main token is never used for billing, and the billing
+//    token is never used for anything else. Billing keeps only amounts, dates, statuses
+//    and IDs: never card details, emails, phones, addresses, notes or line items.
+//
 // guardrails.test.ts fails if any other file contacts GHL or makes network calls.
+
+import { BILLING_RULES, invoiceStatus, paymentStatus, safeLabel, toCents, type BillingKind, type BillingStatus } from "@/lib/billing";
 
 const BASE = "https://services.leadconnectorhq.com";
 
 /** Every address this app may read, with the API version GHL expects for it. */
-const ALLOWED: { pattern: RegExp; version: string }[] = [
+const ALLOWED: { pattern: RegExp; version: string; token?: "billing" }[] = [
   { pattern: /^\/locations\/[A-Za-z0-9]+$/, version: "2021-07-28" },
   { pattern: /^\/opportunities\/pipelines$/, version: "2021-07-28" },
   { pattern: /^\/opportunities\/search$/, version: "2021-07-28" },
@@ -25,6 +33,9 @@ const ALLOWED: { pattern: RegExp; version: string }[] = [
   // Phase 6: conversation TIMES only (scopes conversations.readonly + conversations/message.readonly).
   { pattern: /^\/conversations\/search$/, version: "2021-04-15" },
   { pattern: /^\/conversations\/[A-Za-z0-9]{6,40}\/messages$/, version: "2021-04-15" },
+  // Billing (0015): the billing token only. Version to confirm on the first live read.
+  { pattern: /^\/invoices\/$/, version: "2021-07-28", token: "billing" },
+  { pattern: /^\/payments\/transactions$/, version: "2021-07-28", token: "billing" },
 ];
 
 const MAX_PAGES = 20; // 20 x 100 = 2,000 opportunities, plenty for one agency pipeline
@@ -48,10 +59,20 @@ function refuse(reason: string): null {
 }
 
 function settings(): { token: string; locationId: string } | null {
-  const token = process.env.GHL_READONLY_TOKEN?.trim();
+  return checkSettings("GHL_READONLY_TOKEN", process.env.GHL_READONLY_TOKEN?.trim());
+}
+
+/** The billing token (owner-only billing). Separate, so billing can be switched off on its own. */
+function billingSettings(): { token: string; locationId: string } | null {
+  const token = process.env.GHL_BILLING_READONLY_TOKEN?.trim();
+  if (!token) return null; // not connected: billing simply shows "Unknown"
+  return checkSettings("GHL_BILLING_READONLY_TOKEN", token);
+}
+
+function checkSettings(name: string, token: string | undefined): { token: string; locationId: string } | null {
   const locationId = process.env.GHL_LOCATION_ID?.trim();
-  if (!token && !locationId) return refuse("neither GHL_READONLY_TOKEN nor GHL_LOCATION_ID is set");
-  if (!token) return refuse("GHL_READONLY_TOKEN is missing or empty");
+  if (!token && !locationId) return refuse(`neither ${name} nor GHL_LOCATION_ID is set`);
+  if (!token) return refuse(`${name} is missing or empty`);
   if (!locationId) return refuse("GHL_LOCATION_ID is missing or empty");
   // Private Integration tokens look like "pit-" + an ID. Anything else is refused.
   if (!/^pit-[A-Za-z0-9_-]{20,120}$/.test(token)) {
@@ -67,12 +88,17 @@ export function isGhlConfigured(): boolean {
   return settings() !== null;
 }
 
+export function isGhlBillingConfigured(): boolean {
+  return billingSettings() !== null;
+}
+
 /** The single function that sends requests. GET only, allowlisted paths only. */
 async function get(path: string, query: Record<string, string>): Promise<unknown> {
-  const s = settings();
-  if (!s) throw new GhlError("GoHighLevel isn't set up on this Mac.", 0);
   const rule = ALLOWED.find((r) => r.pattern.test(path));
   if (!rule) throw new GhlError("Blocked: that GoHighLevel address isn't on the read-only list.", 0);
+  // Each address uses exactly one token: billing addresses the billing token, the rest the main one.
+  const s = rule.token === "billing" ? billingSettings() : settings();
+  if (!s) throw new GhlError(rule.token === "billing" ? "Billing isn't connected (no billing token)." : "GoHighLevel isn't set up on this Mac.", 0);
 
   const url = new URL(path, BASE);
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
@@ -370,4 +396,145 @@ export async function readContactActivity(contactId: string): Promise<GhlContact
     all.push(...list(box ? box.messages : null));
   }
   return summarizeMessages(all);
+}
+
+// ---------------------------------------------------------------------------
+// Billing (0015): invoices and payments, minimum fields only. Owner only.
+// Everything else in GoHighLevel's answer (contact details, card details, items,
+// notes, business details) is never read.
+// ---------------------------------------------------------------------------
+
+export interface GhlBillingRow {
+  kind: BillingKind;
+  providerId: string;
+  contactId: string | null;
+  /** Name on the invoice/payment, kept only while unmatched (cleaned; no emails or phones). */
+  label: string | null;
+  amountCents: number;
+  amountDueCents: number | null;
+  currency: string;
+  status: BillingStatus;
+  issuedOn: string | null;
+  dueOn: string | null;
+  paidOn: string | null;
+  /** Payments only: the invoice it paid, when GoHighLevel says so. */
+  invoiceId: string | null;
+}
+
+export interface GhlBillingRead {
+  rows: GhlBillingRow[];
+  invoicesRead: number;
+  paymentsRead: number;
+  /** Records with a status or currency Atlas doesn't recognise (skipped, never guessed). */
+  unknown: number;
+}
+
+const cleanDay = (v: unknown) => cleanTime(v)?.slice(0, 10) ?? null;
+const cleanContact = (v: unknown) => (typeof v === "string" && /^[A-Za-z0-9]{6,40}$/.test(v) ? v : null);
+const cleanCurrency = (v: unknown) => (typeof v === "string" && /^[A-Za-z]{3}$/.test(v) ? v.toUpperCase() : null);
+
+/** Turns raw invoices into minimal records. Exported for tests. */
+export function parseInvoices(raw: unknown[], today: string): { rows: GhlBillingRow[]; unknown: number } {
+  const rows: GhlBillingRow[] = [];
+  let unknown = 0;
+  for (const inv of raw.filter(isObj)) {
+    if (inv.liveMode === false) continue; // test-mode invoices aren't real money
+    const id = cleanId(inv._id);
+    const total = toCents(inv.total);
+    const due = inv.amountDue === undefined ? null : toCents(inv.amountDue);
+    const currency = cleanCurrency(inv.currency);
+    const dueOn = cleanDay(inv.dueDate);
+    const status = invoiceStatus(typeof inv.status === "string" ? inv.status : null, due, dueOn, today);
+    if (status === "skip") continue;
+    if (!id || total === null || !currency || status === "unknown") {
+      unknown += 1;
+      continue;
+    }
+    // Only the contact's ID and name are read from the contact block; nothing else in it.
+    const who = isObj(inv.contactDetails) ? inv.contactDetails : null;
+    rows.push({
+      kind: "invoice",
+      providerId: id,
+      contactId: who ? cleanContact(who.id) : null,
+      label: safeLabel(who ? cleanText(who.name, 80) : null),
+      amountCents: total,
+      amountDueCents: status === "paid" ? 0 : due,
+      currency,
+      status,
+      issuedOn: cleanDay(inv.issueDate),
+      dueOn,
+      paidOn: null,
+      invoiceId: null,
+    });
+  }
+  return { rows, unknown };
+}
+
+/** Turns raw payment transactions into minimal records. Exported for tests. */
+export function parsePayments(raw: unknown[]): { rows: GhlBillingRow[]; unknown: number } {
+  const rows: GhlBillingRow[] = [];
+  let unknown = 0;
+  for (const t of raw.filter(isObj)) {
+    if (t.liveMode === false) continue;
+    const id = cleanId(t._id);
+    const amount = toCents(t.amount);
+    const refunded = toCents(t.amountRefunded) ?? 0;
+    const currency = cleanCurrency(t.currency);
+    const status = paymentStatus(typeof t.status === "string" ? t.status : null, refunded);
+    if (status === "skip") continue;
+    if (!id || amount === null || !currency || status === "unknown") {
+      unknown += 1;
+      continue;
+    }
+    const at = cleanDay(t.createdAt);
+    rows.push({
+      kind: "payment",
+      providerId: id,
+      contactId: cleanContact(t.contactId),
+      label: safeLabel(cleanText(t.contactName, 80)),
+      amountCents: amount,
+      amountDueCents: null,
+      currency,
+      status,
+      issuedOn: at,
+      dueOn: null,
+      paidOn: status === "paid" ? (cleanDay(t.fulfilledAt) ?? at) : null,
+      invoiceId: t.entityType === "invoice" ? cleanId(t.entityId) : null,
+    });
+  }
+  return { rows, unknown };
+}
+
+const BILLING_PAGE = 100;
+const BILLING_MAX_PAGES = 10;
+
+async function readPages(path: string, query: Record<string, string>, key: "invoices" | "data"): Promise<unknown[]> {
+  const all: unknown[] = [];
+  for (let page = 0; page < BILLING_MAX_PAGES; page++) {
+    if (page > 0) await pause(150);
+    const data = await get(path, { ...query, limit: String(BILLING_PAGE), offset: String(page * BILLING_PAGE) });
+    const batch = list(isObj(data) ? data[key] : null);
+    all.push(...batch);
+    if (batch.length < BILLING_PAGE) return all;
+  }
+  // A partial read would make unseen invoices look settled, so stop instead.
+  throw new GhlError("Too many billing records to read in one go. Nothing was changed.", 0);
+}
+
+/** Reads invoices and recent payments (read-only). Paid dates come from the linked payment. */
+export async function readBilling(today: string): Promise<GhlBillingRead> {
+  const s = billingSettings();
+  if (!s) throw new GhlError("Billing isn't connected (no billing token).", 0);
+  const base = { altId: s.locationId, altType: "location" };
+  const invoicesRaw = await readPages("/invoices/", base, "invoices");
+  const start = new Date(Date.parse(`${today}T00:00:00Z`) - BILLING_RULES.paymentsLookbackDays * 86_400_000).toISOString().slice(0, 10);
+  const paymentsRaw = await readPages("/payments/transactions", { ...base, startAt: start, endAt: today }, "data");
+  const inv = parseInvoices(invoicesRaw, today);
+  const pay = parsePayments(paymentsRaw);
+  const paidOn = new Map<string, string>();
+  for (const p of pay.rows) {
+    if (p.status === "paid" && p.invoiceId && p.paidOn && (paidOn.get(p.invoiceId) ?? "") < p.paidOn) paidOn.set(p.invoiceId, p.paidOn);
+  }
+  for (const r of inv.rows) if (r.status === "paid") r.paidOn = paidOn.get(r.providerId) ?? null;
+  return { rows: [...inv.rows, ...pay.rows], invoicesRead: invoicesRaw.length, paymentsRead: paymentsRaw.length, unknown: inv.unknown + pay.unknown };
 }

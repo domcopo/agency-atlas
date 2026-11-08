@@ -322,6 +322,9 @@ describe("GoHighLevel read-only (Phase 3)", () => {
         // Phase 6 (approved): conversation times only
         "/conversations/search",
         "/conversations/[A-Za-z0-9]{6,40}/messages",
+        // Billing (0015, approved): invoices and payment transactions, read only
+        "/invoices/",
+        "/payments/transactions",
       ].sort(),
     );
   });
@@ -417,6 +420,64 @@ describe("Kit (0014)", () => {
     expect(findMatches([/kit_doc_versions["']\)\s*\.(insert|update|upsert)/])).toEqual([]);
     const text = readFileSync(join(ROOT, "src/components/kit/KitText.tsx"), "utf8");
     expect(text).not.toMatch(/dangerouslySetInnerHTML|innerHTML/);
+  });
+});
+
+describe("billing (0015): read-only, owner-only, minimum fields", () => {
+  const ghl = readFileSync(join(ROOT, "src/lib/ghl/client.ts"), "utf8");
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const allowed = ghl.slice(ghl.indexOf("const ALLOWED"), ghl.indexOf("];", ghl.indexOf("const ALLOWED")));
+
+  it("only the two billing addresses use the billing token, and the billing token is used for nothing else", () => {
+    const billingRules = allowed.split("\n").filter((l) => /token: "billing"/.test(l));
+    expect(billingRules.map((l) => l.match(/pattern: \/\^(.*)\$\//)?.[1]?.replace(/\\\//g, "/")).sort()).toEqual(["/invoices/", "/payments/transactions"]);
+    // The billing token is read in exactly one place, and get() picks it only for billing rules.
+    expect(ghl.match(/GHL_BILLING_READONLY_TOKEN\?\.trim\(\)/g)?.length).toBe(1);
+    expect(ghl).toMatch(/rule\.token === "billing" \? billingSettings\(\) : settings\(\)/);
+    expect(findMatches([/NEXT_PUBLIC_[A-Z_]*BILLING/])).toEqual([]);
+  });
+
+  it("never reads card, bank, email, phone, address, notes or line items from GoHighLevel", () => {
+    const billingCode = ghl.slice(ghl.indexOf("// Billing (0015): invoices and payments"));
+    expect(billingCode.length).toBeGreaterThan(500);
+    expect(billingCode).not.toMatch(
+      /\.(paymentMethod|card|last4|brand|bank|contactEmail|email|phone|phoneNo|address|businessDetails|invoiceItems|items|notes|termsNotes|chargeSnapshot|ipAddress|title|invoiceNumber)\b/,
+    );
+    // From the contact block, only the ID and the name are read.
+    const fromContact = [...billingCode.matchAll(/who\.([A-Za-z]+)/g)].map((m) => m[1]);
+    expect(new Set(fromContact)).toEqual(new Set(["id", "name"]));
+  });
+
+  it("never voids, sends, charges, refunds or reminds", () => {
+    expect(findMatches([/\b(voidInvoice|sendInvoice|recordPayment|createInvoice|chargeCustomer|refundPayment|sendReminder)\b/i])).toEqual([]);
+    expect(allowed).not.toMatch(/void|send|record-payment|schedule|refund|charge/i);
+  });
+
+  it("only the owner-checked actions write billing, and nothing deletes it", () => {
+    const writers = contents
+      .filter(({ text }) => /from\(["']billing_(records|contact_matches|syncs)["']\)\s*\.(insert|update|upsert|delete)/.test(text.replace(/\s+/g, " ")))
+      .map(({ file }) => file);
+    expect([...new Set(writers)]).toEqual(["src/app/actions.ts"]);
+    expect(findMatches([/billing_[a-z_]+["']\)\s*\.delete\(/])).toEqual([]);
+    for (const fn of ["syncBilling", "matchBillingContact"]) {
+      const body = actions.slice(actions.indexOf(`export async function ${fn}(`));
+      expect(body.slice(0, 400)).toMatch(/me\.role !== "owner"/);
+    }
+  });
+
+  it("billing history lines never carry money", () => {
+    const body = actions.slice(actions.indexOf("export async function syncBilling("), actions.indexOf("export async function matchBillingContact("));
+    const lines = [...body.matchAll(/kind: "billing_sync", summary: `([^`]*)`/g)].map((m) => m[1] ?? "");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const l of lines) expect(l).not.toMatch(/\$\{[^}]*(amount|usd|cents|total)|\$\d/i);
+  });
+
+  it("screens read billing only through data-source, which returns it to the owner only", () => {
+    const readers = contents.filter(({ text }) => /from\(["']billing_/.test(text)).map(({ file }) => file).sort();
+    expect(readers).toEqual(["src/app/actions.ts", "src/lib/data-source.ts"]);
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const getter = ds.slice(ds.indexOf("export const getBilling"));
+    expect(getter.slice(0, 300)).toMatch(/me\.role !== "owner"\) return null/);
   });
 });
 

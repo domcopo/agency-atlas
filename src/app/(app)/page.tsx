@@ -38,6 +38,7 @@ import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
   getAiStatus,
   getAtlasQuestions,
+  getBilling,
   getLatestBriefing,
   getMember,
   usesDatabase,
@@ -58,6 +59,7 @@ import {
   showsSamples,
 } from "@/lib/data-source";
 import { formatShortDate, formatUsd, formatUsdExact } from "@/lib/format";
+import { stateNote } from "@/lib/billing";
 import type { ActivityKind } from "@/lib/types";
 
 const activityIcon: Record<ActivityKind, { icon: typeof CalendarCheck; color: string }> = {
@@ -126,6 +128,8 @@ export default async function MissionControlPage() {
     getAtlasQuestions(3),
   ]);
   const completions = showsSamples() ? [] : await getCompletions();
+  // Owner only (null for everyone else; the database also returns them nothing).
+  const billing = await getBilling();
   await snapshot;
   const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
   const overdueCount = ops.priorities.filter((p) => p.when === "overdue").length;
@@ -429,6 +433,41 @@ export default async function MissionControlPage() {
       )}
 
       {!samples && <PulseStrip tiles={pulse} hidden={pulseHidden} hiddenLabel="pipeline value" />}
+
+      {billing && (
+        <Link href="/billing" className="pressable glass mb-3 block rounded-2xl p-3 text-sm">
+          <span className="flex items-center justify-between gap-2">
+            <span className="font-semibold">Billing</span>
+            <span className="text-[11px] text-faint">Owner only · read-only</span>
+          </span>
+          {billing.state.known ? (
+            <span className="mt-1 grid grid-cols-3 gap-2 text-center">
+              <span>
+                <span className="block font-display text-lg font-bold text-lime">{formatUsd(billing.totals.collectedThisMonthUsd ?? 0)}</span>
+                <span className="block text-[10px] text-muted">collected this month</span>
+              </span>
+              <span>
+                <span className={`block font-display text-lg font-bold ${billing.totals.overdueCount ? "text-rose" : ""}`}>{formatUsd(billing.totals.overdueUsd ?? 0)}</span>
+                <span className="block text-[10px] text-muted">overdue ({billing.totals.overdueCount ?? 0})</span>
+              </span>
+              <span>
+                <span className={`block font-display text-lg font-bold ${billing.totals.failedThisMonth ? "text-rose" : ""}`}>{billing.totals.failedThisMonth ?? 0}</span>
+                <span className="block text-[10px] text-muted">failed this month</span>
+              </span>
+            </span>
+          ) : (
+            <span className="mt-1 block text-xs text-amber">Unknown · {stateNote(billing.state)}</span>
+          )}
+          {billing.alerts.length > 0 && (
+            <span className="mt-2 block text-xs">
+              <span className={billing.alerts.some((a) => a.severity === "urgent") ? "font-semibold text-rose" : "font-semibold text-amber"}>
+                {billing.alerts.length} payment {billing.alerts.length === 1 ? "problem" : "problems"}:
+              </span>{" "}
+              <span className="text-muted">{billing.alerts.slice(0, 2).map((a) => a.name).join(", ")}{billing.alerts.length > 2 ? "…" : ""}</span>
+            </span>
+          )}
+        </Link>
+      )}
 
       {reviewWaiting > 0 && (
         <Link href="/work/orders" className="mb-3 block rounded-2xl border border-violet/40 bg-violet/10 p-3 text-sm">

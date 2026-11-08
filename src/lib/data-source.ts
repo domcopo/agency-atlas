@@ -24,7 +24,8 @@ import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import { buildPriorities, healthScore, healthSummary, isSalesStage, kindLabel, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote, type ClientContactDates } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
-import { isGhlConfigured } from "@/lib/ghl/client";
+import { isGhlBillingConfigured, isGhlConfigured } from "@/lib/ghl/client";
+import { billingState, billingTotals, clientBilling, paymentAlerts, planVsCollected, unmatchedGroups, type BillingRecord, type BillingState, type BillingSync, type BillingTotals, type ClientBilling, type PaymentAlert } from "@/lib/billing";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
 import { cache } from "react";
@@ -1453,3 +1454,83 @@ export async function getKitDoc(id: string): Promise<{ doc: KitDoc; versions: Ki
     versions: (v ?? []).map((r) => ({ id: r.id, title: r.title, body: r.body, savedAt: r.saved_at, savedBy: r.saved_by ? (names.get(r.saved_by) ?? "A teammate") : "Setup" })),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Billing (0015): OWNER ONLY, read-only copy of GoHighLevel invoices and payments.
+// Non-owners get null here, and the database returns them nothing anyway.
+// Blank is not zero: totals are null whenever billing isn't trustworthy.
+// ---------------------------------------------------------------------------
+
+export interface BillingView {
+  configured: boolean;
+  tablesReady: boolean;
+  state: BillingState;
+  totals: BillingTotals;
+  plan: { plan: number; collected: number | null; gap: number | null };
+  /** Per client slug. */
+  byClient: Map<string, ClientBilling>;
+  alerts: (PaymentAlert & { slug: string; name: string })[];
+  overdueClients: { slug: string; name: string; detail: string; daysLate: number; amountUsd: number }[];
+  unmatched: { contactId: string | null; label: string | null; count: number; amountUsd: number }[];
+  syncs: BillingSync[];
+  records: BillingRecord[];
+}
+
+export const getBilling = cache(async (): Promise<BillingView | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me || me.role !== "owner") return null;
+  const db = await createDatabaseClient();
+  const configured = isGhlBillingConfigured();
+  const [syncRes, recRes, summary] = await Promise.all([
+    db.from("billing_syncs").select("started_at, finished_at, ok, invoices_read, payments_read, unmatched, error_code").order("started_at", { ascending: false }).limit(10),
+    db.from("billing_records").select("kind, provider_id, provider_contact_id, client_id, unmatched_label, amount_cents, amount_due_cents, currency, status, issued_on, due_on, paid_on, synced_at").limit(5000),
+    getRosterSummary(),
+  ]);
+  const tablesReady = !syncRes.error && !recRes.error;
+  const syncs: BillingSync[] = (syncRes.data ?? []).map((r) => ({
+    startedAt: r.started_at, finishedAt: r.finished_at, ok: r.ok, invoicesRead: r.invoices_read, paymentsRead: r.payments_read, unmatched: r.unmatched, errorCode: r.error_code,
+  }));
+  const records: BillingRecord[] = (recRes.data ?? []).map((r) => ({
+    kind: r.kind, providerId: r.provider_id, contactId: r.provider_contact_id, clientDbId: r.client_id, unmatchedLabel: r.unmatched_label,
+    amountCents: Number(r.amount_cents), amountDueCents: r.amount_due_cents === null ? null : Number(r.amount_due_cents), currency: r.currency,
+    status: r.status, issuedOn: r.issued_on, dueOn: r.due_on, paidOn: r.paid_on, syncedAt: r.synced_at,
+  }));
+  const state = billingState({ configured, tablesReady, syncs, now: new Date() });
+  const t = today();
+  const totals = billingTotals(records, state, t);
+  const byDb = clientBilling(records, state, t);
+  const clients = (await roster()).clients;
+  const byClient = new Map<string, ClientBilling>();
+  const nameOf = new Map<string, { slug: string; name: string }>();
+  for (const c of clients) {
+    if (!c.dbId) continue;
+    nameOf.set(c.dbId, { slug: c.id, name: c.name });
+    const b = byDb.get(c.dbId);
+    if (b) byClient.set(c.id, b);
+  }
+  const alerts = paymentAlerts(byDb).flatMap((a) => {
+    const c = nameOf.get(a.clientDbId);
+    return c ? [{ ...a, ...c }] : [];
+  });
+  const overdueClients = [...byDb.values()]
+    .filter((b) => b.overdueCount > 0)
+    .sort((a, b) => b.daysLate - a.daysLate || b.overdueUsd - a.overdueUsd)
+    .flatMap((b) => {
+      const c = nameOf.get(b.clientDbId);
+      return c && b.detail ? [{ ...c, detail: b.detail, daysLate: b.daysLate, amountUsd: b.overdueUsd }] : [];
+    });
+  return {
+    configured,
+    tablesReady,
+    state,
+    totals,
+    plan: planVsCollected(summary.activeMrr, totals.collectedThisMonthUsd),
+    byClient,
+    alerts,
+    overdueClients,
+    unmatched: unmatchedGroups(records, state),
+    syncs,
+    records,
+  };
+});

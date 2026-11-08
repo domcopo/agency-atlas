@@ -849,6 +849,91 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 7l. Billing (0015): owner only, read-only copy, no deletes, 10-minute refresh limit.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.billing_syncs (id) values ('00000000-0000-0000-0000-00000000b501')$$, 1, 'owner starts a billing refresh');
+select test.expect($$insert into public.billing_syncs default values$$, -2, 'a second refresh within 10 minutes is refused by the database');
+select test.expect($$update public.billing_syncs set finished_at = now(), ok = true, invoices_read = 2, payments_read = 1, unmatched = 1 where id = '00000000-0000-0000-0000-00000000b501'$$, 1, 'owner records how the refresh went');
+select test.expect($$update public.billing_syncs set started_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000b501'$$, -1, 'nobody backdates a refresh to dodge the limit');
+select test.expect($$insert into public.billing_records (kind, provider_id, provider_contact_id, client_id, amount_cents, amount_due_cents, currency, status, issued_on, due_on) values ('invoice', 'inv1', 'contactA1', '00000000-0000-0000-0000-0000000000c1', 75000, 75000, 'USD', 'overdue', '2026-10-01', '2026-10-15')$$, 1, 'owner saves a matched invoice');
+select test.expect($$insert into public.billing_records (kind, provider_id, provider_contact_id, unmatched_label, amount_cents, currency, status) values ('invoice', 'inv2', 'contactB2', 'Sample Bakery (fictional)', 30000, 'USD', 'open')$$, 1, 'owner saves an unmatched invoice with its name');
+select test.expect($$insert into public.billing_records (kind, provider_id, amount_cents, currency, status) values ('invoice', 'inv1', 1, 'USD', 'open')$$, -3, 'the same invoice cannot be saved twice');
+select test.expect($$insert into public.billing_records (kind, provider_id, amount_cents, currency, status) values ('invoice', 'inv3', 1, 'USD', 'void')$$, -2, 'unknown statuses (void) are refused');
+select test.expect($$insert into public.billing_records (kind, provider_id, amount_cents, currency, status) values ('invoice', 'inv4', -5, 'USD', 'open')$$, -2, 'negative amounts are refused');
+select test.expect($$insert into public.billing_records (kind, provider_id, unmatched_label, amount_cents, currency, status) values ('invoice', 'inv5', 'pat@example.com', 1, 'USD', 'open')$$, -2, 'an email as the invoice name is refused');
+select test.expect($$insert into public.billing_records (kind, provider_id, unmatched_label, amount_cents, currency, status) values ('invoice', 'inv6', 'Call 555-0100 now', 1, 'USD', 'open')$$, -2, 'a phone number as the invoice name is refused');
+select test.expect($$insert into public.billing_records (kind, provider_id, client_id, unmatched_label, amount_cents, currency, status) values ('invoice', 'inv7', '00000000-0000-0000-0000-0000000000c1', 'Pat', 1, 'USD', 'open')$$, -2, 'a matched invoice cannot keep the name');
+select test.expect($$insert into public.billing_contact_matches (provider_contact_id, client_id) values ('contactB2', '00000000-0000-0000-0000-0000000000c1')$$, 1, 'owner matches a contact by hand');
+select test.expect($$insert into public.billing_contact_matches (provider_contact_id, client_id, matched_by) values ('contactC3', '00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000a2')$$, -1, 'nobody matches in someone else''s name');
+select test.expect($$update public.billing_records set client_id = '00000000-0000-0000-0000-0000000000c1', unmatched_label = null where provider_contact_id = 'contactB2'$$, 1, 'owner attaches the matched invoice (name cleared)');
+select test.expect($$update public.billing_records set provider_id = 'changed' where provider_id = 'inv1'$$, -1, 'the provider ID cannot be changed');
+select test.expect($$insert into public.billing_records (kind, provider_id, provider_contact_id, client_id, amount_cents, amount_due_cents, currency, status, issued_on, due_on) values ('invoice', 'inv1', 'contactA1', '00000000-0000-0000-0000-0000000000c1', 75000, 0, 'USD', 'paid', '2026-10-01', '2026-10-15') on conflict (provider, kind, provider_id) do update set provider_id = excluded.provider_id, kind = excluded.kind, amount_due_cents = excluded.amount_due_cents, status = excluded.status$$, 1, 'a refresh re-saves an existing invoice by its ID');
+select test.expect($$delete from public.billing_records$$, -1, 'billing records cannot be deleted, even by the owner');
+select test.expect($$delete from public.billing_contact_matches$$, -1, 'matches cannot be deleted');
+select test.expect($$delete from public.billing_syncs$$, -1, 'refresh history cannot be deleted');
+select test.expect($$insert into public.activity (kind, summary, actor) values ('billing_sync', 'Billing refreshed: 3 records read, 1 unmatched', '00000000-0000-0000-0000-0000000000a1')$$, 1, 'owner logs a refresh in the history (counts only)');
+select test.expect($$insert into public.activity (kind, summary, actor) values ('billing_sync', 'Billing refreshed: $750 collected', '00000000-0000-0000-0000-0000000000a1')$$, -2, 'a billing history line with money in it is refused');
+select test.expect($$insert into public.activity (kind, summary, actor, client_id) values ('billing_sync', 'Billing refreshed', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1')$$, -2, 'a billing history line is never tied to a client');
+select test.expect($$select * from public.billing_records$$, 2, 'owner reads billing');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$select * from public.billing_records$$, 0, 'manager reads no billing records');
+select test.expect($$select * from public.billing_contact_matches$$, 0, 'manager reads no billing matches');
+select test.expect($$select * from public.billing_syncs$$, 0, 'manager reads no billing refreshes');
+select test.expect($$insert into public.billing_records (kind, provider_id, amount_cents, currency, status) values ('invoice', 'm1', 1, 'USD', 'open')$$, -1, 'manager cannot add billing records');
+select test.expect($$update public.billing_records set status = 'paid'$$, 0, 'manager cannot change billing records');
+select test.expect($$insert into public.billing_contact_matches (provider_contact_id, client_id) values ('contactD4', '00000000-0000-0000-0000-0000000000c1')$$, -1, 'manager cannot match billing contacts');
+select test.expect($$insert into public.billing_syncs default values$$, -1, 'manager cannot start a billing refresh');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.billing_records$$, 0, 'developer reads no billing records');
+select test.expect($$select * from public.billing_contact_matches$$, 0, 'developer reads no billing matches');
+select test.expect($$select * from public.billing_syncs$$, 0, 'developer reads no billing refreshes');
+select test.expect($$update public.billing_records set status = 'paid'$$, 0, 'developer cannot change billing records');
+select test.expect($$insert into public.billing_syncs default values$$, -1, 'developer cannot start a billing refresh');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect($$select * from public.billing_records$$, 0, 'non-team user reads no billing');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$select * from public.billing_records$$, 0, 'owner without two-factor reads no billing');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.billing_records$$, -1, 'signed out cannot read billing records');
+select test.expect($$select * from public.billing_syncs$$, -1, 'signed out cannot read billing refreshes');
+commit;
+
+-- The billing copy keeps only the approved columns (no card, email, phone or address column can sneak in).
+do $$
+declare cols text;
+begin
+  select string_agg(column_name, ',' order by column_name) into cols
+  from information_schema.columns where table_schema = 'public' and table_name = 'billing_records';
+  if cols is distinct from 'amount_cents,amount_due_cents,client_id,currency,due_on,id,issued_on,kind,paid_on,provider,provider_contact_id,provider_id,status,synced_at,unmatched_label' then
+    raise exception 'FAILED: billing_records has unexpected columns: %', cols;
+  end if;
+  raise notice 'ok: billing keeps only the approved columns';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

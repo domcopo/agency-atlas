@@ -15,6 +15,7 @@ import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
 import type { WorkOrderDrafts } from "@/lib/types";
 import { findSecrets } from "@/lib/kit";
+import { matchClient } from "@/lib/billing";
 import {
   getAiStatus,
   getAtlasQuestions,
@@ -32,7 +33,9 @@ import {
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
 import {
   GhlError,
+  isGhlBillingConfigured,
   isGhlConfigured,
+  readBilling,
   readAppointments,
   readContactActivity,
   readLocationName,
@@ -858,9 +861,12 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   await db.from("ghl_syncs").insert({ location_name: locationName, opportunities: opportunities.length, appointments: appointments.length });
   // Phase 6: call/message TIMES for clients. A problem here never undoes the pipeline sync.
   const times = await syncContactTimes(db);
+  // Billing (0015): refreshed along with the sync when connected (the 10-minute limit still applies).
+  const billing = isGhlBillingConfigured() ? await syncBilling() : null;
+  const billingNote = billing ? ` Billing: ${billing.error ?? billing.message}` : "";
   revalidatePath("/", "layout");
   return {
-    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times} Nothing in GoHighLevel was changed.`,
+    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times}${billingNote} Nothing in GoHighLevel was changed.`,
   };
 }
 
@@ -1488,4 +1494,116 @@ export async function kitToolOp(form: FormData) {
   const { error } = await db.from("kit_tools").update({ archived: op === "archive" }).eq("id", id);
   if (error) console.warn(`Kit tool change refused: ${error.code}`);
   revalidatePath("/kit", "layout");
+}
+
+// ---------------------------------------------------------------------------
+// Billing (0015): READ-ONLY copy of GoHighLevel invoices and payments. OWNER ONLY.
+// Atlas never creates, edits, voids or sends invoices, never charges or refunds, and
+// never sends reminders. The database also refuses anyone but the owner.
+// ---------------------------------------------------------------------------
+
+const errorCode = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 40) || "unknown";
+
+/** Refresh billing from GoHighLevel (read-only). At most every 10 minutes (the database enforces it). */
+export async function syncBilling(): Promise<{ error?: string; message?: string }> {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can refresh billing." };
+  if (!isGhlBillingConfigured()) return { error: "Billing isn't connected yet (add the billing token in Vercel)." };
+  const db = await createDatabaseClient();
+
+  // 1. Claim a refresh slot first: the database refuses one within 10 minutes of the last.
+  const started = await db.from("billing_syncs").insert({}).select("id, started_at").single();
+  if (started.error) {
+    if (started.error.code === "23514") return { error: "Billing was refreshed less than 10 minutes ago. Try again in a few minutes." };
+    if (started.error.code === "42P01" || started.error.code === "PGRST205") return { error: "Billing isn't set up yet: run 0015_billing_read_only.sql in Supabase." };
+    console.warn(`Billing refresh refused: ${started.error.code}`);
+    return { error: `Couldn't start a billing refresh (code ${started.error.code ?? "?"}).` };
+  }
+  const syncId = (started.data as { id: string }).id;
+  const syncedAt = (started.data as { started_at: string }).started_at;
+  const fail = async (code: string, message: string) => {
+    await db.from("billing_syncs").update({ finished_at: new Date().toISOString(), ok: false, error_code: errorCode(code) }).eq("id", syncId);
+    await logActivity(db, { client_id: null, kind: "billing_sync", summary: `Billing refresh failed (${errorCode(code)}). Nothing was changed.` });
+    revalidatePath("/", "layout");
+    return { error: `${message} Nothing was changed.` };
+  };
+
+  // 2. Read (GET only). Any problem: the last good data stays, and totals show Unknown.
+  let read: Awaited<ReturnType<typeof readBilling>>;
+  try {
+    read = await readBilling(getToday());
+  } catch (err) {
+    console.warn(`Billing read stopped: ${err instanceof GhlError ? err.status : "unknown"}`);
+    return fail(err instanceof GhlError && err.status ? `ghl_${err.status}` : "ghl_unreachable", err instanceof GhlError ? err.message : "Couldn't read billing from GoHighLevel.");
+  }
+
+  // 3. Match only through contacts the owner confirmed (by hand here, or in Phase 6).
+  const [matches, links] = await Promise.all([
+    db.from("billing_contact_matches").select("provider_contact_id, client_id"),
+    db.from("ghl_contact_links").select("ghl_contact_id, client_id").eq("status", "confirmed"),
+  ]);
+  const confirmed = new Map<string, string>();
+  for (const l of (links.data ?? []) as { ghl_contact_id: string; client_id: string }[]) confirmed.set(l.ghl_contact_id, l.client_id);
+  for (const m of (matches.data ?? []) as { provider_contact_id: string; client_id: string }[]) confirmed.set(m.provider_contact_id, m.client_id);
+
+  // 4. Save the minimum. Every record seen in this refresh gets this refresh's time, so
+  //    anything voided or removed in GoHighLevel drops out of the totals.
+  const rows = read.rows.map((r) => {
+    const clientId = matchClient(r.contactId, confirmed);
+    return {
+      provider: "ghl",
+      kind: r.kind,
+      provider_id: r.providerId,
+      provider_contact_id: r.contactId,
+      client_id: clientId,
+      unmatched_label: clientId ? null : r.label,
+      amount_cents: r.amountCents,
+      amount_due_cents: r.amountDueCents,
+      currency: r.currency,
+      status: r.status,
+      issued_on: r.issuedOn,
+      due_on: r.dueOn,
+      paid_on: r.paidOn,
+      synced_at: syncedAt,
+    };
+  });
+  for (let i = 0; i < rows.length; i += 200) {
+    const { error } = await db.from("billing_records").upsert(rows.slice(i, i + 200), { onConflict: "provider,kind,provider_id" });
+    if (error) {
+      console.warn(`Billing save refused: ${error.code}`);
+      return fail(`save_${error.code ?? "unknown"}`, `Read billing, but saving failed (code ${error.code ?? "?"}).`);
+    }
+  }
+  const unmatched = rows.filter((r) => !r.client_id).length;
+  await db
+    .from("billing_syncs")
+    .update({ finished_at: new Date().toISOString(), ok: true, invoices_read: read.invoicesRead, payments_read: read.paymentsRead, unmatched })
+    .eq("id", syncId);
+  // History line: counts only, never money (managers can read the history).
+  await logActivity(db, { client_id: null, kind: "billing_sync", summary: `Billing refreshed: ${rows.length} records read, ${unmatched} unmatched${read.unknown ? `, ${read.unknown} skipped (unrecognised)` : ""}` });
+  revalidatePath("/", "layout");
+  return { message: `Read ${read.invoicesRead} invoices and ${read.paymentsRead} payments. ${unmatched} unmatched${read.unknown ? `, ${read.unknown} skipped because Atlas didn't recognise their status` : ""}. Nothing in GoHighLevel was changed.` };
+}
+
+/** Match a GoHighLevel billing contact to a client, by hand. Owner only. */
+export async function matchBillingContact(_prev: { error?: string; message?: string } | undefined, form: FormData): Promise<{ error?: string; message?: string }> {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can match billing." };
+  const contactId = String(form.get("contact_id") ?? "");
+  const slug = String(form.get("client") ?? "");
+  if (!/^[A-Za-z0-9]{6,40}$/.test(contactId)) return { error: "That billing contact isn't valid." };
+  const client = (await getRoster()).find((c) => c.id === slug && c.dbId);
+  if (!client?.dbId) return { error: "Pick a client." };
+  const db = await createDatabaseClient();
+  const added = await db.from("billing_contact_matches").insert({ provider_contact_id: contactId, client_id: client.dbId });
+  if (added.error) {
+    if (added.error.code !== "23505") return { error: `Couldn't save the match (code ${added.error.code ?? "?"}).` };
+    const moved = await db.from("billing_contact_matches").update({ client_id: client.dbId }).eq("provider_contact_id", contactId);
+    if (moved.error) return { error: `Couldn't change the match (code ${moved.error.code ?? "?"}).` };
+  }
+  // Attach this contact's records now; the name on the invoice is cleared once matched.
+  const { error } = await db.from("billing_records").update({ client_id: client.dbId, unmatched_label: null }).eq("provider_contact_id", contactId);
+  if (error) return { error: `Matched, but the records didn't update (code ${error.code ?? "?"}). Refresh billing to finish.` };
+  revalidatePath("/", "layout");
+  return { message: `Matched to ${client.name}.` };
 }

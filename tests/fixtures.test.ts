@@ -5,6 +5,7 @@
 // - untrusted message text can't change anything
 
 import { describe, expect, it } from "vitest";
+import { billingState, billingTotals, clientBilling, collectedBetween, invoiceStatus, matchClient, overdueDetail, paymentAlerts, paymentStatus, planVsCollected, safeLabel, toCents, unmatchedGroups, type BillingRecord, type BillingSync } from "@/lib/billing";
 import { demoRosterRaw } from "@/fixtures/demo-roster";
 import { missionControl as sampleHome } from "@/fixtures/mission-control";
 import {
@@ -1313,5 +1314,103 @@ describe("Kit (0014)", () => {
     expect(searchKit([doc], "seo console")).toHaveLength(1);
     expect(searchKit([doc], "seo ads")).toHaveLength(0);
     expect(searchKit([doc], "  ")).toHaveLength(1);
+  });
+});
+
+describe("billing, read-only and owner-only (0015)", () => {
+  const today = "2026-11-08";
+  const now = new Date("2026-11-08T15:00:00Z");
+  const goodSync: BillingSync = { startedAt: "2026-11-08T14:00:00Z", finishedAt: "2026-11-08T14:00:05Z", ok: true, invoicesRead: 4, paymentsRead: 3, unmatched: 1, errorCode: null };
+  const rec = (r: Partial<BillingRecord>): BillingRecord => ({
+    kind: "invoice", providerId: "x", contactId: "contactA1", clientDbId: "client-1", unmatchedLabel: null, amountCents: 50000, amountDueCents: 50000,
+    currency: "USD", status: "open", issuedOn: "2026-10-01", dueOn: "2026-11-20", paidOn: null, syncedAt: "2026-11-08T14:00:00Z", ...r,
+  });
+  // Fictional invoices and payments only.
+  const records: BillingRecord[] = [
+    rec({ providerId: "i1", dueOn: "2026-10-21", status: "overdue" }), // 18 days late, $500
+    rec({ providerId: "i2", dueOn: "2026-10-31", status: "overdue", amountCents: 70000, amountDueCents: 70000 }), // $700
+    rec({ providerId: "i3", clientDbId: "client-2", dueOn: "2026-11-12" }), // due soon
+    rec({ providerId: "i4", clientDbId: null, unmatchedLabel: "Sample Bakery (fictional)", contactId: "contactB2", amountCents: 30000, amountDueCents: 30000 }),
+    rec({ providerId: "p1", kind: "payment", clientDbId: "client-3", status: "paid", amountCents: 75000, amountDueCents: null, issuedOn: "2026-11-02", paidOn: "2026-11-02", dueOn: null }),
+    rec({ providerId: "p2", kind: "payment", clientDbId: "client-4", status: "failed", amountCents: 30000, amountDueCents: null, issuedOn: "2026-11-05", dueOn: null }),
+    rec({ providerId: "p3", kind: "payment", clientDbId: "client-3", status: "paid", amountCents: 99999, amountDueCents: null, paidOn: "2026-10-02", dueOn: null }), // last month
+    rec({ providerId: "old", syncedAt: "2026-11-01T00:00:00Z", dueOn: "2026-09-01", status: "overdue" }), // voided since: not seen in the latest refresh
+  ];
+
+  it("maps GoHighLevel statuses without guessing", () => {
+    expect(invoiceStatus("draft", 100, null, today)).toBe("skip");
+    expect(invoiceStatus("void", 100, null, today)).toBe("skip");
+    expect(invoiceStatus("paid", 0, null, today)).toBe("paid");
+    expect(invoiceStatus("sent", 100, "2026-11-01", today)).toBe("overdue");
+    expect(invoiceStatus("partially_paid", 100, "2026-12-01", today)).toBe("open");
+    expect(invoiceStatus("sent", 0, "2026-11-01", today)).toBe("paid");
+    expect(invoiceStatus("mystery", 100, null, today)).toBe("unknown");
+    expect(paymentStatus("succeeded", 0)).toBe("paid");
+    expect(paymentStatus("failed", 0)).toBe("failed");
+    expect(paymentStatus("succeeded", 500)).toBe("refunded");
+    expect(paymentStatus("pending", 0)).toBe("skip");
+    expect(paymentStatus("something_new", 0)).toBe("unknown");
+    expect(toCents(750)).toBe(75000);
+    expect(toCents(12.345)).toBe(1235);
+    expect(toCents(-1)).toBeNull();
+    expect(toCents("750")).toBeNull();
+  });
+
+  it("never keeps an email or phone number as the invoice name", () => {
+    expect(safeLabel("Sample Bakery (fictional)")).toBe("Sample Bakery (fictional)");
+    expect(safeLabel("pat@example.com")).toBeNull();
+    expect(safeLabel("Call 555-0100")).toBeNull();
+    expect(safeLabel("x".repeat(200))).toHaveLength(80);
+  });
+
+  it("matches only through a contact the owner confirmed", () => {
+    const confirmed = new Map([["contactA1", "client-1"]]);
+    expect(matchClient("contactA1", confirmed)).toBe("client-1");
+    expect(matchClient("contactZZ", confirmed)).toBeNull();
+    expect(matchClient(null, confirmed)).toBeNull();
+  });
+
+  it("blank is not zero: unknown whenever billing isn't trustworthy", () => {
+    const base = { configured: true, tablesReady: true, now };
+    expect(billingState({ ...base, tablesReady: false, syncs: [goodSync] })).toMatchObject({ known: false, reason: "not_set_up" });
+    expect(billingState({ ...base, configured: false, syncs: [goodSync] })).toMatchObject({ known: false, reason: "not_connected" });
+    expect(billingState({ ...base, syncs: [] })).toMatchObject({ known: false, reason: "never_synced" });
+    const failed: BillingSync = { ...goodSync, startedAt: "2026-11-08T14:30:00Z", ok: false, errorCode: "ghl_403" };
+    expect(billingState({ ...base, syncs: [goodSync, failed] })).toMatchObject({ known: false, reason: "last_failed" });
+    expect(billingState({ ...base, syncs: [goodSync], now: new Date("2026-11-12T15:00:00Z") })).toMatchObject({ known: false, reason: "stale" });
+    const unknown = billingState({ ...base, configured: false, syncs: [] });
+    const t = billingTotals(records, unknown, today);
+    expect([t.collectedThisMonthUsd, t.openUsd, t.overdueUsd, t.overdueCount, t.failedThisMonth, t.unmatched]).toEqual([null, null, null, null, null, null]);
+    expect(collectedBetween(records, unknown, "2026-11-01", today)).toBeNull();
+    expect(clientBilling(records, unknown, today).size).toBe(0);
+    expect(planVsCollected(5000, null).gap).toBeNull();
+  });
+
+  it("adds up the latest refresh only, and real zeros only after a good refresh", () => {
+    const state = billingState({ configured: true, tablesReady: true, syncs: [goodSync], now });
+    const t = billingTotals(records, state, today);
+    expect(t.collectedThisMonthUsd).toBe(750);
+    expect(t.openUsd).toBe(500 + 700 + 500 + 300);
+    expect(t.overdueUsd).toBe(1200); // the old voided one is ignored
+    expect(t.overdueCount).toBe(2);
+    expect(t.failedThisMonth).toBe(1);
+    expect(t.unmatched).toBe(1);
+    expect(billingTotals([], state, today)).toMatchObject({ collectedThisMonthUsd: 0, overdueCount: 0 });
+    expect(planVsCollected(5000, 750)).toEqual({ plan: 5000, collected: 750, gap: 4250 });
+  });
+
+  it("gives each client a chip and an overdue detail, and alerts the owner", () => {
+    const state = billingState({ configured: true, tablesReady: true, syncs: [goodSync], now });
+    const by = clientBilling(records, state, today);
+    expect(by.get("client-1")).toMatchObject({ chip: "overdue", overdueCount: 2, overdueUsd: 1200, daysLate: 18, detail: "2 invoices, $1,200, 18 days late" });
+    expect(by.get("client-2")?.chip).toBe("due_soon");
+    expect(by.get("client-3")?.chip).toBe("paid");
+    expect(by.get("client-4")?.chip).toBe("failed");
+    expect(overdueDetail(1, 99.5, 1)).toBe("1 invoice, $99.50, 1 day late");
+    const alerts = paymentAlerts(by);
+    expect(alerts.map((a) => [a.clientDbId, a.severity])).toEqual([["client-4", "urgent"], ["client-1", "watch"]]);
+    const later = clientBilling([rec({ providerId: "late", dueOn: "2026-09-30", status: "overdue" })], state, today);
+    expect(paymentAlerts(later)[0]?.severity).toBe("urgent"); // 39 days late
+    expect(unmatchedGroups(records, state)).toEqual([{ contactId: "contactB2", label: "Sample Bakery (fictional)", count: 1, amountUsd: 300 }]);
   });
 });

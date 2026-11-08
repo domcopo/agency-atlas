@@ -1,5 +1,8 @@
 "use client";
 
+import { BillingChip } from "@/components/cards/BillingChip";
+import type { BillingChip as BillingChipKind } from "@/lib/billing";
+
 // Search and group the client roster. The server already decided what this page
 // may show; this only narrows it down on screen.
 
@@ -16,6 +19,9 @@ export interface RosterRow extends RosterClient {
   tier: "high" | "mid" | "low";
   /** Missing for past clients. */
   health?: HealthLevel;
+  /** Owner only: payment status from billing (0015). */
+  billing?: BillingChipKind | null;
+  billingDetail?: string | null;
 }
 
 const groups: { id: string; title: string; hint: string; match: (c: RosterRow) => boolean }[] = [
@@ -108,6 +114,7 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
                       <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
                         <span className="truncate">{c.name}</span>
                         {c.check && <AlertCircle aria-label="Needs checking" className="size-3.5 shrink-0 text-amber" />}
+                        {c.billing && <BillingChip chip={c.billing} title={c.billingDetail ?? undefined} />}
                       </p>
                       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
                         {c.health && <HealthBadge level={c.health} />}

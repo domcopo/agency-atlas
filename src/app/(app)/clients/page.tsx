@@ -8,7 +8,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { CHECK_IN_DAYS, getActions, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
+import { CHECK_IN_DAYS, getActions, getBilling, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
 import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
@@ -21,11 +21,15 @@ export default async function ClientsPage() {
   const summary = await getRosterSummary();
   const { actions } = await getActions();
   const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c, actions) }));
+  // Owner only (null for everyone else; the database also returns them nothing).
+  const billing = await getBilling();
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
     tier: tierOf(c.monthlyUsd),
     health: h?.level,
+    billing: billing?.byClient.get(c.id)?.chip ?? null,
+    billingDetail: billing?.byClient.get(c.id)?.detail ?? null,
   }));
   const levels: HealthLevel[] = ["healthy", "watch", "at_risk"];
   const current = withHealth.filter(({ h }) => h !== null);
@@ -204,7 +208,7 @@ export default async function ClientsPage() {
 
       <p className="mt-6 px-1 text-[11px] text-faint">
         {summary.source !== "demo"
-          ? "From your private client file on this Mac. It never goes to Git or GitHub. Billing will verify these numbers once connected."
+          ? "Monthly amounts are your plan amounts, not payments. Payment status (owner only) comes from Billing."
           : "Demo list. Add private-data/clients.json on this Mac to see your real clients."}
       </p>
     </>
