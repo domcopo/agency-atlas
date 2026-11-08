@@ -233,6 +233,14 @@ describe("database safety (Phase 2)", () => {
     expect(findMatches([/NEXT_PUBLIC_SUPABASE/])).toEqual([]);
   });
 
+  it("the sign-in gate skips exactly one address: the owner's dashboard read", () => {
+    const proxy = readFileSync(join(ROOT, "src/proxy.ts"), "utf8");
+    // Every address mentioned in the gate, and every early "let it through".
+    expect([...proxy.matchAll(/"(\/api\/[^"]*)"/g)].map((m) => m[1])).toEqual(["/api/owner-summary"]);
+    expect([...proxy.matchAll(/request\.nextUrl\.pathname\s*(===|==|\.startsWith|\.includes|\.match)/g)].map((m) => m[1])).toEqual(["==="]);
+    expect(proxy).toMatch(/if \(request\.nextUrl\.pathname === OWNER_SUMMARY_PATH\) return NextResponse\.next\(\);/);
+  });
+
   it("the sign-in gate requires two-factor (aal2) before any screen", () => {
     const proxy = readFileSync(join(ROOT, "src/proxy.ts"), "utf8");
     expect(proxy).toMatch(/aal\s*===\s*"aal2"/);
@@ -257,7 +265,11 @@ describe("database safety (Phase 2)", () => {
   });
 
   it("the app never deletes database rows, calls database functions, or uses admin APIs", () => {
-    expect(findMatches([/\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.delete\(/, /\.rpc\(/, /auth\.admin/])).toEqual([]);
+    expect(findMatches([/\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.delete\(/, /auth\.admin/])).toEqual([]);
+    // One approved exception (owner summary, 0012): exactly one database function call,
+    // in the database module, to the owner's dashboard read. Nothing else.
+    const calls = contents.flatMap(({ file, text }) => [...text.matchAll(/\.rpc\(\s*([^,)]*)/g)].map((m) => `${file}: ${m[1]}`));
+    expect(calls).toEqual([`${SERVER}: "owner_summary_latest"`]);
   });
 
   it("every table in the migrations has row-level security, and signed-out users get no grants", () => {
@@ -268,7 +280,9 @@ describe("database safety (Phase 2)", () => {
     for (const t of tables) {
       expect(new RegExp(`alter table ${t.replace(".", "\\.")}\\s+enable row level security`).test(sql), t).toBe(true);
     }
-    expect(/grant [^;]* to [^;]*\banon\b/i.test(sql)).toBe(false);
+    // Signed-out callers get no grants, except the ONE approved dashboard read (0012).
+    const anonGrants = [...sql.matchAll(/grant [^;]* to [^;]*\banon\b[^;]*;/gi)].map((m) => m[0].replace(/\s+/g, " "));
+    expect(anonGrants).toEqual(["grant execute on function public.owner_summary_latest(text) to anon;"]);
   });
 });
 
@@ -362,5 +376,43 @@ describe("AI read-only + budget (Phase 4)", () => {
     const calls = actions.match(/await askAi\(/g)?.length ?? 0;
     expect(calls).toBeGreaterThan(0);
     expect(actions.match(/await logAiUsage\(/g)?.length).toBe(calls);
+  });
+});
+
+describe("owner summary (0012): one read-only route for the owner's dashboard", () => {
+  const ROUTE = "src/app/api/owner-summary/route.ts";
+  const ACCESS = "src/lib/owner-summary-access.ts";
+  const route = readFileSync(join(ROOT, ROUTE), "utf8");
+
+  it("is the only API route, and it only answers GET", () => {
+    const routes = contents.filter(({ file }) => /^src\/app\/.*route\.(ts|js)$/.test(file)).map(({ file }) => file);
+    expect(routes).toEqual([ROUTE]);
+    const exported = [...route.matchAll(/export\s+(?:async\s+)?(?:function|const)\s+([A-Za-z_]+)/g)].map((m) => m[1]);
+    expect(exported.sort()).toEqual(["GET", "dynamic"]);
+  });
+
+  it("triggers nothing: no GoHighLevel, no AI, no saving", () => {
+    const imports = [...route.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]).sort();
+    expect(imports).toEqual(["@/lib/owner-summary-access", "@/lib/supabase/server"]);
+    expect(route).not.toMatch(/\.insert\(|\.update\(|\.upsert\(|syncFromGhl|askAi|revalidatePath/);
+  });
+
+  it("never caches and always answers with no-store", () => {
+    expect(route).toMatch(/"Cache-Control": "no-store"/);
+    expect(route).toMatch(/export const dynamic = "force-dynamic"/);
+  });
+
+  it("only the key-check module reads the key fingerprint, and never for the browser", () => {
+    const readers = contents.filter(({ text }) => /process\.env\.OWNER_SUMMARY_/.test(text)).map(({ file }) => file);
+    expect(readers).toEqual([ACCESS]);
+    expect(findMatches([/NEXT_PUBLIC_OWNER_SUMMARY/])).toEqual([]);
+    const access = readFileSync(join(ROOT, ACCESS), "utf8");
+    expect(access).toMatch(/timingSafeEqual/);
+    expect(access).not.toMatch(/console\./); // the key is never logged
+  });
+
+  it("the summary itself is built from totals: the builder never reads notes, messages or titles", () => {
+    const builder = readFileSync(join(ROOT, "src/lib/owner-summary.ts"), "utf8");
+    expect(builder).not.toMatch(/\.(notes|followUp|check|steps|sourceNote|sourceLink|reviewNote|blockedReason|why|title)\b/);
   });
 });

@@ -624,7 +624,7 @@ export interface ClientProfile {
 
 export type ActionKind = "follow_up" | "issue" | "work_order";
 export type ActionPriority = "critical" | "high" | "normal" | "low";
-export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "done";
+export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "review" | "done";
 
 export interface ClientAction {
   id: string;
@@ -652,6 +652,10 @@ export interface ClientAction {
   estMinutes?: number | null;
   /** Started as an AI draft that a person reviewed and added. */
   aiSuggested?: boolean;
+  /** Review before done (0011): when it was last sent for review, times sent back, the manager's note. */
+  submittedAt?: string | null;
+  sentBackCount?: number;
+  reviewNote?: string | null;
 }
 
 /** The one health word shown for a client. Reasons explain it. */

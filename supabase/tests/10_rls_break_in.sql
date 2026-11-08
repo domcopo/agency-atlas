@@ -344,7 +344,8 @@ select test.expect('select * from public.ghl_opportunities', 0, 'developer canno
 select test.expect('select * from public.ai_briefings', 0, 'developer cannot read AI briefings');
 select test.expect('select * from public.activity', 0, 'developer cannot read history');
 select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'developer updates the status of their own item');
-select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'developer marks their own item done');
+-- (Since 0011, issues and work orders need a manager's review before done; see 7h.)
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot mark their own issue done (needs review)');
 select test.expect($$update public.actions set title = 'changed' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot rename their item');
 select test.expect($$update public.actions set due_on = '2027-01-01' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot move their due date');
 select test.expect($$update public.actions set owner_staff_id = '00000000-0000-0000-0000-0000000000b2' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot hand their item to someone else');
@@ -552,6 +553,151 @@ begin
     raise exception 'FAILED: my_client_contacts exposes unexpected columns: %', cols;
   end if;
   raise notice 'ok: developer contact view has only names and dates';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 7h. Review before done (0011): developers send for review; managers approve.
+-- ---------------------------------------------------------------------------
+-- A simple follow-up for the developer (they may still mark these done).
+insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values
+  ('00000000-0000-0000-0000-00000000af01', '00000000-0000-0000-0000-0000000000c1', 'follow_up', 'Send report link (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a1');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot mark a work order done');
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot mark an issue done');
+select test.expect($$update public.actions set status = 'review' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'developer sends a work order for review');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ae01' and submitted_at is not null$$, 1, 'the database stamps when it was sent for review');
+select test.expect($$update public.actions set submitted_at = '2020-01-02' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot backdate the review time');
+select test.expect($$update public.actions set sent_back_count = 0 where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot reset the sent-back count');
+select test.expect($$update public.actions set review_note = 'looks great' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot write the review note');
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000af01'$$, 1, 'developer can still mark a simple follow-up done');
+select test.expect($$update public.actions set status = 'finished' where id = '00000000-0000-0000-0000-00000000ae01'$$, -2, 'unknown statuses are still rejected');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'open', review_note = 'Form still errors on mobile (test)' where id = '00000000-0000-0000-0000-00000000ae01' and status = 'review'$$, 1, 'manager sends work back with a note');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ae01' and sent_back_count = 1$$, 1, 'the database counts the send-back');
+select test.expect($$update public.actions set review_note = repeat('x', 201) where id = '00000000-0000-0000-0000-00000000ae01'$$, -2, 'review notes are length-limited');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000ae01' and review_note is not null and sent_back_count = 1$$, 1, 'developer sees the send-back note in my_work');
+select test.expect($$update public.actions set status = 'review' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'developer sends it for review again');
+select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'developer can pull it back from review');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ae01' and sent_back_count = 1$$, 1, 'a developer pulling it back is not counted as sent back');
+select test.expect($$update public.actions set status = 'review' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'developer re-submits');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'done', done_at = now(), review_note = null where id = '00000000-0000-0000-0000-00000000ae01' and status = 'review'$$, 1, 'manager approves it as done');
+select test.expect($$update public.actions set submitted_at = now() where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'nobody sets the review time by hand');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7i. Owner summary (0012): one key-checked read for the owner's dashboard.
+-- ---------------------------------------------------------------------------
+-- The key's fingerprint, set by the owner in the SQL Editor (here: a fictional key).
+insert into private.owner_summary_key (id, token_sha256)
+  values (1, encode(sha256(convert_to('test-key-0123456789abcdef0123456789abcdef', 'UTF8')), 'hex'));
+
+begin;
+set local role anon;
+select test.expect('select * from public.owner_summary_snapshots', -1, 'signed out cannot read summaries');
+select test.expect('select * from public.owner_summary_calls', -1, 'signed out cannot read the call log');
+select test.expect('select * from private.owner_summary_key', -1, 'signed out cannot read the key fingerprint');
+select test.expect($$insert into public.owner_summary_snapshots (content, created_by) values ('{}', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'signed out cannot publish');
+select test.expect($$select 1 where public.owner_summary_latest('wrong-key-0123456789abcdef0123456789abcdef') is null$$, 1, 'a wrong key gets nothing');
+select test.expect($$select 1 where public.owner_summary_latest('short') is null$$, 1, 'a short key gets nothing');
+select test.expect($$select 1 where public.owner_summary_latest(null) is null$$, 1, 'no key gets nothing');
+select test.expect($$select 1 where public.owner_summary_latest('test-key-0123456789abcdef0123456789abcdef') ->> 'status' = 'no_snapshot'$$, 1, 'the right key before anything is published says so');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"schema":"owner-summary/v1"}')$$, -1, 'manager cannot publish a summary');
+select test.expect('select * from public.owner_summary_snapshots', 0, 'manager cannot read summaries');
+select test.expect('select * from public.owner_summary_calls', 0, 'manager cannot read the call log');
+select test.expect($$select public.owner_summary_latest('test-key-0123456789abcdef0123456789abcdef')$$, -1, 'signed-in users cannot call the dashboard read');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"schema":"owner-summary/v1"}')$$, -1, 'developer cannot publish a summary');
+select test.expect('select * from public.owner_summary_snapshots', 0, 'developer cannot read summaries');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"schema":"owner-summary/v1"}')$$, -1, 'owner without two-factor cannot publish');
+select test.expect('select * from public.owner_summary_calls', 0, 'owner without two-factor cannot read the call log');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"schema":"owner-summary/v1","metrics":[{"key":"mrr","value":18500}]}')$$, 1, 'owner publishes a summary');
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"lists":[{"items":[{"name":"pat@example.com"}]}]}')$$, -2, 'a summary with an email address is rejected');
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"lists":[{"items":[{"detail":"call 555-010-1234"}]}]}')$$, -2, 'a summary with a phone number is rejected');
+select test.expect($$insert into public.owner_summary_snapshots (content) values ('{"generated_at":"2026-11-08T15:04:05.123Z","value":1234567}')$$, 1, 'dates and amounts are not mistaken for phone numbers');
+select test.expect($$insert into public.owner_summary_snapshots (content, created_by) values ('{}', '00000000-0000-0000-0000-0000000000a2')$$, -1, 'cannot publish as someone else');
+select test.expect($$update public.owner_summary_snapshots set content = '{}'$$, -1, 'summaries cannot be edited');
+select test.expect($$delete from public.owner_summary_snapshots$$, -1, 'summaries cannot be deleted');
+select test.expect($$insert into public.owner_summary_calls (outcome) values ('ok')$$, -1, 'nobody writes the call log by hand');
+select test.expect('select * from private.owner_summary_key', -1, 'even the owner cannot read the key fingerprint through the app');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select 1 where public.owner_summary_latest('test-key-0123456789abcdef0123456789abcdef') -> 'content' ->> 'generated_at' = '2026-11-08T15:04:05.123Z'$$, 1, 'the right key gets the latest summary');
+select test.expect($$select 1 from (select public.owner_summary_latest('test-key-0123456789abcdef0123456789abcdef') as r) q where jsonb_typeof(r -> 'content') = 'object' and (select count(*) from jsonb_object_keys(r)) = 3$$, 1, 'the read returns only status, time and the summary');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.owner_summary_calls where outcome = 'ok' and snapshot_id is not null$$, 2, 'each successful read is recorded');
+select test.expect($$select * from public.owner_summary_calls where outcome = 'no_snapshot'$$, 1, 'the read before publishing is recorded too');
+select test.expect($$update public.owner_summary_calls set outcome = 'ok'$$, -1, 'the call log cannot be edited');
+select test.expect($$delete from public.owner_summary_calls$$, -1, 'the call log cannot be deleted');
+commit;
+
+-- Rate limit: at most 30 reads in 10 minutes, then "limited".
+begin;
+set local role anon;
+do $$
+declare r jsonb;
+begin
+  for i in 1..40 loop
+    r := public.owner_summary_latest('test-key-0123456789abcdef0123456789abcdef');
+  end loop;
+  if r ->> 'status' is distinct from 'limited' then raise exception 'FAILED: rate limit (got %)', r ->> 'status'; end if;
+  raise notice 'ok: the dashboard read is rate limited';
+end;
+$$;
+commit;
+
+-- The ONLY function signed-out callers may run is the dashboard read.
+do $$
+declare bad text;
+begin
+  select string_agg(p.proname, ', ') into bad
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname in ('public', 'private') and has_function_privilege('anon', p.oid, 'execute')
+    and p.proname <> 'owner_summary_latest';
+  if bad is not null then raise exception 'FAILED: signed-out callers can run: %', bad; end if;
+  raise notice 'ok: signed-out callers can run only the dashboard read';
 end;
 $$;
 

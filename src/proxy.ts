@@ -7,7 +7,15 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { COOKIE_OPTIONS, databaseSettings } from "@/lib/supabase/server";
 
+/**
+ * The ONE address that skips the sign-in redirect: the owner's dashboard read. It has
+ * its own lock (a key, checked in the route and again in the database) and returns
+ * only the saved totals. Exact match only.
+ */
+export const OWNER_SUMMARY_PATH = "/api/owner-summary";
+
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname === OWNER_SUMMARY_PATH) return NextResponse.next();
   const s = databaseSettings();
   if (!s) return NextResponse.next();
 

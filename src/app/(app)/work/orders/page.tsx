@@ -9,7 +9,7 @@ import { Fold } from "@/components/shell/Fold";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getAiStatus, getMember, getOps, getTeam, getWorkOrderDrafts, usesDatabase } from "@/lib/data-source";
-import { draftAdded, minutesLabel, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
+import { draftAdded, minutesLabel, reviewQueue, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
 
 export const metadata: Metadata = { title: "Work orders" };
 
@@ -27,7 +27,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
   const who = sp.who === "none" ? null : sp.who && staff.some((m) => m.id === sp.who) ? sp.who : undefined;
   const client = sp.client && ops.clients.some((c) => c.id === sp.client) ? sp.client : undefined;
   const show: WorkOrderShow = sp.show === "all" ? "all" : "work";
-  const status: WorkOrderStatusFilter = sp.status === "blocked" || sp.status === "overdue" || sp.status === "done" ? sp.status : "open";
+  const status: WorkOrderStatusFilter = sp.status === "blocked" || sp.status === "overdue" || sp.status === "review" || sp.status === "done" ? sp.status : "open";
 
   const groups = workOrderGroups({ actions: ops.actions, staff, today: ops.today, show, who, client, status });
   const everyone = workOrderGroups({ actions: ops.actions, staff, today: ops.today, show });
@@ -36,6 +36,9 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
     { open: 0, overdue: 0, blocked: 0, est: 0, done7: 0 },
   );
   const listed = groups.reduce((n, g) => n + g.items.length, 0);
+  // Sent for review, everyone's, oldest first.
+  const review = reviewQueue(ops.actions, ops.today);
+  const reviewGroups = workOrderGroups({ actions: ops.actions, staff, today: ops.today, show: "all", status: "review" }).filter((g) => g.items.length);
   const copyText = workOrdersAsText(groups, ops.today);
 
   const clients = ops.clients
@@ -64,11 +67,18 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
       )}
 
-      <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {ops.orders && !ops.review && (
+        <p className="mb-3 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
+          <span className="font-semibold text-amber">One setup step needed for reviews.</span> <span className="text-muted">Run 0011 in Supabase so developers send work for review instead of marking it done.</span>
+        </p>
+      )}
+
+      <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {[
           { label: "Open", value: String(total.open), tone: "" },
           { label: "Overdue", value: String(total.overdue), tone: total.overdue ? "text-rose" : "" },
           { label: "Blocked", value: String(total.blocked), tone: total.blocked ? "text-rose" : "" },
+          { label: "Waiting for review", value: String(review.waiting.length), tone: review.waiting.length ? "text-violet" : "" },
           { label: "Done this week", value: String(total.done7), tone: "text-lime" },
         ].map((t) => (
           <div key={t.label} className="glass rounded-2xl px-3 py-2">
@@ -81,6 +91,26 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         {show === "work" ? "Work orders and issues" : "All items, including follow-ups"}
         {total.est ? ` · about ${minutesLabel(total.est)} of open work estimated` : ""}. Saved in this app only; GoHighLevel isn&apos;t changed.
       </p>
+
+      {ops.review && (
+        <Fold
+          label="Waiting for your review"
+          title="Waiting for your review"
+          defaultOpen={review.waiting.length > 0}
+          summary={
+            review.waiting.length
+              ? `${review.waiting.length} sent for review · oldest first`
+              : `Nothing waiting${review.avgWaitMinutes !== null ? ` · reviews took ${minutesLabel(review.avgWaitMinutes)} on average this week` : ""}`
+          }
+          badge={review.waiting.length ? <span className="font-semibold text-violet">{review.waiting.length}</span> : undefined}
+        >
+          <WorkOrderList groups={reviewGroups} today={ops.today} mode="manage" staff={staff} canUseAi={false} empty="Nothing waiting for review." />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">
+            Developers send work orders and issues here instead of marking them done. Approve to close it, or send it back with what still needs fixing.
+            {review.avgWaitMinutes !== null ? ` Reviews this week took ${minutesLabel(review.avgWaitMinutes)} on average.` : ""}
+          </p>
+        </Fold>
+      )}
 
       <Fold label="Breakdown by person" title="By person" summary={`${everyone.filter((g) => g.ownerId).length} people with work · ${everyone.find((g) => !g.ownerId)?.stats.open ?? 0} unassigned`}>
         <ul className="glass divide-y divide-line rounded-3xl">
@@ -198,6 +228,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
             <option value="open">Not done</option>
             <option value="overdue">Overdue</option>
             <option value="blocked">Blocked</option>
+            <option value="review">Waiting for review</option>
             <option value="done">Done (2 weeks)</option>
           </select>
         </label>

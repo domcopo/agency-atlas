@@ -14,7 +14,8 @@ import Link from "next/link";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getAiStatus, getGhlSummary, getMember, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { PublishSummaryButton } from "@/components/forms/PublishSummaryButton";
 import { hasPrivateRoster } from "@/lib/private-data";
 import { ImportButton } from "@/components/forms/ImportButton";
 import { SyncButton } from "@/components/forms/SyncButton";
@@ -40,6 +41,8 @@ export default async function SafetyPage() {
   const privateFile = hasPrivateRoster();
   const ghl = await getGhlSummary();
   const ai = await getAiStatus();
+  const ownerSummary = member?.role === "owner" ? await getOwnerSummaryStatus() : null;
+  const nyTime = (at: string) => new Date(at).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const ghlStatus = !ghl.configured ? "Not connected" : !db ? "Needs the database" : !ghl.tablesReady ? "Run setup SQL (0003)" : ghl.lastSync ? "Connected · read-only" : "Ready to sync";
 
   return (
@@ -150,6 +153,40 @@ export default async function SafetyPage() {
           </ul>
         </GlassCard>
       </section>
+
+      {member?.role === "owner" && (
+        <>
+          <SectionTitle>Owner summary</SectionTitle>
+          <section id="owner-summary" className="scroll-mt-4">
+            <GlassCard className="space-y-3 text-sm">
+              <p className="text-muted">
+                Totals for your personal dashboard: weekly numbers, at-risk and win-back names, counts by person, alerts and AI bots. No notes,
+                messages, contact details or work order titles.
+              </p>
+              {ownerSummary ? (
+                <ul className="space-y-1 text-xs">
+                  <li>
+                    <span className="text-muted">Last published:</span> {ownerSummary.publishedAt ? `${nyTime(ownerSummary.publishedAt)} (New York)` : "not yet"}
+                  </li>
+                  <li>
+                    <span className="text-muted">Last read by your dashboard:</span> {ownerSummary.lastReadAt ? `${nyTime(ownerSummary.lastReadAt)} (New York)` : "never"} ·{" "}
+                    {ownerSummary.readsThisWeek} {ownerSummary.readsThisWeek === 1 ? "read" : "reads"} this week
+                    {ownerSummary.limitedThisWeek ? <span className="text-amber"> · {ownerSummary.limitedThisWeek} refused by the rate limit</span> : null}
+                  </li>
+                </ul>
+              ) : (
+                <p className="text-xs text-amber">Needs one setup step (0012 SQL).</p>
+              )}
+              {ownerSummary && <PublishSummaryButton />}
+              <ul className="space-y-1 text-xs text-muted">
+                <li>• Refreshes on its own at most once an hour when you open Home.</li>
+                <li>• Your dashboard reads it at /api/owner-summary with its key. Only the key&apos;s fingerprint is stored here.</li>
+                <li>• Read-only: reading it never syncs GoHighLevel, runs AI, or changes anything.</li>
+              </ul>
+            </GlassCard>
+          </section>
+        </>
+      )}
 
       <SectionTitle>Your client list</SectionTitle>
       <GlassCard className="space-y-2 text-sm">

@@ -11,7 +11,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, type AiResult } from "@/lib/ai/client";
 import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, restoreOpsBriefing, restoreProfile, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
-import { EST_OPTIONS, parseSteps } from "@/lib/ops";
+import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
+import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
 import {
   getAiStatus,
   getAtlasQuestions,
@@ -20,6 +21,7 @@ import {
   getClientHealth,
   getGhlSummary,
   getOps,
+  getOwnerSummaryInput,
   getRecentCheckInsByClient,
   getTeam,
   getRoster,
@@ -70,7 +72,7 @@ function anyDate(value: string): string | null {
 
 const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const PRIORITIES = ["critical", "high", "normal", "low"] as const;
-const STATUSES = ["open", "in_progress", "waiting", "blocked", "done"] as const;
+const STATUSES = ["open", "in_progress", "waiting", "blocked", "review", "done"] as const;
 const CONTACT_KINDS = ["check_in", "call", "message", "email", "meeting", "note"] as const;
 const oneOf = <T extends string>(list: readonly T[], v: string): T | null => (list.includes(v as T) ? (v as T) : null);
 const MISSING_TABLE = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
@@ -480,17 +482,33 @@ export async function updateAction(form: FormData) {
   // Developers may only change the status of their own items, and say why it's blocked (the database enforces this too).
   if (me.role === "developer" && op !== "done" && op !== "status") return;
   const db = await createDatabaseClient();
-  const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, title, status").eq("id", id).maybeSingle();
+  const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, kind, title, status").eq("id", id).maybeSingle();
   if (!current) return; // not found, or not allowed to see it
-  const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; title: string; status: string };
+  const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; kind: "follow_up" | "issue" | "work_order"; title: string; status: string };
+  const manager = me.role === "owner" || me.role === "manager";
+  // A developer's "done" on a work order or issue means "ready for review" (0011): a manager approves it.
+  const devToReview = me.role === "developer" && needsReview(a);
 
   let patch: Record<string, unknown> | null = null;
   let summary = "";
   let kind = "action_status";
-  if (op === "done") {
+  if (op === "done" && devToReview) {
+    patch = { status: "review", done_at: null };
+    summary = `Ready for review: ${a.title}`;
+  } else if (op === "done") {
     patch = { status: "done", done_at: new Date().toISOString() };
     summary = `Done: ${a.title}`;
     kind = "action_done";
+  } else if (op === "approve") {
+    if (!manager || a.status !== "review") return;
+    patch = { status: "done", done_at: new Date().toISOString(), review_note: null };
+    summary = `Approved as done: ${a.title}`;
+    kind = "action_done";
+  } else if (op === "sendback") {
+    if (!manager || a.status !== "review") return;
+    const note = text(form, "note", 200);
+    patch = { status: "open", done_at: null, review_note: note || null };
+    summary = `Sent back${note ? ` (${note})` : ""}: ${a.title}`;
   } else if (op === "reopen") {
     patch = { status: "open", done_at: null };
     summary = `Reopened: ${a.title}`;
@@ -516,13 +534,14 @@ export async function updateAction(form: FormData) {
     summary = name ? `Assigned to ${name}: ${a.title}` : `Unassigned: ${a.title}`;
     kind = "action_assigned";
   } else if (op === "status") {
-    const status = oneOf(STATUSES, text(form, "status", 12));
-    if (!status) return;
+    const picked = oneOf(STATUSES, text(form, "status", 12));
+    if (!picked) return;
+    const status = picked === "done" && devToReview ? "review" : picked;
     patch = status === "done" ? { status, done_at: new Date().toISOString() } : { status, done_at: null };
     // Blocked: keep a short reason. Other statuses clear it.
     const reason = text(form, "reason", 200);
     patch.blocked_reason = status === "blocked" ? reason || null : null;
-    summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "blocked" ? "Blocked" : status === "done" ? "Done" : "Open"}: ${a.title}`;
+    summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "blocked" ? "Blocked" : status === "review" ? "Ready for review" : status === "done" ? "Done" : "Open"}: ${a.title}`;
     kind = status === "done" ? "action_done" : "action_status";
   } else if (op === "promise") {
     if (me.role === "developer") return;
@@ -553,6 +572,13 @@ export async function updateAction(form: FormData) {
   }
   if (!patch) return;
   let { error } = await db.from("actions").update(patch).eq("id", id);
+  // Before 0011 there's no "review" status (a check rule refuses it): the old way, straight to done.
+  if (error?.code === "23514" && patch.status === "review") {
+    patch = { ...patch, status: "done", done_at: new Date().toISOString() };
+    summary = `Done: ${a.title}`;
+    kind = "action_done";
+    ({ error } = await db.from("actions").update(patch).eq("id", id));
+  }
   // Before 0009 there's no blocked_reason column: save the status change without it.
   if (error && MISSING_COLUMN.has(error.code ?? "") && "blocked_reason" in patch) {
     const { blocked_reason: _skip, ...rest } = patch;
@@ -1223,4 +1249,53 @@ export async function recordHealthSnapshot(): Promise<void> {
   const db = await createDatabaseClient();
   const { error } = await db.from("client_health_daily").upsert(rows, { onConflict: "client_id,day", ignoreDuplicates: true });
   if (error) console.warn(`Health history not saved: ${error.code}`);
+}
+
+// ---------------------------------------------------------------------------
+// Owner summary (0012): totals for the owner's personal dashboard. Built here,
+// while the owner is signed in, with the app's own rules; saved as a snapshot that
+// GET /api/owner-summary serves read-only. Owner only. Nothing is sent anywhere.
+// ---------------------------------------------------------------------------
+
+const OWNER_SUMMARY_EVERY_MS = 60 * 60_000;
+
+async function publishOwnerSummary(force: boolean): Promise<{ error?: string; message?: string }> {
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can publish the summary." };
+  const db = await createDatabaseClient();
+  if (!force) {
+    // At most once an hour (one small read on most page loads).
+    const { data, error } = await db.from("owner_summary_snapshots").select("created_at").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) return {}; // before 0012: quietly nothing
+    if (data && Date.now() - Date.parse(data.created_at) < OWNER_SUMMARY_EVERY_MS) return {};
+  }
+  const input = await getOwnerSummaryInput();
+  if (!input) return { error: "The summary needs the database." };
+  const summary = buildOwnerSummary(input);
+  // Safety net before saving (the database checks again).
+  const leaks = findLeaks(summary);
+  if (leaks.length) {
+    console.warn(`Owner summary not published: it looked like it contained ${leaks.join(", ")}`);
+    return { error: `Not published: it looked like it contained ${[...new Set(leaks)].join(" and ")}. Check client names for contact details.` };
+  }
+  const { error } = await db.from("owner_summary_snapshots").insert({ content: summary });
+  if (error) {
+    console.warn(`Owner summary refused: ${error.code}`);
+    if (MISSING_TABLE.has(error.code ?? "")) return { error: "The owner summary needs one setup step first (0012 SQL)." };
+    if (error.code === "23514") return { error: "The database's safety check refused it (it looked like it had contact details)." };
+    return { error: "Couldn't publish the summary." };
+  }
+  revalidatePath("/safety");
+  return { message: `Published ${input.now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} (New York time).` };
+}
+
+/** Called when the owner opens Home: publishes a fresh summary at most once an hour. */
+export async function autoPublishOwnerSummary(): Promise<void> {
+  await publishOwnerSummary(false);
+}
+
+/** "Publish now" on the Data Safety screen. */
+export async function publishOwnerSummaryNow(_prev: { error?: string; message?: string } | undefined): Promise<{ error?: string; message?: string }> {
+  void _prev;
+  return publishOwnerSummary(true);
 }

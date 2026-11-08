@@ -65,8 +65,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const missedCount = promiseItems.filter((p) => promiseMissed(p.action!, ops.today)).length;
   const blockedCount = promiseItems.filter((p) => p.action!.status === "blocked").length;
   const workOrderCount = workOrderGroups({ actions: ops.actions, staff: staffList, today: ops.today }).reduce(
-    (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue }),
-    { open: 0, overdue: 0 },
+    (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue, review: t.review + g.stats.inReview }),
+    { open: 0, overdue: 0, review: 0 },
   );
   const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
   const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
@@ -115,7 +115,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold">Work orders</span>
             <span className="block truncate text-xs text-muted">
-              {workOrderCount.open} open · {workOrderCount.overdue} overdue · assign, reassign, AI drafts, copy for GoHighLevel
+              {workOrderCount.open} open · {workOrderCount.overdue} overdue
+              {workOrderCount.review ? ` · ${workOrderCount.review} waiting for review` : ""} · assign, reassign, AI drafts, copy for GoHighLevel
             </span>
           </span>
           <span aria-hidden className="text-faint">›</span>

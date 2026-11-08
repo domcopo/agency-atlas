@@ -94,6 +94,8 @@ export function statusNote(a: ClientAction, today: string): string {
   if (a.status === "waiting") out += " · waiting on client";
   else if (a.status === "in_progress") out += " · in progress";
   else if (a.status === "blocked") out += a.blockedReason ? ` · blocked: ${a.blockedReason}` : " · blocked";
+  else if (a.status === "review") out += " · ready for review";
+  if (a.status !== "done" && a.status !== "review" && a.reviewNote) out += ` · sent back: ${a.reviewNote}`;
   if (a.promisedOn && a.status !== "done")
     out += promiseMissed(a, today) ? ` · promise missed (was ${shortDay(a.promisedOn)})` : ` · promised by ${shortDay(a.promisedOn)}`;
   return out;
@@ -427,6 +429,8 @@ export function myWork(items: PriorityItem[], ownerId: string | null | undefined
   const mine = items.filter((i) => !i.id.startsWith("g_") && (ownerId === undefined || (i.ownerId ?? null) === ownerId));
   const buckets: Record<WorkBucket, PriorityItem[]> = { overdue: [], today: [], upcoming: [], waiting: [], blocked: [] };
   for (const i of mine) {
+    // Sent for review: the next step is a manager's (shown in "Waiting for your review").
+    if (i.action?.status === "review") continue;
     if (i.action?.status === "blocked") buckets.blocked.push(i);
     else if (i.action?.status === "waiting") buckets.waiting.push(i);
     else if (i.when === "overdue") buckets.overdue.push(i);
@@ -478,7 +482,7 @@ export function isSalesStage(stage: string | null | undefined): boolean {
   return SALES_WORDS.test(stage) && !NOT_SALES_WORDS.test(stage);
 }
 
-export type BoardColumn = "open" | "in_progress" | "waiting" | "blocked" | "done";
+export type BoardColumn = "open" | "in_progress" | "waiting" | "blocked" | "review" | "done";
 
 /**
  * Work board columns from the saved follow-ups and issues (same status as everywhere
@@ -487,7 +491,7 @@ export type BoardColumn = "open" | "in_progress" | "waiting" | "blocked" | "done
  */
 export function boardColumns(actions: ClientAction[], ownerId: string | null | undefined, today: string): Record<BoardColumn, ClientAction[]> {
   const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
-  const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], blocked: [], done: [] };
+  const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], blocked: [], review: [], done: [] };
   for (const a of actions) {
     if (ownerId !== undefined && (a.ownerId ?? null) !== ownerId) continue;
     if (a.status === "done") {
@@ -496,7 +500,7 @@ export function boardColumns(actions: ClientAction[], ownerId: string | null | u
   }
   const byDue = (x: ClientAction, y: ClientAction) =>
     PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999");
-  for (const k of ["open", "in_progress", "waiting", "blocked"] as const)
+  for (const k of ["open", "in_progress", "waiting", "blocked", "review"] as const)
     cols[k].sort((x, y) => Number(dueWhen(y.dueOn, today) === "overdue") - Number(dueWhen(x.dueOn, today) === "overdue") || byDue(x, y));
   cols.done.sort((x, y) => (y.doneAt ?? "").localeCompare(x.doneAt ?? ""));
   return cols;
@@ -615,10 +619,11 @@ export const EST_OPTIONS = [
   [480, "A day"],
   [960, "Two days"],
 ] as const;
-export type WorkOrderStatusFilter = "open" | "blocked" | "overdue" | "done";
+export type WorkOrderStatusFilter = "open" | "blocked" | "overdue" | "review" | "done";
 
-/** "1h 30m", "45m", "6h". */
+/** "1h 30m", "45m", "6h" ("under a minute" for less than one). */
 export function minutesLabel(min: number): string {
+  if (min < 1) return "under a minute";
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
@@ -639,6 +644,10 @@ export interface WorkOrderStats {
   dueThisWeek: number;
   overdue: number;
   blocked: number;
+  /** Sent for review, waiting on a manager. */
+  inReview: number;
+  /** Times work was sent back, on items open now or done in the last 7 days (a quality signal). */
+  sentBack: number;
   /** Sum of time estimates on open items (items without one aren't counted). */
   estMinutesOpen: number;
   /** Open items without a time estimate. */
@@ -658,12 +667,13 @@ export interface WorkOrderGroup {
 /** Late = finished after the due date (or after the date promised to the client). */
 export function finishedLate(a: ClientAction): boolean {
   if (a.status !== "done" || !a.doneAt) return false;
-  const day = a.doneAt.slice(0, 10);
+  // The person finished when they sent it for review (time waiting on a manager isn't theirs).
+  const day = (a.submittedAt && a.submittedAt < a.doneAt ? a.submittedAt : a.doneAt).slice(0, 10);
   return Boolean((a.dueOn && day > a.dueOn) || (a.promisedOn && day > a.promisedOn));
 }
 
 function emptyStats(): WorkOrderStats {
-  return { open: 0, dueThisWeek: 0, overdue: 0, blocked: 0, estMinutesOpen: 0, noEstimate: 0, done7: 0, doneLate7: 0 };
+  return { open: 0, dueThisWeek: 0, overdue: 0, blocked: 0, inReview: 0, sentBack: 0, estMinutesOpen: 0, noEstimate: 0, done7: 0, doneLate7: 0 };
 }
 
 /**
@@ -708,19 +718,22 @@ export function workOrderGroups(input: {
       if (a.doneAt && a.doneAt >= weekAgo) {
         s.done7++;
         if (finishedLate(a)) s.doneLate7++;
+        s.sentBack += a.sentBackCount ?? 0;
       }
     } else {
       s.open++;
+      s.sentBack += a.sentBackCount ?? 0;
       if (overdue) s.overdue++;
       else if (a.dueOn && a.dueOn <= weekAhead) s.dueThisWeek++;
       if (a.status === "blocked") s.blocked++;
+      if (a.status === "review") s.inReview++;
       if (a.estMinutes) s.estMinutesOpen += a.estMinutes;
       else s.noEstimate++;
     }
     const listed =
       status === "done"
         ? a.status === "done" && Boolean(a.doneAt && a.doneAt >= twoWeeksAgo)
-        : a.status !== "done" && (status === "open" || (status === "blocked" ? a.status === "blocked" : overdue));
+        : a.status !== "done" && (status === "open" || (status === "blocked" ? a.status === "blocked" : status === "review" ? a.status === "review" : overdue));
     if (listed) g.items.push(a);
   }
   const rank = (a: ClientAction) => (promiseMissed(a, today) || dueWhen(a.dueOn, today) === "overdue" ? 0 : a.status === "blocked" ? 1 : 2);
@@ -784,4 +797,23 @@ export function contactSummary(c: ClientContactDates, today: string): { lastCont
 export function draftAdded(draft: { clientSlug: string | null; title: string }, actions: ClientAction[]): boolean {
   const t = draft.title.trim().toLowerCase();
   return actions.some((a) => (a.client?.slug ?? null) === draft.clientSlug && a.title.trim().toLowerCase() === t);
+}
+
+
+/**
+ * "Waiting for your review": work sent for review, oldest first (it's been waiting longest).
+ * Also how long finished work waited for a review lately (average minutes, items done in 7 days).
+ */
+export function reviewQueue(actions: ClientAction[], today: string): { waiting: ClientAction[]; avgWaitMinutes: number | null } {
+  const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
+  const waiting = actions.filter((a) => a.status === "review").sort((x, y) => (x.submittedAt ?? "").localeCompare(y.submittedAt ?? ""));
+  const waits = actions
+    .filter((a) => a.status === "done" && a.submittedAt && a.doneAt && a.doneAt >= weekAgo && a.doneAt >= a.submittedAt)
+    .map((a) => (Date.parse(a.doneAt!) - Date.parse(a.submittedAt!)) / 60_000);
+  return { waiting, avgWaitMinutes: waits.length ? Math.round(waits.reduce((n, m) => n + m, 0) / waits.length) : null };
+}
+
+/** Developers must send work orders and issues for review; simple follow-ups they can close. */
+export function needsReview(a: Pick<ClientAction, "kind">): boolean {
+  return a.kind === "work_order" || a.kind === "issue";
 }

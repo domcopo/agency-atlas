@@ -9,7 +9,7 @@ import { updateAction } from "@/app/actions";
 import { priorityTone } from "@/components/cards/ActionRow";
 import { WorkPromptButton } from "@/components/forms/WorkPromptButton";
 import { cn } from "@/lib/format";
-import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, parseSteps, promiseMissed, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
+import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
 
 const input = "min-h-9 min-w-0 rounded-lg border border-line bg-white/5 px-1.5 text-xs text-ink";
@@ -20,6 +20,7 @@ const statusLabel: Record<ClientAction["status"], string> = {
   in_progress: "In progress",
   waiting: "Waiting on client",
   blocked: "Blocked",
+  review: "Ready for review",
   done: "Done",
 };
 
@@ -28,8 +29,10 @@ export function StatsLine({ s }: { s: WorkOrderStats }) {
   if (s.overdue) bits.push({ text: `${s.overdue} overdue`, tone: "text-rose font-semibold" });
   if (s.dueThisWeek) bits.push({ text: `${s.dueThisWeek} due this week`, tone: "text-amber" });
   if (s.blocked) bits.push({ text: `${s.blocked} blocked`, tone: "text-rose" });
+  if (s.inReview) bits.push({ text: `${s.inReview} in review`, tone: "text-violet" });
   if (s.estMinutesOpen) bits.push({ text: `~${minutesLabel(s.estMinutesOpen)} planned${s.noEstimate ? ` (+${s.noEstimate} unestimated)` : ""}` });
   bits.push({ text: `${s.done7} done this week${s.doneLate7 ? ` (${s.doneLate7} late)` : ""}`, tone: "text-lime" });
+  if (s.sentBack) bits.push({ text: `sent back ${s.sentBack}×`, tone: "text-amber" });
   return (
     <span className="text-xs text-muted">
       {bits.map((b, i) => (
@@ -39,6 +42,32 @@ export function StatsLine({ s }: { s: WorkOrderStats }) {
         </span>
       ))}
     </span>
+  );
+}
+
+/** Approve as done, or send back with a short note (owner and managers; the server checks). */
+export function ReviewButtons({ a }: { a: ClientAction }) {
+  return (
+    <div className="space-y-1.5 rounded-xl border border-violet/40 bg-violet/5 p-2">
+      <p className="text-[11px] font-semibold text-violet">Ready for review: check the work, then:</p>
+      <div className="flex flex-wrap gap-1.5">
+        <form action={updateAction}>
+          <input type="hidden" name="actionId" value={a.id} />
+          <input type="hidden" name="op" value="approve" />
+          <button type="submit" className={cn(btn, "border-lime/50 text-lime")}>
+            Approve as done
+          </button>
+        </form>
+        <form action={updateAction} className="flex min-w-0 flex-1 gap-1.5">
+          <input type="hidden" name="actionId" value={a.id} />
+          <input type="hidden" name="op" value="sendback" />
+          <input name="note" maxLength={200} placeholder="What still needs fixing?" aria-label={`Why "${a.title}" is sent back`} className={cn(input, "flex-1")} />
+          <button type="submit" className={cn(btn, "border-amber/50 text-amber")}>
+            Send back
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -93,6 +122,8 @@ function ItemCard({
             )}
             {a.estMinutes ? <span className="text-faint"> · ~{minutesLabel(a.estMinutes)}</span> : null}
           </p>
+          {a.status === "review" && a.submittedAt && <p className="mt-0.5 text-[11px] text-violet">Sent for review {a.submittedAt.slice(0, 10)}{a.sentBackCount ? ` · sent back ${a.sentBackCount}× before` : ""}</p>}
+          {a.status !== "review" && a.status !== "done" && a.reviewNote && <p className="mt-0.5 text-[11px] font-semibold text-amber">Sent back: {a.reviewNote}</p>}
         </div>
       </div>
 
@@ -125,13 +156,15 @@ function ItemCard({
               <option value="in_progress">In progress</option>
               <option value="waiting">Waiting on client</option>
               <option value="blocked">Blocked</option>
-              <option value="done">Done</option>
+              {(needsReview(a) || a.status === "review") && <option value="review">Ready for review</option>}
+              {!(mode === "developer" && needsReview(a)) && <option value="done">Done</option>}
             </select>
             <input name="reason" maxLength={200} defaultValue={a.blockedReason ?? ""} placeholder="If blocked: by what?" aria-label={`What is blocking "${a.title}"`} className={cn(input, "flex-[2]")} />
             <button type="submit" className={btn}>
               Save
             </button>
           </form>
+          {mode === "manage" && a.status === "review" && <ReviewButtons a={a} />}
           {mode === "manage" && (
             <>
               <form key={`assign-${a.ownerId ?? ""}`} action={updateAction} className="flex gap-1.5">

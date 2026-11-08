@@ -6,6 +6,7 @@ import { ArrowRight, Check, CalendarClock, UserRound } from "lucide-react";
 import Link from "next/link";
 import { completeReminder, updateAction } from "@/app/actions";
 import { cn } from "@/lib/format";
+import { needsReview } from "@/lib/ops";
 import type { ActionPriority, PriorityItem } from "@/lib/types";
 
 export const priorityTone: Record<ActionPriority, { label: string; dot: string; text: string }> = {
@@ -68,7 +69,8 @@ export function ActionRow({
             <input type="hidden" name="op" value="done" />
             {slug && <input type="hidden" name="slug" value={slug} />}
             <button type="submit" className={cn(btn, "border-lime/40 text-lime")}>
-              <Check aria-hidden className="size-3.5" /> Done
+              {/* Developers send work orders and issues for a manager's review (the server does the same). */}
+              <Check aria-hidden className="size-3.5" /> {statusOnly && needsReview(a) ? "Ready for review" : "Done"}
             </button>
           </form>
           {!statusOnly && (
@@ -142,6 +144,7 @@ export function ActionRow({
                 <option value="in_progress">In progress</option>
                 <option value="waiting">Waiting</option>
                 <option value="blocked">Blocked</option>
+                <option value="review">Ready for review</option>
                 <option value="done">Done</option>
               </select>
               <input name="reason" maxLength={200} defaultValue={a.blockedReason ?? ""} placeholder="If blocked: by what?" aria-label="What is blocking it" className={cn(input, "w-36")} />

@@ -14,6 +14,7 @@ const COLUMNS: { id: BoardColumn; label: string; tone: string }[] = [
   { id: "in_progress", label: "In progress", tone: "text-teal" },
   { id: "waiting", label: "Waiting on client", tone: "text-amber" },
   { id: "blocked", label: "Blocked", tone: "text-rose" },
+  { id: "review", label: "Ready for review", tone: "text-violet" },
   { id: "done", label: "Done · 7 days", tone: "text-lime" },
 ];
 
@@ -88,6 +89,7 @@ export function TaskBoard({
                               <option value="in_progress">In progress</option>
                               <option value="waiting">Waiting on client</option>
                               <option value="blocked">Blocked</option>
+                              <option value="review">Ready for review</option>
                               <option value="done">Done</option>
                             </select>
                             <button type="submit" className={btn}>

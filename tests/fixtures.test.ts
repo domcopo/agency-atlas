@@ -988,7 +988,7 @@ describe("work orders", () => {
     ];
     const g = workOrderGroups({ actions, staff, today });
     expect(g.map((x) => x.ownerName)).toEqual(["Dev (test)", "Dev Two (test)", "No owner"]);
-    expect(g[0]!.stats).toEqual({ open: 3, dueThisWeek: 1, overdue: 1, blocked: 1, estMinutesOpen: 90, noEstimate: 1, done7: 2, doneLate7: 1 });
+    expect(g[0]!.stats).toEqual({ open: 3, dueThisWeek: 1, overdue: 1, blocked: 1, inReview: 0, sentBack: 0, estMinutesOpen: 90, noEstimate: 1, done7: 2, doneLate7: 1 });
     expect(g[0]!.items.map((a) => a.id)).toEqual(["1", "2", "3"]); // overdue, then blocked, then the rest
     expect(g[1]!.stats.overdue).toBe(1);
     expect(workOrderGroups({ actions, staff, today, show: "all", who: "d2" })[0]!.items.map((a) => a.id)).toEqual(["8", "7"]);
@@ -1056,8 +1056,84 @@ describe("work orders", () => {
   it("work order labels and estimates read plainly", async () => {
     const { kindLabel, minutesLabel, finishedLate } = await import("@/lib/ops");
     expect([kindLabel("work_order"), kindLabel("issue"), kindLabel("follow_up")]).toEqual(["Work order", "Issue", "Follow-up"]);
-    expect([minutesLabel(45), minutesLabel(60), minutesLabel(90), minutesLabel(480)]).toEqual(["45m", "1h", "1h 30m", "8h"]);
+    expect([minutesLabel(0), minutesLabel(45), minutesLabel(60), minutesLabel(90), minutesLabel(480)]).toEqual(["under a minute", "45m", "1h", "1h 30m", "8h"]);
     expect(finishedLate(wo({ status: "done", dueOn: "2026-11-05", doneAt: "2026-11-05T23:00:00Z" }))).toBe(false);
     expect(finishedLate(wo({ status: "done", dueOn: "2026-11-09", promisedOn: "2026-11-04", doneAt: "2026-11-05T09:00:00Z" }))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review before done (0011): developers send work orders and issues for review.
+// ---------------------------------------------------------------------------
+describe("review before done", () => {
+  const today = "2026-11-08";
+  const item = (over: Partial<import("@/lib/types").ClientAction> = {}): import("@/lib/types").ClientAction => ({
+    id: "r1",
+    kind: "work_order",
+    title: "Fix form (test)",
+    notes: null,
+    priority: "normal",
+    status: "review",
+    dueOn: "2026-11-07",
+    doneAt: null,
+    createdAt: "2026-11-01T00:00:00Z",
+    ownerId: "d1",
+    ownerName: "Dev (test)",
+    client: { slug: "sam-sample", dbId: "db1", name: "Sam Sample (fictional)" },
+    leadGhlId: null,
+    ...over,
+  });
+
+  it("only work orders and issues need a review", async () => {
+    const { needsReview } = await import("@/lib/ops");
+    expect([needsReview({ kind: "work_order" }), needsReview({ kind: "issue" }), needsReview({ kind: "follow_up" })]).toEqual([true, true, false]);
+  });
+
+  it("on time is judged by when the person sent it for review, not when a manager approved it", async () => {
+    const { finishedLate } = await import("@/lib/ops");
+    // Due Nov 7, sent for review Nov 6, approved Nov 8: on time for the developer.
+    expect(finishedLate(item({ status: "done", submittedAt: "2026-11-06T15:00:00Z", doneAt: "2026-11-08T09:00:00Z" }))).toBe(false);
+    // Sent for review after the due date: late.
+    expect(finishedLate(item({ status: "done", submittedAt: "2026-11-08T08:00:00Z", doneAt: "2026-11-08T09:00:00Z" }))).toBe(true);
+  });
+
+  it("review queue is oldest first, with the average wait for reviews done this week", async () => {
+    const { reviewQueue } = await import("@/lib/ops");
+    const q = reviewQueue(
+      [
+        item({ id: "new", submittedAt: "2026-11-08T08:00:00Z" }),
+        item({ id: "old", submittedAt: "2026-11-05T08:00:00Z" }),
+        item({ id: "d1", status: "done", submittedAt: "2026-11-06T08:00:00Z", doneAt: "2026-11-06T12:00:00Z" }), // 4h
+        item({ id: "d2", status: "done", submittedAt: "2026-11-06T08:00:00Z", doneAt: "2026-11-07T08:00:00Z" }), // 24h
+        item({ id: "d3", status: "done", submittedAt: "2026-10-01T08:00:00Z", doneAt: "2026-10-02T08:00:00Z" }), // too old
+      ],
+      today,
+    );
+    expect(q.waiting.map((a) => a.id)).toEqual(["old", "new"]);
+    expect(q.avgWaitMinutes).toBe(14 * 60);
+    expect(reviewQueue([], today)).toEqual({ waiting: [], avgWaitMinutes: null });
+  });
+
+  it("breakdown counts work in review and how often work was sent back", async () => {
+    const { workOrderGroups } = await import("@/lib/ops");
+    const g = workOrderGroups({
+      actions: [item({ id: "a", sentBackCount: 1 }), item({ id: "b", status: "open", sentBackCount: 2, reviewNote: "Mobile still broken" }), item({ id: "c", status: "done", doneAt: "2026-11-07T10:00:00Z", sentBackCount: 1 })],
+      staff: [{ id: "d1", name: "Dev (test)" }],
+      today,
+    });
+    expect(g[0]!.stats).toMatchObject({ open: 2, inReview: 1, sentBack: 4, done7: 1 });
+    expect(workOrderGroups({ actions: [item({ id: "a" }), item({ id: "b", status: "open" })], staff: [], today, status: "review" })[0]!.items.map((a) => a.id)).toEqual(["a"]);
+  });
+
+  it("status notes say ready for review, and show a send-back note until it's resubmitted", async () => {
+    const { statusNote, myWork, boardColumns } = await import("@/lib/ops");
+    expect(statusNote(item(), today)).toBe(" · ready for review");
+    expect(statusNote(item({ status: "open", reviewNote: "Mobile still broken" }), today)).toBe(" · sent back: Mobile still broken");
+    expect(statusNote(item({ reviewNote: "Mobile still broken" }), today)).toBe(" · ready for review");
+    // In review = the manager's move: not in the developer's to-do buckets; its own board column.
+    const p = { id: "a_r1", title: "x", reason: "", href: "/", ownerName: null, ownerId: "d1", dueOn: null, when: "overdue" as const, priority: "normal" as const, action: item() };
+    const b = myWork([p], undefined);
+    expect(Object.values(b).flat()).toHaveLength(0);
+    expect(boardColumns([item()], undefined, today).review.map((a) => a.id)).toEqual(["r1"]);
   });
 });

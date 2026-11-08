@@ -14,7 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { recordHealthSnapshot } from "@/app/actions";
+import { autoPublishOwnerSummary, recordHealthSnapshot } from "@/app/actions";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { BriefingCard } from "@/components/cards/BriefingCard";
@@ -90,7 +90,15 @@ export default async function MissionControlPage() {
       <>
         <PageHeader title={`Hi, ${me.name}`} subtitle="Your follow-ups and issues" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
         {me.staffId ? (
-          <MyWork who="me" staff={[]} buckets={myWork(items, undefined)} load={{ people: [], unowned: { open: 0, overdue: 0, clients: 0 } }} canEdit personal />
+          <>
+            <MyWork who="me" staff={[]} buckets={myWork(items, undefined)} load={{ people: [], unowned: { open: 0, overdue: 0, clients: 0 } }} canEdit personal />
+            {items.some((i) => i.action?.status === "review") && (
+              <Link href="/work" className="mt-3 block rounded-2xl border border-violet/40 bg-violet/10 p-3 text-sm">
+                <span className="font-semibold text-violet">{items.filter((i) => i.action?.status === "review").length} waiting for a manager&apos;s review.</span>{" "}
+                <span className="text-muted">See them on Work.</span>
+              </Link>
+            )}
+          </>
         ) : (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
         )}
@@ -98,7 +106,11 @@ export default async function MissionControlPage() {
     );
   }
   // Saves today's health scores once a day (owner/manager only; checked on the server).
-  const snapshot = recordHealthSnapshot().catch(() => undefined);
+  // Then (owner only, at most hourly) refreshes the summary your personal dashboard reads.
+  const snapshot = recordHealthSnapshot()
+    .catch(() => undefined)
+    .then(() => autoPublishOwnerSummary())
+    .catch(() => undefined);
   // Independent reads run at the same time (each is also shared within this request).
   const [data, summary, coach, ai, briefing, ghl, ops, contacts, team, detections, atlasQuestions] = await Promise.all([
     getMissionControl(),
@@ -117,6 +129,7 @@ export default async function MissionControlPage() {
   await snapshot;
   const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
   const overdueCount = ops.priorities.filter((p) => p.when === "overdue").length;
+  const reviewWaiting = ops.actions.filter((a) => a.status === "review").length;
   const doneToday = completions.filter((x) => localDay(x.at) === localDay(new Date().toISOString())).length;
   const prospects = getProspects();
   const prospectById = Object.fromEntries(prospects.map((p) => [p.id, p]));
@@ -416,6 +429,12 @@ export default async function MissionControlPage() {
       )}
 
       {!samples && <PulseStrip tiles={pulse} hidden={pulseHidden} hiddenLabel="pipeline value" />}
+
+      {reviewWaiting > 0 && (
+        <Link href="/work/orders" className="mb-3 block rounded-2xl border border-violet/40 bg-violet/10 p-3 text-sm">
+          <span className="font-semibold text-violet">{reviewWaiting} waiting for your review.</span> <span className="text-muted">Approve or send back on Work orders.</span>
+        </Link>
+      )}
 
       <HomeTabs tabs={tabs} />
 

@@ -115,3 +115,29 @@ export async function getCurrentMember(): Promise<{ userId: string; name: string
   const staffId = (data as { staff_id?: string | null }).staff_id ?? null;
   return { userId, name: data.display_name as string, role: data.role as "owner" | "manager" | "developer", staffId };
 }
+
+/**
+ * The owner's dashboard read (0012), the ONE database call made without a signed-in
+ * person. It runs as the signed-out role, which can't read any table; it can only
+ * call public.owner_summary_latest, which checks the key's fingerprint again,
+ * rate-limits, records the call and returns the latest saved summary (totals only).
+ * Returns null when the database refuses the key, "error" when it can't be reached.
+ */
+export async function readOwnerSummary(
+  token: string,
+): Promise<{ status: "ok"; publishedAt: string; content: unknown } | { status: "limited" | "no_snapshot" } | null | "error"> {
+  const s = settings();
+  if (!s) return "error";
+  // No cookies in, none out: this client never has a session.
+  const db = createServerClient(s.url, s.key, { cookies: { getAll: () => [], setAll: () => {} } });
+  const { data, error } = await db.rpc("owner_summary_latest", { p_token: token });
+  if (error) {
+    console.warn(`Owner summary read refused: ${error.code}`);
+    return "error";
+  }
+  const r = data as { status?: string; published_at?: string; content?: unknown } | null;
+  if (!r) return null;
+  if (r.status === "ok" && typeof r.published_at === "string") return { status: "ok", publishedAt: r.published_at, content: r.content };
+  if (r.status === "limited" || r.status === "no_snapshot") return { status: r.status };
+  return "error";
+}

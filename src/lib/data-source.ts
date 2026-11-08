@@ -19,6 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
+import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import { buildPriorities, healthScore, healthSummary, isSalesStage, kindLabel, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote, type ClientContactDates } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
@@ -431,6 +432,7 @@ export async function getMissionControl(): Promise<MissionControlData> {
 const ACTION_COLS = "id, client_id, lead_ghl_id, kind, title, notes, owner_staff_id, priority, status, due_on, done_at, created_at";
 const PROMISE_COLS = "blocked_reason, promised_on"; // 0009
 const ORDER_COLS = "steps, source_link, source_note, est_minutes, ai_suggested"; // 0010
+const REVIEW_COLS = "submitted_at, sent_back_count, review_note"; // 0011
 
 /** Item kind from the database (unknown values read as follow-ups). */
 const asActionKind = (v: unknown): ClientAction["kind"] => (v === "issue" || v === "work_order" ? v : "follow_up");
@@ -443,6 +445,9 @@ function orderDetails(r: Record<string, unknown>) {
     sourceNote: typeof r.source_note === "string" && r.source_note ? r.source_note : null,
     estMinutes: Number.isFinite(est) && est > 0 ? est : null,
     aiSuggested: r.ai_suggested === true,
+    submittedAt: typeof r.submitted_at === "string" ? r.submitted_at : null,
+    sentBackCount: Number(r.sent_back_count ?? 0) || 0,
+    reviewNote: typeof r.review_note === "string" && r.review_note ? r.review_note : null,
   };
 }
 
@@ -450,26 +455,35 @@ function orderDetails(r: Record<string, unknown>) {
  * All actions (open and done), read as the signed-in person. ready=false before 0006 is run.
  * promises=false before 0009 (no blocked reason / promise date yet): reads still work.
  */
-export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; actions: ClientAction[] }> => {
-  if (!usesDatabase()) return { ready: false, promises: false, orders: false, actions: [] };
+export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; review: boolean; actions: ClientAction[] }> => {
+  const none = { ready: false, promises: false, orders: false, review: false, actions: [] as ClientAction[] };
+  if (!usesDatabase()) return none;
   const db = await createDatabaseClient();
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
-  const [first, team] = await Promise.all([read(`${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`), getTeam()]);
+  // Newest setup level first; step down if a later setup step hasn't been run yet.
+  const levels = [
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}`, promises: true, orders: true, review: true }, // 0011
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`, promises: true, orders: true, review: false }, // 0010
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}`, promises: true, orders: false, review: false }, // 0009
+    { cols: ACTION_COLS, promises: false, orders: false, review: false }, // 0006
+  ];
+  const [first, team] = await Promise.all([read(levels[0]!.cols), getTeam()]);
   let res = first;
-  let promises = !first.error;
-  const orders = !first.error;
-  if (first.error) {
-    res = await read(`${ACTION_COLS}, ${PROMISE_COLS}`); // before 0010
-    promises = !res.error;
+  let level = levels[0]!;
+  for (const next of levels.slice(1)) {
+    if (!res.error) break;
+    res = await read(next.cols);
+    level = next;
   }
-  if (res.error) res = await read(ACTION_COLS); // before 0009
-  if (res.error) return { ready: false, promises: false, orders: false, actions: [] };
+  if (res.error) return none;
+  const { promises, orders, review } = level;
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
   return {
     ready: true,
     promises,
     orders,
+    review,
     actions: ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
       const c = r.client_id ? byDbId.get(r.client_id) : undefined;
       return {
@@ -545,7 +559,7 @@ export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClie
 
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const [{ clients }, { ready, promises, orders, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
+  const [{ clients }, { ready, promises, orders, review, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
@@ -571,7 +585,7 @@ export const getOps = cache(async () => {
     : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { orders, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
+  return { orders, review, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -634,7 +648,8 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
   const db = await createDatabaseClient();
   const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
   const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-  let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`);
+  let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`);
+  if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`)); // before 0011
   if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}`)); // before 0010
   if (error) ({ data, error } = await read(base)); // before 0009
   if (error || !Array.isArray(data)) return [];
@@ -650,7 +665,7 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         title: String(r.title ?? ""),
         notes: (r.notes as string | null) ?? null,
         priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
-        status: (["open", "in_progress", "waiting", "blocked", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
+        status: (["open", "in_progress", "waiting", "blocked", "review", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
         dueOn: (r.due_on as string | null) ?? null,
         doneAt: (r.done_at as string | null) ?? null,
         createdAt: String(r.created_at ?? ""),
@@ -1262,6 +1277,70 @@ export const getMyClientContacts = cache(async (): Promise<ClientContactDates[]>
     unanswered: Number(r.unanswered_outbound ?? 0) || 0,
   }));
 });
+
+/**
+ * Everything the owner summary needs (0012), read AS the signed-in owner (normal
+ * security rules apply). The summary itself is built by src/lib/owner-summary.ts.
+ */
+export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> {
+  if (!usesDatabase()) return null;
+  const db = await createDatabaseClient();
+  const [ops, team, ai, detections, opps, runs] = await Promise.all([
+    getOps(),
+    getTeam(),
+    getAiStatus(),
+    getDetections(),
+    db.from("ghl_opportunities").select("ghl_created_at").limit(5000),
+    db.from("ai_usage").select("created_at, feature, outcome").order("created_at", { ascending: false }).limit(300),
+  ]);
+  const lastRuns: OwnerSummaryInput["ai"]["lastRuns"] = {};
+  for (const r of runs.data ?? []) {
+    const f = r.feature as "briefing" | "client_profile" | "work_orders";
+    if ((f === "briefing" || f === "client_profile" || f === "work_orders") && !lastRuns[f]) lastRuns[f] = { at: r.created_at, outcome: r.outcome };
+  }
+  const synced = !opps.error && (opps.data?.length ?? 0) > 0;
+  let latestHealth: OwnerSummaryInput["latestHealth"] = null;
+  if (ops.historyReady) {
+    const history = await getHealthHistory();
+    const slugOf = new Map(ops.clients.filter((c) => c.dbId).map((c) => [c.dbId!, c.id]));
+    latestHealth = [];
+    for (const [dbId, rows] of history.byClient) {
+      const slug = slugOf.get(dbId);
+      const last = [...rows].sort((a, b) => b.day.localeCompare(a.day))[0];
+      if (slug && last) latestHealth.push({ slug, score: last.score, level: last.level, day: last.day });
+    }
+  }
+  return {
+    now: new Date(),
+    clients: ops.clients,
+    actions: ops.ready ? ops.actions : null,
+    opportunities: synced ? (opps.data ?? []).map((o) => ({ createdAt: o.ghl_created_at })) : null,
+    latestHealth,
+    trends: new Map([...ops.trends.entries()].map(([slug, t]) => [slug, t?.change ?? null])),
+    detections,
+    staff: team.members.map((m) => ({ id: m.id, name: m.name })),
+    ai: { configured: ai.configured, tablesReady: ai.tablesReady, blocked: ai.level === "blocked", spentUsd: ai.spentUsd, lastRuns },
+  };
+}
+
+/** Owner summary status for the Data Safety screen: last published, last dashboard read. null before 0012 or for non-owners. */
+export async function getOwnerSummaryStatus(): Promise<{ publishedAt: string | null; lastReadAt: string | null; readsThisWeek: number; limitedThisWeek: number } | null> {
+  if (!usesDatabase()) return null;
+  const db = await createDatabaseClient();
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const [snap, calls] = await Promise.all([
+    db.from("owner_summary_snapshots").select("created_at").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    db.from("owner_summary_calls").select("at, outcome").gte("at", weekAgo).order("at", { ascending: false }).limit(1000),
+  ]);
+  if (snap.error || calls.error) return null;
+  const rows = calls.data ?? [];
+  return {
+    publishedAt: snap.data?.created_at ?? null,
+    lastReadAt: rows.find((r) => r.outcome === "ok")?.at ?? null,
+    readsThisWeek: rows.filter((r) => r.outcome === "ok").length,
+    limitedThisWeek: rows.filter((r) => r.outcome === "limited").length,
+  };
+}
 
 /** The latest AI profile draft for one client, if any. */
 export async function getClientProfile(clientDbId: string | undefined): Promise<{ id: string; createdAt: string; reviewedAt: string | null; content: ClientProfile } | null> {
