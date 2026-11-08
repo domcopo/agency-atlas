@@ -4,11 +4,15 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getCompletions, getDeveloperWork, getMember, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { getCompletions, getDeveloperWork, getMember, getMyClientContacts, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
 import { TaskBoard } from "@/components/cards/TaskBoard";
 import { Fold } from "@/components/shell/Fold";
-import { boardColumns, myWork, promiseMissed, teamLoad } from "@/lib/ops";
+import { boardColumns, myWork, promiseMissed, teamLoad, workOrderGroups } from "@/lib/ops";
+import { WorkOrderList } from "@/components/cards/WorkOrderList";
+import { DeveloperContacts } from "@/components/cards/DeveloperContacts";
+import { ClipboardList } from "lucide-react";
+import Link from "next/link";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
 import type { TeamRole, WorkPriority } from "@/lib/types";
@@ -27,12 +31,18 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const samples = showsSamples();
   const member = usesDatabase() ? await getMember() : null;
   if (member?.role === "developer") {
-    const items = await getDeveloperWork();
+    const [items, contacts] = await Promise.all([getDeveloperWork(), getMyClientContacts()]);
+    const mine = items.map((i) => i.action!).filter(Boolean);
+    const groups = member.staffId ? workOrderGroups({ actions: mine, staff: [{ id: member.staffId, name: member.name ?? "You" }], today, show: "all" }) : [];
     return (
       <>
-        <PageHeader title="Work" subtitle="Your follow-ups and issues" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        <PageHeader title="Work" subtitle="Your work orders, issues and follow-ups" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
         {member.staffId ? (
-          <MyWork who="me" staff={[]} buckets={myWork(items, undefined)} load={{ people: [], unowned: { open: 0, overdue: 0, clients: 0 } }} canEdit personal />
+          <>
+            <WorkOrderList groups={groups} today={today} mode="developer" empty="Nothing assigned to you right now." />
+            <p className="mt-1.5 px-1 text-[11px] text-faint">Update the status as you go. Blocked? Say by what, so a manager can help. Ask a manager to change steps or dates.</p>
+            <DeveloperContacts contacts={contacts} today={today} />
+          </>
         ) : (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
         )}
@@ -54,6 +64,10 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
     .sort((x, y) => Number(promiseMissed(y.action!, ops.today)) - Number(promiseMissed(x.action!, ops.today)) || (x.action!.promisedOn ?? "9999").localeCompare(y.action!.promisedOn ?? "9999"));
   const missedCount = promiseItems.filter((p) => promiseMissed(p.action!, ops.today)).length;
   const blockedCount = promiseItems.filter((p) => p.action!.status === "blocked").length;
+  const workOrderCount = workOrderGroups({ actions: ops.actions, staff: staffList, today: ops.today }).reduce(
+    (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue }),
+    { open: 0, overdue: 0 },
+  );
   const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
   const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
   const orders = getWorkOrders();
@@ -94,6 +108,19 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           </p>
         )}
       </div>
+
+      {ops.ready && member && (
+        <Link href="/work/orders" className="pressable glass mt-3 flex min-h-14 items-center gap-3 rounded-3xl px-4 py-3 hover:bg-white/[0.05]">
+          <ClipboardList aria-hidden className="size-5 shrink-0 text-violet" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">Work orders</span>
+            <span className="block truncate text-xs text-muted">
+              {workOrderCount.open} open · {workOrderCount.overdue} overdue · assign, reassign, AI drafts, copy for GoHighLevel
+            </span>
+          </span>
+          <span aria-hidden className="text-faint">›</span>
+        </Link>
+      )}
 
       {ops.ready && (
         <Fold

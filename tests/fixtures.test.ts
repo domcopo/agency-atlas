@@ -939,3 +939,125 @@ describe("plans, reminder Done, completions", () => {
     expect(load.unowned.done7).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Work orders (0010): grouping, breakdown, copy text, developer contact flags,
+// and AI drafts (codes in, real names/ids out; suggestions only).
+// ---------------------------------------------------------------------------
+describe("work orders", () => {
+  const today = "2026-11-08";
+  const wo = (over: Partial<import("@/lib/types").ClientAction> = {}): import("@/lib/types").ClientAction => ({
+    id: "w1",
+    kind: "work_order",
+    title: "Fix contact form (test)",
+    notes: null,
+    priority: "normal",
+    status: "open",
+    dueOn: "2026-11-10",
+    doneAt: null,
+    createdAt: "2026-11-01T00:00:00Z",
+    ownerId: "d1",
+    ownerName: "Dev (test)",
+    client: { slug: "sam-sample", dbId: "db1", name: "Sam Sample (fictional)" },
+    leadGhlId: null,
+    ...over,
+  });
+  const staff = [
+    { id: "d1", name: "Dev (test)" },
+    { id: "d2", name: "Dev Two (test)" },
+  ];
+
+  it("reads steps typed one per line, dropping bullets and numbers", async () => {
+    const { parseSteps } = await import("@/lib/ops");
+    expect(parseSteps("- Check form\n2. Test submit\n\n[ ] Tell client\n* Done")).toEqual(["Check form", "Test submit", "Tell client", "Done"]);
+    expect(parseSteps(null)).toEqual([]);
+    expect(parseSteps(Array.from({ length: 30 }, (_, i) => `Step ${i}`).join("\n"))).toHaveLength(20);
+  });
+
+  it("groups by person with a breakdown: overdue, due this week, blocked, estimates, done and late", async () => {
+    const { workOrderGroups } = await import("@/lib/ops");
+    const actions = [
+      wo({ id: "1", dueOn: "2026-11-05", estMinutes: 60 }), // overdue
+      wo({ id: "2", dueOn: "2026-11-12", status: "blocked", blockedReason: "Need logins", estMinutes: 30 }),
+      wo({ id: "3", dueOn: "2026-12-30" }), // no estimate, not this week
+      wo({ id: "4", status: "done", dueOn: "2026-11-03", doneAt: "2026-11-06T10:00:00Z" }), // done late
+      wo({ id: "5", status: "done", dueOn: "2026-11-09", doneAt: "2026-11-07T10:00:00Z" }), // done on time
+      wo({ id: "6", ownerId: null, ownerName: null }),
+      wo({ id: "7", kind: "follow_up", ownerId: "d2" }), // follow-ups hidden by default
+      wo({ id: "8", ownerId: "d2", promisedOn: "2026-11-06" }), // missed promise counts as overdue
+    ];
+    const g = workOrderGroups({ actions, staff, today });
+    expect(g.map((x) => x.ownerName)).toEqual(["Dev (test)", "Dev Two (test)", "No owner"]);
+    expect(g[0]!.stats).toEqual({ open: 3, dueThisWeek: 1, overdue: 1, blocked: 1, estMinutesOpen: 90, noEstimate: 1, done7: 2, doneLate7: 1 });
+    expect(g[0]!.items.map((a) => a.id)).toEqual(["1", "2", "3"]); // overdue, then blocked, then the rest
+    expect(g[1]!.stats.overdue).toBe(1);
+    expect(workOrderGroups({ actions, staff, today, show: "all", who: "d2" })[0]!.items.map((a) => a.id)).toEqual(["8", "7"]);
+    expect(workOrderGroups({ actions, staff, today, who: null })[0]!.ownerName).toBe("No owner");
+    expect(workOrderGroups({ actions, staff, today, status: "blocked" })[0]!.items.map((a) => a.id)).toEqual(["2"]);
+    expect(workOrderGroups({ actions, staff, today, status: "done" })[0]!.items.map((a) => a.id)).toEqual(["5", "4"]);
+    expect(workOrderGroups({ actions, staff, today, client: "other-client" })).toEqual([]);
+  });
+
+  it("copy-for-GoHighLevel text has titles, steps and links, and no money", async () => {
+    const { workOrderGroups, workOrdersAsText } = await import("@/lib/ops");
+    const g = workOrderGroups({
+      actions: [wo({ steps: "Check form\nTest submit", sourceLink: "https://app.example.com/c/1", sourceNote: "Asked by text", estMinutes: 90, priority: "high" })],
+      staff,
+      today,
+    });
+    const t = workOrdersAsText(g, today);
+    expect(t).toContain("Dev (test): 1 item");
+    expect(t).toContain("- [HIGH] Fix contact form (test) (Sam Sample (fictional) · Work order · Due in 2 days)");
+    expect(t).toContain("  [ ] Test submit");
+    expect(t).toContain("Time: about 1h 30m");
+    expect(t).toContain("From: Asked by text https://app.example.com/c/1");
+    expect(t).not.toMatch(/\$|\/mo/);
+  });
+
+  it("developer contact flags: reply waiting and unanswered messages, from dates only", async () => {
+    const { contactSummary } = await import("@/lib/ops");
+    const base = { slug: "s", name: "S (fictional)", lastLoggedOn: "2026-11-01", lastInboundAt: null, lastOutboundAt: null, lastCallAt: null, unanswered: 0 };
+    expect(contactSummary(base, today)).toEqual({ lastContact: "2026-11-01", daysSince: 7, flags: [] });
+    const waiting = contactSummary({ ...base, lastInboundAt: "2026-11-05T09:00:00Z", lastOutboundAt: "2026-11-02T09:00:00Z", unanswered: 3 }, today);
+    expect(waiting.lastContact).toBe("2026-11-05");
+    expect(waiting.flags).toEqual(["Client reached out 3 days ago; no reply yet", "3 of our messages unanswered: a call may work better"]);
+    expect(contactSummary({ ...base, lastLoggedOn: null }, today).lastContact).toBeNull();
+  });
+
+  it("AI drafts: codes become real people and clients, unknown codes are dropped, numbers are clamped", async () => {
+    const { buildCodebook, buildStaffBook, restoreWorkOrderDrafts } = await import("@/lib/ai/snapshot");
+    const { draftAdded } = await import("@/lib/ops");
+    const c = { id: "pat-example", dbId: "db1", name: "Pat Example (fictional)", monthlyUsd: 200, startDate: "2026-01-01", status: "active", listedIn: [], services: ["SEO"] } as import("@/lib/types").RosterClient;
+    const book = buildCodebook([c]);
+    const team = buildStaffBook(staff);
+    const d = restoreWorkOrderDrafts(
+      {
+        headline: "[C1] needs a speed fix",
+        orders: [
+          { client: "C1", title: "Fix speed for [C1]", why: "Score fell 15", steps: ["Run test", "Compress images"], priority: "urgent!!", est_minutes: 99999, assignee: "[T2]", assignee_why: "SEO developer, light load" },
+          { client: "C9", title: "Mystery", why: "x", steps: "not a list", priority: "high", est_minutes: 30, assignee: "T7", assignee_why: "x" },
+          { client: "C1", title: "", why: "empty titles are dropped", steps: [], priority: "low", est_minutes: 15, assignee: "", assignee_why: "" },
+          ...Array.from({ length: 10 }, () => ({ client: "C1", title: "Extra", why: "", steps: [], priority: "low", est_minutes: 15, assignee: "", assignee_why: "" })),
+        ],
+      },
+      book,
+      team,
+    );
+    expect(d.version).toBe(1);
+    expect(d.headline).toBe("Pat Example (fictional) needs a speed fix");
+    expect(d.orders.length).toBeLessThanOrEqual(8);
+    expect(d.orders[0]).toMatchObject({ clientSlug: "pat-example", title: "Fix speed for Pat Example (fictional)", priority: "normal", estMinutes: null, assigneeId: "d2", assigneeName: "Dev Two (test)" });
+    expect(d.orders[1]).toMatchObject({ clientSlug: null, steps: [], assigneeId: null, assigneeName: null, assigneeWhy: "" });
+    expect(d.orders.some((o) => o.title === "")).toBe(false);
+    expect(draftAdded({ clientSlug: "sam-sample", title: "fix contact form (TEST) " }, [wo()])).toBe(true);
+    expect(draftAdded({ clientSlug: "pat-example", title: "Fix contact form (test)" }, [wo()])).toBe(false);
+  });
+
+  it("work order labels and estimates read plainly", async () => {
+    const { kindLabel, minutesLabel, finishedLate } = await import("@/lib/ops");
+    expect([kindLabel("work_order"), kindLabel("issue"), kindLabel("follow_up")]).toEqual(["Work order", "Issue", "Follow-up"]);
+    expect([minutesLabel(45), minutesLabel(60), minutesLabel(90), minutesLabel(480)]).toEqual(["45m", "1h", "1h 30m", "8h"]);
+    expect(finishedLate(wo({ status: "done", dueOn: "2026-11-05", doneAt: "2026-11-05T23:00:00Z" }))).toBe(false);
+    expect(finishedLate(wo({ status: "done", dueOn: "2026-11-09", promisedOn: "2026-11-04", doneAt: "2026-11-05T09:00:00Z" }))).toBe(true);
+  });
+});

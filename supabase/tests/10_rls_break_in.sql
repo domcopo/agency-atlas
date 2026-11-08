@@ -478,6 +478,84 @@ select test.expect('select * from public.client_health_daily', -1, 'signed out c
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7g. Work orders, AI drafts and the developer contact view (0010).
+-- ---------------------------------------------------------------------------
+-- A second client the developer has no work on (must never show up for them).
+insert into public.clients (id, slug, name, monthly_usd, start_date, status, services) values
+  ('00000000-0000-0000-0000-0000000000c2', 'sam-sample', 'Sam Sample (fictional)', 900, '2026-02-01', 'active', '{Ads}');
+insert into public.ghl_contact_stats (client_id, ghl_contact_id, last_inbound_at) values
+  ('00000000-0000-0000-0000-0000000000c2', 'cont22222', now());
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.actions (id, client_id, kind, title, owner_staff_id, steps, source_link, source_note, est_minutes, ai_suggested) values ('00000000-0000-0000-0000-00000000ae01', '00000000-0000-0000-0000-0000000000c1', 'work_order', 'Fix contact form (test)', '00000000-0000-0000-0000-0000000000b3', E'Check form\nTest submit', 'https://app.example.com/conversations/abc123', 'Client asked by text (test)', 60, true)$$, 1, 'manager adds a work order with steps and a link');
+select test.expect($$insert into public.actions (client_id, kind, title) values ('00000000-0000-0000-0000-0000000000c1', 'chore', 'x')$$, -2, 'unknown item kinds are rejected');
+select test.expect($$insert into public.actions (client_id, kind, title, source_link) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', 'javascript:alert(1)')$$, -2, 'non-web links are rejected');
+select test.expect($$insert into public.actions (client_id, kind, title, source_link) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', 'http://example.com')$$, -2, 'plain http links are rejected');
+select test.expect($$insert into public.actions (client_id, kind, title, est_minutes) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', 0)$$, -2, 'time estimates must be sensible');
+select test.expect($$insert into public.actions (client_id, kind, title, steps) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', repeat('x', 2001))$$, -2, 'step lists are length-limited');
+select test.expect($$update public.actions set steps = E'Check form\nTest submit\nTell client' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'manager edits the steps');
+select test.expect($$update public.actions set ai_suggested = false where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'the AI-draft mark cannot be changed');
+select test.expect($$update public.actions set kind = 'issue' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'an item''s kind cannot be changed');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('work_orders', 'm', 1, 1, 0.01, 'ok')$$, 1, 'work order drafts are cost-logged');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('work_prompt', 'm', 1, 1, 0.01, 'ok')$$, 1, 'the prompt helper is cost-logged');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('send_emails', 'm', 1, 1, 0.01, 'ok')$$, -2, 'unknown AI features are rejected');
+select test.expect($$insert into public.ai_briefings (kind, content) values ('work_orders', '{"orders":[]}')$$, 1, 'manager saves work order drafts');
+select test.expect($$insert into public.ai_briefings (kind, content) values ('anything', '{}')$$, -2, 'unknown saved AI kinds are rejected');
+select test.expect('select * from public.my_client_contacts', 0, 'managers get nothing from the developer contact view');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where kind = 'work_order' and steps is not null and source_link is not null and est_minutes = 60$$, 1, 'my_work shows the developer their work order details');
+select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'developer starts their work order');
+select test.expect($$update public.actions set steps = 'skip it' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot change the steps');
+select test.expect($$update public.actions set source_link = 'https://example.com/other' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot change the link');
+select test.expect($$update public.actions set source_note = 'x' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot change the note');
+select test.expect($$update public.actions set est_minutes = 5 where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'developer cannot change the time estimate');
+select test.expect($$insert into public.actions (client_id, kind, title) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x')$$, -1, 'developer cannot add work orders');
+select test.expect('select * from public.my_client_contacts', 1, 'developer sees contact dates only for clients they work on');
+select test.expect($$select * from public.my_client_contacts where client_slug = 'sam-sample'$$, 0, 'developer cannot see other clients'' contact dates');
+select test.expect($$select * from public.my_client_contacts where last_inbound_at is not null and last_logged_on is not null$$, 1, 'the view includes logged and GoHighLevel dates');
+select test.expect('select * from public.ghl_contact_stats', 0, 'developer still cannot read the contact table itself');
+select test.expect('select * from public.check_ins', 0, 'developer still cannot read check-in notes');
+select test.expect($$select * from public.ai_briefings where kind = 'work_orders'$$, 0, 'developer cannot read AI work order drafts');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('work_prompt', 'm', 1, 1, 0.01, 'ok')$$, -1, 'developer cannot use the AI prompt helper');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect('select * from public.my_client_contacts', 0, 'developer without two-factor gets no contact dates');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.my_client_contacts', 0, 'non-team user gets no contact dates');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.my_client_contacts', -1, 'signed out cannot read contact dates');
+commit;
+
+-- The contact view must only ever expose names and dates.
+do $$
+declare cols text;
+begin
+  select string_agg(column_name, ',' order by column_name) into cols
+  from information_schema.columns where table_schema = 'public' and table_name = 'my_client_contacts';
+  if cols is distinct from 'client_name,client_slug,last_call_at,last_inbound_at,last_logged_on,last_outbound_at,unanswered_outbound' then
+    raise exception 'FAILED: my_client_contacts exposes unexpected columns: %', cols;
+  end if;
+  raise notice 'ok: developer contact view has only names and dates';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

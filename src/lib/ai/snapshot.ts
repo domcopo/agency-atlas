@@ -2,7 +2,7 @@
 // ("C1", "C2"...) so names never leave this Mac. The app swaps them back on screen.
 // Pure functions: no network, no database. Tested in tests/fixtures.test.ts.
 
-import type { Briefing, CheckIn, CheckInEntry, ClientAction, ClientHealth, ClientProfile, GhlSummary, HealthSummary, OpsBriefing, RosterClient } from "@/lib/types";
+import type { Briefing, CheckIn, CheckInEntry, ClientAction, ClientHealth, ClientProfile, GhlSummary, HealthSummary, OpsBriefing, RosterClient, WorkOrderDraft, WorkOrderDrafts } from "@/lib/types";
 
 export interface Codebook {
   codeOf: Map<string, string>; // client slug -> "C3"
@@ -231,4 +231,45 @@ export function restoreOpsBriefing(raw: unknown, book: Codebook, staff: StaffBoo
     opportunities: asArr(r.opportunities, 3).map((o) => ({ client: one(o.client), idea: t(o.idea, 160), why: t(o.why, 300) })),
     team: (Array.isArray(r.team) ? r.team.slice(0, 3) : []).map((x) => t(x, 200)).filter(Boolean),
   };
+}
+
+/**
+ * AI work order drafts → names and real team members. Unknown client codes become
+ * "no client"; unknown team codes become "no suggestion". Everything is length-limited.
+ * These are suggestions only: nothing is saved as a work order until a person adds it.
+ */
+export function restoreWorkOrderDrafts(raw: unknown, book: Codebook, staff: StaffBook): WorkOrderDrafts {
+  const r = asObj(raw);
+  const t = (v: unknown, max: number) => restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff);
+  const idOf = new Map([...staff.codeOf.entries()].map(([id, code]) => [code, id]));
+  const orders: WorkOrderDraft[] = asArr(r.orders, 8)
+    .map((o) => {
+      const client = restoreClients([o.client], book)[0] ?? null;
+      const code = typeof o.assignee === "string" ? (o.assignee.match(/T\d{1,3}/)?.[0] ?? "") : "";
+      const assigneeId = idOf.get(code) ?? null;
+      const est = Math.round(Number(o.est_minutes));
+      const priority = o.priority === "critical" || o.priority === "high" || o.priority === "low" ? o.priority : "normal";
+      return {
+        clientSlug: client?.slug ?? null,
+        clientName: client?.name ?? null,
+        title: t(o.title, 120),
+        why: t(o.why, 300),
+        steps: (Array.isArray(o.steps) ? o.steps.slice(0, 10) : []).map((x) => t(x, 200)).filter(Boolean),
+        priority,
+        estMinutes: Number.isFinite(est) && est >= 5 && est <= 2400 ? est : null,
+        assigneeId,
+        assigneeName: assigneeId ? (staff.nameOf.get(code) ?? null) : null,
+        assigneeWhy: assigneeId ? t(o.assignee_why, 200) : "",
+      } satisfies WorkOrderDraft;
+    })
+    .filter((o) => o.title);
+  return { version: 1, headline: t(r.headline, 200), orders };
+}
+
+/** AI prompt helper answer → plain text to copy (codes back to names). */
+export function restoreWorkPrompt(raw: unknown, book: Codebook): { summary: string; steps: string[]; prompt: string; checks: string[] } {
+  const r = asObj(raw);
+  const t = (v: unknown, max: number) => restore(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book);
+  const list = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n) : []).map((x) => t(x, 300)).filter(Boolean);
+  return { summary: t(r.summary, 400), steps: list(r.steps, 12), prompt: t(r.prompt, 4000), checks: list(r.checks, 8) };
 }

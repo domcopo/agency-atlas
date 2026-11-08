@@ -63,6 +63,11 @@ export function openActions(actions: ClientAction[], clientDbId: string | undefi
 }
 
 /** When an action is due, relative to today. */
+/** "Work order" / "Issue" / "Follow-up". */
+export function kindLabel(kind: ClientAction["kind"]): string {
+  return kind === "work_order" ? "Work order" : kind === "issue" ? "Issue" : "Follow-up";
+}
+
 export function dueWhen(dueOn: string | null, today: string): PriorityItem["when"] {
   if (!dueOn) return "none";
   return dueOn < today ? "overdue" : dueOn === today ? "today" : "upcoming";
@@ -342,7 +347,7 @@ export function buildPriorities(input: {
     // A missed promise is overdue even if the internal due date isn't.
     const due = dueWhen(a.dueOn, today);
     const when = promiseMissed(a, today) ? "overdue" : due;
-    const label = a.kind === "issue" ? "Issue" : "Follow-up";
+    const label = kindLabel(a.kind);
     const status = statusNote(a, today);
     items.push({
       id: `a_${a.id}`,
@@ -590,4 +595,193 @@ export function riskAlerts(input: {
   const sev = { critical: 0, high: 1, medium: 2 } as const;
   const paused = new Set(clients.filter((c) => c.status === "paused").map((c) => c.id));
   return out.sort((a, b) => Number(paused.has(a.client.slug)) - Number(paused.has(b.client.slug)) || sev[a.severity] - sev[b.severity] || b.client.monthlyUsd - a.client.monthlyUsd || a.score - b.score);
+}
+
+
+// ---------------------------------------------------------------------------
+// Work orders (0010): one list of the work to do, grouped by person, with a simple
+// breakdown per person. Uses the same items as everywhere else (no second list).
+// ---------------------------------------------------------------------------
+
+export type WorkOrderShow = "work" | "all";
+
+/** Time estimate choices (minutes). The server accepts only these. */
+export const EST_OPTIONS = [
+  [15, "15 min"],
+  [30, "30 min"],
+  [60, "1 hour"],
+  [120, "2 hours"],
+  [240, "Half a day"],
+  [480, "A day"],
+  [960, "Two days"],
+] as const;
+export type WorkOrderStatusFilter = "open" | "blocked" | "overdue" | "done";
+
+/** "1h 30m", "45m", "6h". */
+export function minutesLabel(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
+}
+
+/** Steps typed one per line ("- ", "1. " and "[ ] " prefixes are dropped). At most 20. */
+export function parseSteps(steps: string | null | undefined): string[] {
+  if (!steps) return [];
+  return steps
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d{1,2}[.)]|\[[ xX]?\])\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+export interface WorkOrderStats {
+  open: number;
+  dueThisWeek: number;
+  overdue: number;
+  blocked: number;
+  /** Sum of time estimates on open items (items without one aren't counted). */
+  estMinutesOpen: number;
+  /** Open items without a time estimate. */
+  noEstimate: number;
+  /** Finished in the last 7 days, and how many of those after their due date. */
+  done7: number;
+  doneLate7: number;
+}
+
+export interface WorkOrderGroup {
+  ownerId: string | null;
+  ownerName: string;
+  stats: WorkOrderStats;
+  items: ClientAction[];
+}
+
+/** Late = finished after the due date (or after the date promised to the client). */
+export function finishedLate(a: ClientAction): boolean {
+  if (a.status !== "done" || !a.doneAt) return false;
+  const day = a.doneAt.slice(0, 10);
+  return Boolean((a.dueOn && day > a.dueOn) || (a.promisedOn && day > a.promisedOn));
+}
+
+function emptyStats(): WorkOrderStats {
+  return { open: 0, dueThisWeek: 0, overdue: 0, blocked: 0, estMinutesOpen: 0, noEstimate: 0, done7: 0, doneLate7: 0 };
+}
+
+/**
+ * Work orders grouped by person (people with the most overdue first, "No owner" last).
+ * - show "work": work orders and issues (the delivery work); "all" adds follow-ups.
+ * - who: undefined = everyone, null = no owner, or one person's id.
+ * - client: a client slug, or undefined for all clients.
+ * - status: what to list. The breakdown numbers always count everything for that person.
+ */
+export function workOrderGroups(input: {
+  actions: ClientAction[];
+  staff: { id: string; name: string }[];
+  today: string;
+  show?: WorkOrderShow;
+  who?: string | null;
+  client?: string;
+  status?: WorkOrderStatusFilter;
+}): WorkOrderGroup[] {
+  const { actions, staff, today, show = "work", who, client, status = "open" } = input;
+  const weekAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
+  const weekAhead = new Date(Date.parse(`${today}T00:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
+  const twoWeeksAgo = new Date(Date.parse(`${today}T00:00:00Z`) - 14 * 86_400_000).toISOString();
+  const nameOf = new Map(staff.map((m) => [m.id, m.name]));
+  const groups = new Map<string, WorkOrderGroup>();
+  const groupFor = (ownerId: string | null) => {
+    const key = ownerId ?? "none";
+    let g = groups.get(key);
+    if (!g) {
+      g = { ownerId, ownerName: ownerId ? (nameOf.get(ownerId) ?? "Former teammate") : "No owner", stats: emptyStats(), items: [] };
+      groups.set(key, g);
+    }
+    return g;
+  };
+  for (const a of actions) {
+    if (show === "work" && a.kind === "follow_up") continue;
+    if (who !== undefined && (a.ownerId ?? null) !== who) continue;
+    if (client && a.client?.slug !== client) continue;
+    const g = groupFor(a.ownerId ?? null);
+    const s = g.stats;
+    const overdue = promiseMissed(a, today) || dueWhen(a.dueOn, today) === "overdue";
+    if (a.status === "done") {
+      if (a.doneAt && a.doneAt >= weekAgo) {
+        s.done7++;
+        if (finishedLate(a)) s.doneLate7++;
+      }
+    } else {
+      s.open++;
+      if (overdue) s.overdue++;
+      else if (a.dueOn && a.dueOn <= weekAhead) s.dueThisWeek++;
+      if (a.status === "blocked") s.blocked++;
+      if (a.estMinutes) s.estMinutesOpen += a.estMinutes;
+      else s.noEstimate++;
+    }
+    const listed =
+      status === "done"
+        ? a.status === "done" && Boolean(a.doneAt && a.doneAt >= twoWeeksAgo)
+        : a.status !== "done" && (status === "open" || (status === "blocked" ? a.status === "blocked" : overdue));
+    if (listed) g.items.push(a);
+  }
+  const rank = (a: ClientAction) => (promiseMissed(a, today) || dueWhen(a.dueOn, today) === "overdue" ? 0 : a.status === "blocked" ? 1 : 2);
+  for (const g of groups.values())
+    g.items.sort((x, y) =>
+      status === "done"
+        ? (y.doneAt ?? "").localeCompare(x.doneAt ?? "")
+        : rank(x) - rank(y) || PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"),
+    );
+  return [...groups.values()]
+    .filter((g) => g.items.length || g.stats.open || g.stats.done7)
+    .sort((x, y) => Number(x.ownerId === null) - Number(y.ownerId === null) || y.stats.overdue - x.stats.overdue || y.stats.open - x.stats.open || x.ownerName.localeCompare(y.ownerName));
+}
+
+/**
+ * Plain text of work orders, to paste into a GoHighLevel task or message by hand.
+ * The app never sends it anywhere. Includes no money and no health details.
+ */
+export function workOrdersAsText(groups: WorkOrderGroup[], today: string): string {
+  const lines: string[] = [];
+  for (const g of groups) {
+    if (!g.items.length) continue;
+    lines.push(`${g.ownerName}: ${g.items.length} item${g.items.length === 1 ? "" : "s"}`);
+    for (const a of g.items) {
+      const bits = [a.client?.name, kindLabel(a.kind), a.status === "done" ? "Done" : dueLabel(a.dueOn, today)].filter(Boolean);
+      lines.push(`- [${a.priority.toUpperCase()}] ${a.title} (${bits.join(" · ")}${a.status !== "done" ? statusNote(a, today) : ""})`);
+      if (a.estMinutes) lines.push(`  Time: about ${minutesLabel(a.estMinutes)}`);
+      for (const step of parseSteps(a.steps)) lines.push(`  [ ] ${step}`);
+      if (a.sourceLink) lines.push(`  From: ${a.sourceNote ? `${a.sourceNote} ` : ""}${a.sourceLink}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
+
+/** Contact dates for a developer's client (no notes, no message text). */
+export interface ClientContactDates {
+  slug: string;
+  name: string;
+  lastLoggedOn: string | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  lastCallAt: string | null;
+  unanswered: number;
+}
+
+/** Last contact (newest of logged, GoHighLevel in/out, call) and plain flags, for the developer view. */
+export function contactSummary(c: ClientContactDates, today: string): { lastContact: string | null; daysSince: number | null; flags: string[] } {
+  const dates = [c.lastLoggedOn, c.lastInboundAt?.slice(0, 10), c.lastOutboundAt?.slice(0, 10), c.lastCallAt?.slice(0, 10)].filter((d): d is string => Boolean(d));
+  const lastContact = dates.sort().at(-1) ?? null;
+  const flags: string[] = [];
+  if (c.lastInboundAt && (!c.lastOutboundAt || c.lastInboundAt > c.lastOutboundAt)) {
+    const wait = daysBetween(c.lastInboundAt.slice(0, 10), today);
+    if (wait >= OPS_RULES.replyWithinDays) flags.push(`Client reached out ${plural(wait, "day")} ago; no reply yet`);
+  }
+  if (c.unanswered >= OPS_RULES.unansweredForCall) flags.push(`${c.unanswered} of our messages unanswered: a call may work better`);
+  return { lastContact, daysSince: lastContact ? daysBetween(lastContact, today) : null, flags };
+}
+
+/** An AI-drafted work order already added (same client + same title, any status). */
+export function draftAdded(draft: { clientSlug: string | null; title: string }, actions: ClientAction[]): boolean {
+  const t = draft.title.trim().toLowerCase();
+  return actions.some((a) => (a.client?.slug ?? null) === draft.clientSlug && a.title.trim().toLowerCase() === t);
 }

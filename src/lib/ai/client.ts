@@ -202,3 +202,50 @@ Team members are coded like T2; refer to them as [T2]. Clients are coded like C7
 - opportunities: up to 3 realistic upsell, cross-sell or referral ideas tied to one client, with why.
 - team: up to 3 short observations about ownership or workload, e.g. "[T2] has 5 overdue items", "9 active clients have no owner". Only if the data shows it.
 Be brief. No paragraphs.`;
+
+// Work order drafts (0010): suggestions a person reviews and adds one by one.
+export const WORK_ORDERS_SCHEMA = obj({
+  headline: str,
+  orders: {
+    type: "array",
+    items: obj({
+      client: str,
+      title: str,
+      why: str,
+      steps: { type: "array", items: str },
+      priority: { type: "string", enum: ["critical", "high", "normal", "low"] },
+      est_minutes: { type: "integer" },
+      assignee: str,
+      assignee_why: str,
+    }),
+  },
+});
+
+export const WORK_ORDERS_TASK = `Draft work orders for a small marketing agency (SEO, ads, website builds), from the data below.
+Clients are coded like C7 and team members like T2. Use the codes exactly.
+- headline: one short sentence on what most needs doing this week.
+- orders: up to 8 concrete pieces of delivery work, most important first. Base each one on the facts (risk_alerts, ranked_plan, client health, contact times, open_items). Do not invent facts.
+  - client: the client code ("" only for agency-wide work).
+  - title: a short imperative, under 12 words, e.g. "Fix mobile speed on the homepage".
+  - why: the specific evidence with numbers, one sentence.
+  - steps: 3 to 7 short, practical steps a developer or manager can follow.
+  - priority: critical, high, normal or low. est_minutes: a realistic estimate (15 to 960).
+  - assignee: the team code best suited, using each member's role, current load (open_work, overdue, est_hours_open) and the client's owner. SEO, website and ads work goes to SEO developers; client calls and messages go to client communication or client managers. "" if nobody fits.
+  - assignee_why: a few words on why that person.
+- Do not repeat anything already in open_work for the same client unless it is overdue; then skip it (it already exists).
+- Never suggest sending messages automatically, changing anything in GoHighLevel, or anything the agency can't do by hand. Drafts of messages are fine as a step ("Draft a check-in message for the client manager to send").`;
+
+// Prompt helper (0010): instructions + a prompt the team copies by hand. Nothing is sent or saved.
+export const WORK_PROMPT_SCHEMA = obj({
+  summary: str,
+  steps: { type: "array", items: str },
+  prompt: str,
+  checks: { type: "array", items: str },
+});
+
+export const WORK_PROMPT_TASK = `Help a marketing agency team member do the one work order in the data.
+The client appears as a code like [C7]. Write it exactly as [C7] wherever you would write the client's name (the app swaps the real name in). Never mention codes or explain them.
+- summary: two sentences on what the work is and what "done" looks like.
+- steps: up to 8 clear, practical steps (improve on the given steps if any).
+- prompt: a ready-to-paste prompt the team member can give an AI assistant to help with this work. Include the context needed (the client as [C7], services, the goal, constraints). Ask the assistant for concrete output (e.g. a checklist, copy, a fix plan). Do not include passwords, logins or private data.
+- checks: up to 5 quick checks before marking it done.`;

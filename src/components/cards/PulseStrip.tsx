@@ -1,4 +1,4 @@
-// Mission Control's top numbers: six tiles, each says where its number comes from
+// Mission Control's top numbers: a few tiles, each says where its number comes from
 // and links to the screen that explains it. "–" means the source isn't connected or synced.
 
 import Link from "next/link";
@@ -22,20 +22,41 @@ const toneText = {
   plain: "text-ink",
 } as const;
 
-export function PulseStrip({ tiles }: { tiles: PulseTile[] }) {
+function Tile({ t }: { t: PulseTile }) {
   return (
-    <section aria-label="Agency at a glance" className="mb-3 grid grid-cols-3 gap-2 lg:grid-cols-6">
-      {tiles.map((t) => (
-        <Link
-          key={t.label}
-          href={t.href}
-          className="pressable glass flex min-h-[76px] flex-col justify-between rounded-2xl px-2.5 py-2 hover:bg-white/[0.05]"
-        >
-          <span className="text-[11px] leading-tight text-muted">{t.label}</span>
-          <span className={cn("font-display text-lg font-bold leading-tight", toneText[t.tone ?? "plain"])}>{t.value}</span>
-          <span className="truncate text-[10px] leading-tight text-faint">{t.source}</span>
-        </Link>
-      ))}
+    <Link
+      href={t.href}
+      className="pressable glass flex min-h-[76px] flex-col justify-between rounded-2xl px-2.5 py-2 hover:bg-white/[0.05]"
+    >
+      <span className="text-[11px] leading-tight text-muted">{t.label}</span>
+      <span className={cn("font-display text-lg font-bold leading-tight", toneText[t.tone ?? "plain"])}>{t.value}</span>
+      <span className="truncate text-[10px] leading-tight text-faint">{t.source}</span>
+    </Link>
+  );
+}
+
+/** `hidden` tiles sit behind a "Show …" toggle, closed by default (no script needed). */
+export function PulseStrip({ tiles, hidden = [], hiddenLabel = "more" }: { tiles: PulseTile[]; hidden?: PulseTile[]; hiddenLabel?: string }) {
+  return (
+    <section aria-label="Agency at a glance" className="mb-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {tiles.map((t) => (
+          <Tile key={t.label} t={t} />
+        ))}
+      </div>
+      {hidden.length > 0 && (
+        <details className="group mt-1.5">
+          <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center px-1 text-xs font-semibold text-violet">
+            <span className="group-open:hidden">Show {hiddenLabel}</span>
+            <span className="hidden group-open:inline">Hide {hiddenLabel}</span>
+          </summary>
+          <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {hidden.map((t) => (
+              <Tile key={t.label} t={t} />
+            ))}
+          </div>
+        </details>
+      )}
     </section>
   );
 }

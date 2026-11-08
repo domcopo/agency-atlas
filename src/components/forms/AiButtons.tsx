@@ -5,7 +5,7 @@
 
 import { Sparkles } from "lucide-react";
 import { useActionState } from "react";
-import { generateBriefing, generateClientProfile, setAiBudget } from "@/app/actions";
+import { generateBriefing, generateClientProfile, generateWorkOrderDrafts, setAiBudget } from "@/app/actions";
 
 function Result({ state }: { state?: { error?: string; message?: string } }) {
   if (state?.message) return <p role="status" className="text-xs text-lime">{state.message}</p>;
@@ -20,6 +20,19 @@ export function BriefingButton({ label = "Get today's briefing", disabled = fals
       <button type="submit" disabled={pending || disabled} className="pressable flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">
         <Sparkles aria-hidden className="size-4" />
         {pending ? "Reading your clients… (up to a minute)" : label}
+      </button>
+      <Result state={state} />
+    </form>
+  );
+}
+
+export function WorkOrderDraftsButton({ label = "Draft work orders with AI", disabled = false }: { label?: string; disabled?: boolean }) {
+  const [state, action, pending] = useActionState(generateWorkOrderDrafts, undefined);
+  return (
+    <form action={action} className="space-y-2">
+      <button type="submit" disabled={pending || disabled} className="pressable flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-violet/40 bg-violet/10 text-sm font-semibold disabled:opacity-60">
+        <Sparkles aria-hidden className="size-4" />
+        {pending ? "Reading clients and workload… (up to a minute)" : label}
       </button>
       <Result state={state} />
     </form>

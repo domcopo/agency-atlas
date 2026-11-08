@@ -622,7 +622,7 @@ export interface ClientProfile {
 // Owners, next actions and issues (0006). One simple list for both.
 // ---------------------------------------------------------------------------
 
-export type ActionKind = "follow_up" | "issue";
+export type ActionKind = "follow_up" | "issue" | "work_order";
 export type ActionPriority = "critical" | "high" | "normal" | "low";
 export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "done";
 
@@ -645,6 +645,13 @@ export interface ClientAction {
   blockedReason?: string | null;
   /** The date we promised the client. Empty = not a promise. Needs 0009. */
   promisedOn?: ISODate | null;
+  /** Work order details (0010): steps (one per line), the GoHighLevel link it came from, a note, time estimate. */
+  steps?: string | null;
+  sourceLink?: string | null;
+  sourceNote?: string | null;
+  estMinutes?: number | null;
+  /** Started as an AI draft that a person reviewed and added. */
+  aiSuggested?: boolean;
 }
 
 /** The one health word shown for a client. Reasons explain it. */
@@ -694,4 +701,25 @@ export interface OpsBriefing {
   }[];
   opportunities: { client: ClientLink | null; idea: string; why: string }[];
   team: string[];
+}
+
+/** AI-drafted work orders (0010), restored from codes. Suggestions only: a person adds each one. */
+export interface WorkOrderDraft {
+  clientSlug: string | null;
+  clientName: string | null;
+  title: string;
+  why: string;
+  steps: string[];
+  priority: ActionPriority;
+  estMinutes: number | null;
+  /** Suggested person (a team member id), or null if the AI couldn't pick one. */
+  assigneeId: string | null;
+  assigneeName: string | null;
+  assigneeWhy: string;
+}
+
+export interface WorkOrderDrafts {
+  version: 1;
+  headline: string;
+  orders: WorkOrderDraft[];
 }

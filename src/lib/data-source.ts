@@ -19,7 +19,7 @@ import { agencySalesKpis, conversations, prospects } from "@/fixtures/prospects"
 import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
-import { buildPriorities, healthScore, healthSummary, isSalesStage, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote } from "@/lib/ops";
+import { buildPriorities, healthScore, healthSummary, isSalesStage, kindLabel, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote, type ClientContactDates } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlConfigured } from "@/lib/ghl/client";
@@ -63,6 +63,7 @@ import type {
   TeamMember,
   Trend,
   WorkOrder,
+  WorkOrderDrafts,
 } from "@/lib/types";
 
 /** GoHighLevel: still not connected (Phase 3). */
@@ -428,33 +429,53 @@ export async function getMissionControl(): Promise<MissionControlData> {
 // ---------------------------------------------------------------------------
 
 const ACTION_COLS = "id, client_id, lead_ghl_id, kind, title, notes, owner_staff_id, priority, status, due_on, done_at, created_at";
+const PROMISE_COLS = "blocked_reason, promised_on"; // 0009
+const ORDER_COLS = "steps, source_link, source_note, est_minutes, ai_suggested"; // 0010
+
+/** Item kind from the database (unknown values read as follow-ups). */
+const asActionKind = (v: unknown): ClientAction["kind"] => (v === "issue" || v === "work_order" ? v : "follow_up");
+/** Work order details shared by the owner/manager list and the developer view. */
+function orderDetails(r: Record<string, unknown>) {
+  const est = Number(r.est_minutes);
+  return {
+    steps: typeof r.steps === "string" && r.steps.trim() ? r.steps : null,
+    sourceLink: typeof r.source_link === "string" && r.source_link.startsWith("https://") ? r.source_link : null,
+    sourceNote: typeof r.source_note === "string" && r.source_note ? r.source_note : null,
+    estMinutes: Number.isFinite(est) && est > 0 ? est : null,
+    aiSuggested: r.ai_suggested === true,
+  };
+}
 
 /**
  * All actions (open and done), read as the signed-in person. ready=false before 0006 is run.
  * promises=false before 0009 (no blocked reason / promise date yet): reads still work.
  */
-export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; actions: ClientAction[] }> => {
-  if (!usesDatabase()) return { ready: false, promises: false, actions: [] };
+export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; actions: ClientAction[] }> => {
+  if (!usesDatabase()) return { ready: false, promises: false, orders: false, actions: [] };
   const db = await createDatabaseClient();
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
-  const [first, team] = await Promise.all([read(`${ACTION_COLS}, blocked_reason, promised_on`), getTeam()]);
+  const [first, team] = await Promise.all([read(`${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`), getTeam()]);
   let res = first;
   let promises = !first.error;
+  const orders = !first.error;
   if (first.error) {
-    res = await read(ACTION_COLS);
-    promises = false;
+    res = await read(`${ACTION_COLS}, ${PROMISE_COLS}`); // before 0010
+    promises = !res.error;
   }
-  if (res.error) return { ready: false, promises: false, actions: [] };
+  if (res.error) res = await read(ACTION_COLS); // before 0009
+  if (res.error) return { ready: false, promises: false, orders: false, actions: [] };
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
   return {
     ready: true,
     promises,
+    orders,
     actions: ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
       const c = r.client_id ? byDbId.get(r.client_id) : undefined;
       return {
+        ...orderDetails(r),
         id: r.id,
-        kind: r.kind,
+        kind: asActionKind(r.kind),
         title: r.title,
         notes: r.notes,
         priority: r.priority,
@@ -524,7 +545,7 @@ export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClie
 
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const [{ clients }, { ready, promises, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
+  const [{ clients }, { ready, promises, orders, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
@@ -550,7 +571,7 @@ export const getOps = cache(async () => {
     : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
+  return { orders, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -613,7 +634,8 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
   const db = await createDatabaseClient();
   const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
   const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-  let { data, error } = await read(`${base}, blocked_reason, promised_on`);
+  let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`);
+  if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}`)); // before 0010
   if (error) ({ data, error } = await read(base)); // before 0009
   if (error || !Array.isArray(data)) return [];
   const t = today();
@@ -622,8 +644,9 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
     .filter((r) => r.status !== "done")
     .map((r) => {
       const action: ClientAction = {
+        ...orderDetails(r),
         id: String(r.id),
-        kind: r.kind === "issue" ? "issue" : "follow_up",
+        kind: asActionKind(r.kind),
         title: String(r.title ?? ""),
         notes: (r.notes as string | null) ?? null,
         priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
@@ -633,7 +656,8 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         createdAt: String(r.created_at ?? ""),
         ownerId: me?.staffId ?? null,
         ownerName: me?.name ?? null,
-        client: null,
+        // Name only (from the my_work view); developers can't open client pages.
+        client: r.client_slug && r.client_name ? { slug: String(r.client_slug), dbId: "", name: String(r.client_name) } : null,
         leadGhlId: null,
         blockedReason: (r.blocked_reason as string | null) ?? null,
         promisedOn: (r.promised_on as string | null) ?? null,
@@ -643,7 +667,7 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
       return {
         id: `a_${action.id}`,
         title: r.client_name ? `${String(r.client_name)}: ${action.title}` : action.title,
-        reason: `${action.kind === "issue" ? "Issue" : "Follow-up"} · ${due}${statusNote(action, t)}`,
+        reason: `${kindLabel(action.kind)} · ${due}${statusNote(action, t)}`,
         href: "/work#my-work",
         ownerName: action.ownerName,
         ownerId: action.ownerId,
@@ -1194,9 +1218,49 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
 export const getLatestBriefing = cache(async (): Promise<{ createdAt: string; content: Briefing | OpsBriefing } | null> => {
   if (!usesDatabase()) return null;
   const db = await createDatabaseClient();
-  const { data, error } = await db.from("ai_briefings").select("created_at, content").order("created_at", { ascending: false }).limit(1).maybeSingle();
+  const { data, error } = await db.from("ai_briefings").select("created_at, content").eq("kind", "daily").order("created_at", { ascending: false }).limit(1).maybeSingle();
   if (error || !data) return null;
   return { createdAt: data.created_at, content: data.content as Briefing | OpsBriefing };
+});
+
+/** The latest AI work order drafts (0010), if any from the last 14 days. Owner/manager only (database rule). */
+export const getWorkOrderDrafts = cache(async (): Promise<{ createdAt: string; content: WorkOrderDrafts } | null> => {
+  if (!usesDatabase()) return null;
+  const db = await createDatabaseClient();
+  const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const { data, error } = await db
+    .from("ai_briefings")
+    .select("created_at, content")
+    .eq("kind", "work_orders")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data || (data.content as { version?: number })?.version !== 1) return null;
+  return { createdAt: data.created_at, content: data.content as WorkOrderDrafts };
+});
+
+/**
+ * Developers: contact DATES for the clients they work on (0010 view public.my_client_contacts).
+ * Names and dates only: no notes, no message text, no revenue. [] before 0010 or for others.
+ */
+export const getMyClientContacts = cache(async (): Promise<ClientContactDates[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("my_client_contacts")
+    .select("client_slug, client_name, last_logged_on, last_inbound_at, last_outbound_at, last_call_at, unanswered_outbound")
+    .order("client_name");
+  if (error || !Array.isArray(data)) return [];
+  return (data as Record<string, unknown>[]).map((r) => ({
+    slug: String(r.client_slug ?? ""),
+    name: String(r.client_name ?? ""),
+    lastLoggedOn: (r.last_logged_on as string | null) ?? null,
+    lastInboundAt: (r.last_inbound_at as string | null) ?? null,
+    lastOutboundAt: (r.last_outbound_at as string | null) ?? null,
+    lastCallAt: (r.last_call_at as string | null) ?? null,
+    unanswered: Number(r.unanswered_outbound ?? 0) || 0,
+  }));
 });
 
 /** The latest AI profile draft for one client, if any. */

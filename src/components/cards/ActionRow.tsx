@@ -98,7 +98,7 @@ export function ActionRow({
                   Set
                 </button>
               </form>
-              <form action={updateAction} className="flex w-full flex-wrap items-center gap-1.5">
+              <form key={`promise-${a.promisedOn ?? ""}`} action={updateAction} className="flex w-full flex-wrap items-center gap-1.5">
                 <input type="hidden" name="actionId" value={a.id} />
                 <input type="hidden" name="op" value="promise" />
                 {slug && <input type="hidden" name="slug" value={slug} />}
@@ -114,7 +114,7 @@ export function ActionRow({
             <summary className={cn(btn, "list-none")}>
               <UserRound aria-hidden className="size-3.5" /> Assign
             </summary>
-            <form action={updateAction} className="mt-1.5 flex gap-1.5">
+            <form key={`assign-${a.ownerId ?? ""}`} action={updateAction} className="mt-1.5 flex gap-1.5">
               <input type="hidden" name="actionId" value={a.id} />
               <input type="hidden" name="op" value="assign" />
               {slug && <input type="hidden" name="slug" value={slug} />}
@@ -133,7 +133,7 @@ export function ActionRow({
           </details>
           </>
           )}
-          <form action={updateAction} className="flex flex-wrap gap-1.5">
+          <form key={`status-${a.status}-${a.blockedReason ?? ""}`} action={updateAction} className="flex flex-wrap gap-1.5">
               <input type="hidden" name="actionId" value={a.id} />
               <input type="hidden" name="op" value="status" />
               {slug && <input type="hidden" name="slug" value={slug} />}

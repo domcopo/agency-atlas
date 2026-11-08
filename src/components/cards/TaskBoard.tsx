@@ -6,7 +6,7 @@ import Link from "next/link";
 import { updateAction } from "@/app/actions";
 import { priorityTone } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
-import { dueLabel, dueWhen, type BoardColumn } from "@/lib/ops";
+import { dueLabel, dueWhen, kindLabel, type BoardColumn } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
 
 const COLUMNS: { id: BoardColumn; label: string; tone: string }[] = [
@@ -57,7 +57,7 @@ export function TaskBoard({
                             </Link>
                             <p className="mt-0.5 truncate text-[11px] text-muted">
                               {who ? `${who} · ` : ""}
-                              {a.kind === "issue" ? "Issue" : "Follow-up"}
+                              {kindLabel(a.kind)}
                             </p>
                             {a.status === "blocked" && (
                               <p className="mt-0.5 text-[11px] text-rose">Blocked{a.blockedReason ? `: ${a.blockedReason}` : " (no reason given)"}</p>
@@ -80,7 +80,7 @@ export function TaskBoard({
                           </div>
                         </div>
                         {canEdit && (
-                          <form action={updateAction} className="mt-2 flex flex-wrap gap-1.5">
+                          <form key={`status-${a.status}-${a.blockedReason ?? ""}`} action={updateAction} className="mt-2 flex flex-wrap gap-1.5">
                             <input type="hidden" name="actionId" value={a.id} />
                             <input type="hidden" name="op" value="status" />
                             <select name="status" defaultValue={a.status} aria-label={`Move "${a.title}" to`} className={input}>

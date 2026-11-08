@@ -9,8 +9,9 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, type AiResult } from "@/lib/ai/client";
-import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, restoreOpsBriefing, restoreProfile } from "@/lib/ai/snapshot";
+import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, type AiResult } from "@/lib/ai/client";
+import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, restoreOpsBriefing, restoreProfile, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
+import { EST_OPTIONS, parseSteps } from "@/lib/ops";
 import {
   getAiStatus,
   getAtlasQuestions,
@@ -246,21 +247,110 @@ async function logActivity(db: Db, row: { client_id: string | null; lead_ghl_id?
 
 async function saveAction(
   db: Db,
-  row: { client_id?: string; lead_ghl_id?: string; kind: "follow_up" | "issue"; title: string; notes?: string | null; owner_staff_id: string | null; priority: string; due_on: string | null; promised_on?: string },
+  row: {
+    client_id?: string;
+    lead_ghl_id?: string;
+    kind: "follow_up" | "issue" | "work_order";
+    title: string;
+    notes?: string | null;
+    owner_staff_id: string | null;
+    priority: string;
+    due_on: string | null;
+    promised_on?: string;
+    steps?: string | null;
+    source_link?: string | null;
+    source_note?: string | null;
+    est_minutes?: number | null;
+    ai_suggested?: boolean;
+  },
 ): Promise<{ error?: string }> {
   const { data, error } = await db.from("actions").insert(row).select("id").single();
   if (error || !data) {
     console.warn(`Action refused: ${error?.code}`);
+    // 23514 = a check rule refused it: before 0010 that's the new "work_order" kind.
+    if (row.kind === "work_order" && (error?.code === "23514" || MISSING_COLUMN.has(error?.code ?? ""))) return { error: "Work orders need one setup step first (0010 SQL)." };
     if (row.promised_on && MISSING_COLUMN.has(error?.code ?? "")) return { error: "Promise dates need one setup step first (0009 SQL)." };
     return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
   }
-  await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : "Next action added"}: ${row.title}` });
+  await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : row.kind === "work_order" ? `Work order added${row.ai_suggested ? " (from AI draft)" : ""}` : "Next action added"}: ${row.title}` });
   return {};
 }
 
 function refreshOps(slug?: string) {
   if (slug && /^[a-z0-9-]{1,90}$/.test(slug)) revalidatePath(`/clients/${slug}`);
   revalidatePath("/", "layout");
+}
+
+/** A pasted conversation link: https only, no spaces or odd characters, no logins in it. */
+function httpsLink(raw: string): string | null {
+  if (!raw) return null;
+  if (raw.length > 500 || /[\s<>"]/.test(raw)) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" && !u.username && !u.password && u.hostname.includes(".") ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Steps typed one per line → a clean list (max 20 lines of 200 characters). */
+function cleanSteps(raw: string): string | null {
+  const lines = parseSteps(raw).map((l) => l.slice(0, 200));
+  return lines.length ? lines.join("\n").slice(0, 2000) : null;
+}
+
+const EST_CHOICES = EST_OPTIONS.map(([v]) => v);
+
+/**
+ * Add a work order (0010). Owner and managers only. Also used for "Add" on an AI
+ * draft: the person reviews and edits it first; the AI never adds anything itself.
+ */
+export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add work orders." };
+  const slug = text(form, "slug", 90);
+  const title = text(form, "title", 120);
+  const steps = cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : "");
+  const notes = text(form, "notes", 500);
+  const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
+  const ownerRaw = text(form, "ownerId", 40);
+  const dueRaw = text(form, "due", 10);
+  const promisedRaw = text(form, "promised", 10);
+  const linkRaw = text(form, "link", 500);
+  const linkNote = text(form, "linkNote", 200);
+  const estRaw = Number(text(form, "est", 5));
+  const fromDraft = text(form, "fromDraft", 1) === "1";
+  if (!title) return { error: "Say what needs to be done." };
+  // Look the client up on the server; never trust ids from the page.
+  const client = (await getRoster()).find((c) => c.id === slug);
+  if (!client?.dbId) return { error: "Pick a client." };
+  const due = dueRaw ? anyDate(dueRaw) : null;
+  if (dueRaw && !due) return { error: "Pick a real due date." };
+  const promised = promisedRaw ? anyDate(promisedRaw) : null;
+  if (promisedRaw && !promised) return { error: "Pick a real promise date." };
+  const link = httpsLink(linkRaw);
+  if (linkRaw && !link) return { error: "The link must be a full https:// address (copy it from GoHighLevel)." };
+  const est = (EST_CHOICES as number[]).includes(estRaw) ? estRaw : null;
+  const db = await createDatabaseClient();
+  if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
+  const saved = await saveAction(db, {
+    client_id: client.dbId,
+    kind: "work_order",
+    title,
+    notes: notes || null,
+    owner_staff_id: ownerRaw || null,
+    priority,
+    due_on: due,
+    ...(promised ? { promised_on: promised } : {}),
+    steps,
+    source_link: link,
+    source_note: linkNote || null,
+    est_minutes: est,
+    ai_suggested: fromDraft,
+  });
+  if (saved.error) return { error: saved.error };
+  refreshOps(slug);
+  return { ok: true };
 }
 
 /** Add a follow-up or an issue to a client. */
@@ -442,6 +532,19 @@ export async function updateAction(form: FormData) {
     patch = { promised_on: promised };
     summary = promised ? `Promised to client by ${promised}: ${a.title}` : `Promise date removed: ${a.title}`;
     kind = "action_rescheduled";
+  } else if (op === "details") {
+    if (me.role === "developer") return;
+    const linkRaw = text(form, "link", 500);
+    const link = httpsLink(linkRaw);
+    if (linkRaw && !link) return;
+    const estRaw = Number(text(form, "est", 5));
+    patch = {
+      steps: cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : ""),
+      source_link: link,
+      source_note: text(form, "linkNote", 200) || null,
+      est_minutes: (EST_CHOICES as number[]).includes(estRaw) ? estRaw : null,
+    };
+    summary = `Details updated: ${a.title}`;
   } else if (op === "priority") {
     const priority = oneOf(PRIORITIES, text(form, "priority", 10));
     if (!priority) return;
@@ -835,7 +938,7 @@ export async function decideContactMatch(form: FormData) {
 // log every request's exact cost, and save the answer for people to review.
 // ---------------------------------------------------------------------------
 
-async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile", r: AiResult) {
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt", r: AiResult) {
   if (!r.usage || r.costUsd === undefined) return; // nothing was sent, nothing was charged
   const { error } = await db.from("ai_usage").insert({
     feature,
@@ -928,6 +1031,119 @@ export async function generateBriefing(): Promise<{ error?: string; message?: st
   revalidatePath("/", "layout");
   if (error) return { error: "The briefing was written but couldn't be saved." };
   return { message: `Briefing ready. Cost: $${result.costUsd.toFixed(3)}.` };
+}
+
+/**
+ * AI-drafted work orders (0010). Sends coded facts (no names), saves the drafts as a
+ * list for review. Nothing becomes a work order until a person taps "Add".
+ */
+export async function generateWorkOrderDrafts(): Promise<{ error?: string; message?: string }> {
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const ops = await getOps();
+  if (!ops.orders) return { error: "Work orders need one setup step first (0010 SQL)." };
+  const today = ops.today;
+  const team = (await getTeam()).members;
+  const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
+  const book = buildCodebook(current);
+  const staff = buildStaffBook(team.map((m) => ({ id: m.id, name: m.name })));
+  const notes = await getRecentCheckInsByClient(2);
+  const open = ops.actions.filter((a) => a.status !== "done");
+  const work = open.filter((a) => a.kind !== "follow_up");
+  const data = {
+    today,
+    team: team.map((m) => {
+      const mine = open.filter((a) => a.ownerId === m.id);
+      return {
+        code: staff.codeOf.get(m.id),
+        role: m.role,
+        open_work: mine.length,
+        overdue: mine.filter((a) => a.dueOn !== null && a.dueOn < today).length,
+        est_hours_open: Math.round(mine.reduce((n, a) => n + (a.estMinutes ?? 0), 0) / 6) / 10,
+        clients_owned: current.filter((c) => c.status === "active" && c.ownerId === m.id).length,
+      };
+    }),
+    clients: current
+      .filter((c) => c.status === "active")
+      .map((c) =>
+        opsClientFacts({
+          c,
+          health: ops.health.get(c.id) ?? null,
+          checkIn: ops.checkIns.get(c.id)!,
+          open: open.filter((a) => a.client?.slug === c.id),
+          notes: (c.dbId && notes.get(c.dbId)) || [],
+          book,
+          staff,
+          today,
+          score: ops.scores.get(c.id) ? { value: ops.scores.get(c.id)!.score, change: ops.trends.get(c.id)?.change ?? null } : null,
+        }),
+      ),
+    risk_alerts: ops.risks.slice(0, 8).map((r) => ({ client: book.codeOf.get(r.client.slug) ?? null, severity: r.severity, problem: redact(r.problem, book), suggested: redact(r.action, book) })),
+    ranked_plan: ops.priorities.slice(0, 10).map((p, i) => {
+      const slug = p.clientSlug ?? p.action?.client?.slug;
+      return { rank: i + 1, client: slug ? (book.codeOf.get(slug) ?? null) : null, item: redact(p.action ? p.action.title : p.title, book), why: p.why ?? [] };
+    }),
+    open_work: work.slice(0, 60).map((a) => ({
+      client: a.client ? (book.codeOf.get(a.client.slug) ?? null) : null,
+      title: redact(a.title, book),
+      owner: a.ownerId ? (staff.codeOf.get(a.ownerId) ?? "unknown") : "none",
+      status: a.status,
+      due: a.dueOn,
+    })),
+  };
+  const result = await askAi({ task: WORK_ORDERS_TASK, data, schema: WORK_ORDERS_SCHEMA, maxOutputTokens: 6000, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "work_orders", result);
+  if (!result.ok) {
+    revalidatePath("/", "layout");
+    return { error: result.message };
+  }
+  const drafts = restoreWorkOrderDrafts(result.data, book, staff);
+  const { error } = await db.from("ai_briefings").insert({ kind: "work_orders", content: drafts });
+  revalidatePath("/", "layout");
+  if (error) return { error: "The drafts were written but couldn't be saved." };
+  return { message: `${drafts.orders.length} drafts ready to review. Cost: $${result.costUsd.toFixed(3)}.` };
+}
+
+/**
+ * Prompt helper (0010): instructions and a ready-to-paste prompt for one work order.
+ * Shown once to copy by hand; not saved, never sent anywhere. Cost is logged.
+ */
+export async function generateWorkPrompt(
+  _prev: { error?: string; result?: { summary: string; steps: string[]; prompt: string; checks: string[]; costUsd: number } } | undefined,
+  form: FormData,
+): Promise<{ error?: string; result?: { summary: string; steps: string[]; prompt: string; checks: string[]; costUsd: number } }> {
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const id = text(form, "actionId", 40);
+  if (!isUuid(id)) return { error: "Unknown work order." };
+  const { actions, orders } = await getActions();
+  // Before 0010 the cost log can't record this feature, so don't spend anything.
+  if (!orders) return { error: "The prompt helper needs one setup step first (0010 SQL)." };
+  const a = actions.find((x) => x.id === id);
+  if (!a) return { error: "Unknown work order." };
+  const roster = await getRoster();
+  const book = buildCodebook(roster);
+  const client = a.client ? roster.find((c) => c.id === a.client!.slug) : undefined;
+  const data = {
+    work_order: {
+      type: a.kind,
+      title: redact(a.title, book),
+      notes: a.notes ? redact(a.notes, book) : null,
+      steps: parseSteps(a.steps).map((x) => redact(x, book)),
+      where_it_came_from: a.sourceNote ? redact(a.sourceNote, book) : null,
+      priority: a.priority,
+      due: a.dueOn,
+      estimate_minutes: a.estMinutes ?? null,
+    },
+    client: client ? { code: book.codeOf.get(client.id), services: client.services, started: client.startDate } : null,
+  };
+  const result = await askAi({ task: WORK_PROMPT_TASK, data, schema: WORK_PROMPT_SCHEMA, maxOutputTokens: 3000, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "work_prompt", result);
+  revalidatePath("/", "layout");
+  if (!result.ok) return { error: result.message };
+  return { result: { ...restoreWorkPrompt(result.data, book), costUsd: result.costUsd } };
 }
 
 export async function generateClientProfile(_prev: { error?: string; message?: string } | undefined, form: FormData): Promise<{ error?: string; message?: string }> {

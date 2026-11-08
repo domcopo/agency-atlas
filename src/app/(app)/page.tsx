@@ -382,10 +382,12 @@ export default async function MissionControlPage() {
   const pulse: PulseTile[] = [
     { label: "Monthly plans", value: `$${(summary.activeMrr / 1000).toFixed(1)}k`, source: "Client plans · not payments", href: "/clients", tone: "teal" },
     { label: "Active clients", value: String(summary.activeCount), source: "Client list", href: "/clients" },
-    { label: "New deals (month)", value: synced ? String(ghl.newThisMonth) : "–", source: synced ? "GoHighLevel" : "Not synced", href: "/sales", tone: "lime" },
-    { label: "Pipeline value", value: synced ? formatUsd(ghl.open.value) : "–", source: synced ? "Open deals · not revenue" : "Not synced", href: "/sales", tone: "amber" },
     { label: "Overdue items", value: ops.ready ? String(overdueItems) : "–", source: "Follow-ups + issues", href: "/work", tone: overdueItems ? "rose" : "plain" },
     { label: "At-risk clients", value: String(ops.counts.at_risk), source: "Health rules", href: "/clients#risk", tone: ops.counts.at_risk ? "rose" : "plain" },
+  ];
+  // Hidden until tapped: sales numbers matter less than client work on Home.
+  const pulseHidden: PulseTile[] = [
+    { label: "Pipeline value", value: synced ? formatUsd(ghl.open.value) : "–", source: synced ? "Open deals · not revenue" : "Not synced", href: "/sales", tone: "amber" },
   ];
 
   return (
@@ -413,7 +415,7 @@ export default async function MissionControlPage() {
         </Link>
       )}
 
-      {!samples && <PulseStrip tiles={pulse} />}
+      {!samples && <PulseStrip tiles={pulse} hidden={pulseHidden} hiddenLabel="pipeline value" />}
 
       <HomeTabs tabs={tabs} />
 
