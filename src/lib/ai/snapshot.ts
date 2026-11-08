@@ -273,3 +273,46 @@ export function restoreWorkPrompt(raw: unknown, book: Codebook): { summary: stri
   const list = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n) : []).map((x) => t(x, 300)).filter(Boolean);
   return { summary: t(r.summary, 400), steps: list(r.steps, 12), prompt: t(r.prompt, 4000), checks: list(r.checks, 8) };
 }
+
+/** Team member names in free text (the owner's quick-add note) → their codes, like client names. */
+export function redactStaff(text: string, staff: StaffBook): string {
+  let out = text;
+  const names = [...staff.nameOf.entries()].sort((a, b) => b[1].length - a[1].length);
+  for (const [code, name] of names) {
+    if (name.trim().length < 3) continue;
+    out = out.replace(new RegExp(`(?<![A-Za-z0-9])${escape(name)}(?![A-Za-z0-9])`, "gi"), `[${code}]`);
+  }
+  return out;
+}
+
+/** A business name read from a picture → one of our clients, only on a clear match (else null). */
+export function matchClientName(seen: string, book: Codebook): { slug: string; name: string } | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const n = norm(seen);
+  if (n.length < 4) return null;
+  const hits = [...book.clientOf.values()].filter((c) => {
+    const m = norm(c.name);
+    return m.length >= 4 && (m === n || m.includes(n) || n.includes(m));
+  });
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+/** Quick add answer → drafts with real names (clients from codes, or a clear match on a name seen in the picture). */
+export function restoreQuickAdd(raw: unknown, book: Codebook, staff: StaffBook): WorkOrderDrafts {
+  const drafts = restoreWorkOrderDrafts(raw, book, staff);
+  let i = 0;
+  for (const o of asArr(asObj(raw).orders, 8)) {
+    const title = typeof o.title === "string" ? o.title.trim() : "";
+    if (!title) continue; // restoreWorkOrderDrafts dropped it too
+    const d = drafts.orders[i++];
+    if (d && !d.clientSlug && typeof o.client_name_seen === "string") {
+      const hit = matchClientName(o.client_name_seen.slice(0, 120), book);
+      if (hit) {
+        d.clientSlug = hit.slug;
+        d.clientName = hit.name;
+      }
+    }
+  }
+  drafts.orders = drafts.orders.slice(0, 6);
+  return drafts;
+}

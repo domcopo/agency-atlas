@@ -379,6 +379,47 @@ describe("AI read-only + budget (Phase 4)", () => {
   });
 });
 
+describe("cancel and quick add (0013)", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const body = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}(`);
+    expect(start).toBeGreaterThan(-1);
+    const next = actions.indexOf("\nexport async function ", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("quick add never saves the photo or the drafts: its only database write is the cost log", () => {
+    const q = body("quickAddWorkOrders");
+    expect(q).not.toMatch(/\bdb\.from\(|\.insert\(|\.upsert\(|\.update\(|\.storage\b|writeFile/);
+    expect(q).toMatch(/await logAiUsage\(db, "quick_add", result\)/);
+    expect(q).toMatch(/MAX_PHOTO_BYTES/); // size checked on the server
+    expect(q).toMatch(/imageType\(bytes\)/); // real file type checked from its bytes
+  });
+
+  it("cancel and restore are owner-only in the app too (the database enforces it either way)", () => {
+    const u = body("updateAction");
+    expect(u).toMatch(/op === "cancel"\) \{\s*\/\/[^\n]*\n\s*if \(me\.role !== "owner"/);
+    expect(u).toMatch(/op === "restore"\) \{\s*if \(me\.role !== "owner"/);
+    // The status picker can't be used to cancel.
+    expect(actions).toMatch(/const STATUSES = \["open", "in_progress", "waiting", "blocked", "review", "done"\] as const;/);
+  });
+
+  it("there are still no deletes anywhere in the app", () => {
+    expect(findMatches([/\.delete\(\)/])).toEqual([]);
+  });
+});
+
+describe("Kit (0014)", () => {
+  it("only server actions write Kit, and Kit pages render text safely", () => {
+    const writers = contents.filter(({ text }) => /from\(["']kit_(docs|tools|doc_versions)["']\)\s*\.(insert|update|upsert)/.test(text.replace(/\s+/g, " "))).map(({ file }) => file);
+    expect(writers.every((f) => f === "src/app/actions.ts")).toBe(true);
+    // Nobody writes page history: the database does.
+    expect(findMatches([/kit_doc_versions["']\)\s*\.(insert|update|upsert)/])).toEqual([]);
+    const text = readFileSync(join(ROOT, "src/components/kit/KitText.tsx"), "utf8");
+    expect(text).not.toMatch(/dangerouslySetInnerHTML|innerHTML/);
+  });
+});
+
 describe("owner summary (0012): one read-only route for the owner's dashboard", () => {
   const ROUTE = "src/app/api/owner-summary/route.ts";
   const ACCESS = "src/lib/owner-summary-access.ts";

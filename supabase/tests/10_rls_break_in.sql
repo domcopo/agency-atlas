@@ -702,6 +702,153 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 7j. Cancel (0013): only the owner cancels or restores; developers never see it.
+-- ---------------------------------------------------------------------------
+insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values
+  ('00000000-0000-0000-0000-00000000ca01', '00000000-0000-0000-0000-0000000000c1', 'work_order', 'Old landing page fix (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a1');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000ca01'$$, 1, 'developer sees their work order before it is canceled');
+select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'developer cannot cancel their own work order');
+select test.expect($$update public.actions set cancel_note = 'x' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'developer cannot write a cancel reason');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'manager cannot cancel work');
+select test.expect($$insert into public.actions (client_id, kind, title, status) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', 'canceled')$$, -2, 'new items cannot start out canceled');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'manager still cannot delete work');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('quick_add', 'm', 1, 1, 0.01, 'ok')$$, 1, 'quick add is cost-logged');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000ca01'$$, 0, 'owner without two-factor cannot cancel');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'canceled', cancel_note = 'Duplicate (test)', canceled_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'nobody types the cancel time, not even the owner');
+select test.expect($$update public.actions set status = 'canceled', cancel_note = 'Duplicate (test)' where id = '00000000-0000-0000-0000-00000000ca01'$$, 1, 'owner cancels a work order with a reason');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ca01' and canceled_at > now() - interval '1 minute'$$, 1, 'the database stamps the cancel time');
+select test.expect($$update public.actions set cancel_note = repeat('x', 201) where id = '00000000-0000-0000-0000-00000000ca01'$$, -2, 'cancel reasons are length-limited');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'even the owner cannot delete work (cancel keeps it)');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000ca01'$$, 0, 'developer no longer sees a canceled work order');
+select test.expect($$update public.actions set status = 'open' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'developer cannot restore canceled work');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'open' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'manager cannot restore canceled work');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ca01' and status = 'canceled'$$, 1, 'managers can still see canceled work (history)');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.actions set status = 'open' where id = '00000000-0000-0000-0000-00000000ca01'$$, 1, 'owner restores canceled work');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ca01' and canceled_at is null and cancel_note is null$$, 1, 'restoring clears the cancel time and reason');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7k. Kit (0014): pages by audience, history only by the database, tools for managers.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$select * from public.kit_docs where kind = 'readme'$$, 1, 'the starter README is there');
+select test.expect($$insert into public.kit_docs (id, kind, title, body, audience, updated_by) values ('00000000-0000-0000-0000-00000000d001', 'sop', 'Monthly SEO check (test)', E'# Steps\n- Check rankings', '{manager,developer}', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'manager adds an SOP for developers');
+select test.expect($$insert into public.kit_docs (id, kind, title, body, audience, updated_by) values ('00000000-0000-0000-0000-00000000d002', 'template', 'Pricing talk (test)', 'Managers only', '{manager}', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'manager adds a managers-only page');
+select test.expect($$insert into public.kit_docs (kind, title, body, updated_by) values ('sop', 'x', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'nobody saves a page in someone else''s name');
+select test.expect($$insert into public.kit_docs (kind, title, body, updated_by) values ('wiki', 'x', 'x', '00000000-0000-0000-0000-0000000000a2')$$, -2, 'unknown page kinds are rejected');
+select test.expect($$insert into public.kit_docs (kind, title, body, audience, updated_by) values ('sop', 'x', 'x', '{stranger}', '00000000-0000-0000-0000-0000000000a2')$$, -2, 'unknown audiences are rejected');
+select test.expect($$insert into public.kit_docs (kind, title, body, updated_by) values ('sop', 'Logins (test)', 'WordPress password: hunter2', '00000000-0000-0000-0000-0000000000a2')$$, -2, 'pages with a password in them are refused');
+select test.expect($$insert into public.kit_docs (kind, title, body, updated_by) values ('sop', 'Keys (test)', 'use sk-abcdefghijklmnopqrstuvwxyz123', '00000000-0000-0000-0000-0000000000a2')$$, -2, 'pages with an API key in them are refused');
+select test.expect($$update public.kit_docs set body = E'# Steps\n- Check rankings\n- Check Search Console' where id = '00000000-0000-0000-0000-00000000d001'$$, 1, 'manager edits the SOP');
+select test.expect($$select * from public.kit_doc_versions where doc_id = '00000000-0000-0000-0000-00000000d001'$$, 2, 'the database keeps every saved version');
+select test.expect($$update public.kit_docs set reviewed_on = current_date where id = '00000000-0000-0000-0000-00000000d001'$$, 1, 'manager marks it reviewed');
+select test.expect($$select * from public.kit_doc_versions where doc_id = '00000000-0000-0000-0000-00000000d001'$$, 2, 'marking reviewed is not a new version');
+select test.expect($$insert into public.kit_doc_versions (doc_id, title, body) values ('00000000-0000-0000-0000-00000000d001', 'fake', 'fake')$$, -1, 'nobody writes history by hand');
+select test.expect($$update public.kit_doc_versions set body = 'changed'$$, -1, 'nobody edits history');
+select test.expect($$delete from public.kit_doc_versions$$, -1, 'nobody deletes history');
+select test.expect($$delete from public.kit_docs$$, -1, 'pages cannot be deleted (archive instead)');
+select test.expect($$update public.kit_docs set updated_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000d001'$$, -1, 'nobody backdates a page');
+select test.expect($$insert into public.kit_tools (id, name, purpose, url, login_where, monthly_usd, for_developers) values ('00000000-0000-0000-0000-00000000d101', 'Rank tracker (test)', 'Keyword rankings', 'https://tracker.example.com', 'Team password manager', 49, true)$$, 1, 'manager adds a tool');
+select test.expect($$insert into public.kit_tools (id, name, monthly_usd) values ('00000000-0000-0000-0000-00000000d102', 'Billing app (test)', 99)$$, 1, 'manager adds a managers-only tool');
+select test.expect($$insert into public.kit_tools (name, login_where) values ('x', 'password: hunter2')$$, -2, 'a password in the tools list is refused');
+select test.expect($$insert into public.kit_tools (name, url) values ('x', 'javascript:alert(1)')$$, -2, 'tool links must be https');
+select test.expect($$delete from public.kit_tools$$, -1, 'tools cannot be deleted (archive instead)');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.kit_docs$$, 2, 'developer reads the README and the SOP meant for them');
+select test.expect($$select * from public.kit_docs where id = '00000000-0000-0000-0000-00000000d002'$$, 0, 'developer cannot read managers-only pages');
+select test.expect($$update public.kit_docs set body = 'changed' where id = '00000000-0000-0000-0000-00000000d001'$$, 0, 'developer cannot edit SOPs');
+select test.expect($$insert into public.kit_docs (kind, title, body, updated_by) values ('faq', 'x', 'x', '00000000-0000-0000-0000-0000000000a3')$$, -1, 'developer cannot add pages');
+select test.expect($$select * from public.kit_doc_versions$$, 0, 'developer cannot read page history');
+select test.expect($$select * from public.kit_tools$$, 0, 'developer cannot read the full tools list (costs)');
+select test.expect($$select * from public.team_tools$$, 1, 'developer sees only tools marked for developers');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.kit_docs set archived = true where id = '00000000-0000-0000-0000-00000000d001'$$, 1, 'manager archives a page');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.kit_docs where id = '00000000-0000-0000-0000-00000000d001'$$, 0, 'developer no longer sees an archived page');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect($$select * from public.kit_docs$$, 0, 'no pages without two-factor');
+select test.expect($$select * from public.team_tools$$, 0, 'no tools without two-factor');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect($$select * from public.kit_docs$$, 0, 'non-team user reads no pages');
+select test.expect($$select * from public.team_tools$$, 0, 'non-team user sees no tools');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.kit_docs$$, -1, 'signed out cannot read pages');
+select test.expect($$select * from public.team_tools$$, -1, 'signed out cannot read tools');
+commit;
+
+-- The developer tools view must never show costs or notes.
+do $$
+declare cols text;
+begin
+  select string_agg(column_name, ',' order by column_name) into cols
+  from information_schema.columns where table_schema = 'public' and table_name = 'team_tools';
+  if cols is distinct from 'id,login_where,name,purpose,url' then
+    raise exception 'FAILED: team_tools exposes unexpected columns: %', cols;
+  end if;
+  raise notice 'ok: developer tools view has no costs or notes';
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

@@ -40,6 +40,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Quick add photos are shrunk on the phone first (to ~1600px); 2 MB leaves room.
+  experimental: { serverActions: { bodySizeLimit: "2mb" } },
   reactStrictMode: true,
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

@@ -5,12 +5,15 @@
 import { daysBetween, monthsBetween } from "@/lib/format";
 import type {
   ActionPriority,
+  ActionStatus,
   CheckIn,
   ClientAction,
   ClientHealth,
   HealthSummary,
   PriorityItem,
   RosterClient,
+  TeamRole,
+  WorkOrderDraft,
 } from "@/lib/types";
 
 export const OPS_RULES = {
@@ -494,6 +497,7 @@ export function boardColumns(actions: ClientAction[], ownerId: string | null | u
   const cols: Record<BoardColumn, ClientAction[]> = { open: [], in_progress: [], waiting: [], blocked: [], review: [], done: [] };
   for (const a of actions) {
     if (ownerId !== undefined && (a.ownerId ?? null) !== ownerId) continue;
+    if (a.status === "canceled") continue; // kept for history, never on the board
     if (a.status === "done") {
       if (a.doneAt && a.doneAt >= weekAgo) cols.done.push(a);
     } else cols[a.status].push(a);
@@ -816,4 +820,204 @@ export function reviewQueue(actions: ClientAction[], today: string): { waiting: 
 /** Developers must send work orders and issues for review; simple follow-ups they can close. */
 export function needsReview(a: Pick<ClientAction, "kind">): boolean {
   return a.kind === "work_order" || a.kind === "issue";
+}
+
+// ---------------------------------------------------------------------------
+// Workload chips: one chip per open work item, piled up per person, so a full plate
+// is visible at a glance. Plain rules; tune the numbers here.
+// ---------------------------------------------------------------------------
+
+export const WORKLOAD = {
+  /** Hours of open work that make someone "busy" / "overloaded". */
+  busyHours: 12,
+  overloadedHours: 24,
+  /** Items without a time estimate count as this many minutes. */
+  unestimatedMinutes: 60,
+} as const;
+
+export interface WorkChip {
+  id: string;
+  title: string;
+  client: string | null;
+  status: ActionStatus;
+  overdue: boolean;
+  minutes: number;
+  /** false = no estimate (counted as WORKLOAD.unestimatedMinutes). */
+  estimated: boolean;
+  /** Chip width: under 30 min, up to 2 h, up to a day, more. */
+  size: "s" | "m" | "l" | "xl";
+}
+
+export interface WorkloadRow {
+  ownerId: string | null;
+  ownerName: string;
+  chips: WorkChip[];
+  hours: number;
+  overdue: number;
+  level: "free" | "light" | "busy" | "overloaded";
+}
+
+/**
+ * Everyone's pile of open work (work orders + issues), heaviest first; team members with
+ * nothing open are listed too (good to know who can take more). "No owner" comes last.
+ */
+export function workloadRows(input: { actions: ClientAction[]; staff: { id: string; name: string }[]; today: string }): WorkloadRow[] {
+  const { actions, staff, today } = input;
+  const groups = workOrderGroups({ actions, staff, today, show: "work", status: "open" });
+  const byOwner = new Map(groups.map((g) => [g.ownerId ?? "none", g]));
+  const rows: WorkloadRow[] = [];
+  const build = (ownerId: string | null, ownerName: string, items: ClientAction[]): WorkloadRow => {
+    const chips = items.map((a): WorkChip => {
+      const minutes = a.estMinutes ?? WORKLOAD.unestimatedMinutes;
+      return {
+        id: a.id,
+        title: a.title,
+        client: a.client?.name ?? null,
+        status: a.status,
+        overdue: promiseMissed(a, today) || dueWhen(a.dueOn, today) === "overdue",
+        minutes,
+        estimated: Boolean(a.estMinutes),
+        size: minutes <= 30 ? "s" : minutes <= 120 ? "m" : minutes <= 480 ? "l" : "xl",
+      };
+    });
+    const hours = Math.round(chips.reduce((n, c) => n + c.minutes, 0) / 6) / 10;
+    const level = !chips.length ? "free" : hours >= WORKLOAD.overloadedHours ? "overloaded" : hours >= WORKLOAD.busyHours ? "busy" : "light";
+    return { ownerId, ownerName, chips, hours, overdue: chips.filter((c) => c.overdue).length, level };
+  };
+  for (const m of staff) rows.push(build(m.id, m.name, byOwner.get(m.id)?.items ?? []));
+  // Former teammates who still hold work.
+  for (const g of groups) if (g.ownerId && !staff.some((m) => m.id === g.ownerId)) rows.push(build(g.ownerId, g.ownerName, g.items));
+  rows.sort((x, y) => y.hours - x.hours || y.chips.length - x.chips.length || x.ownerName.localeCompare(y.ownerName));
+  const none = byOwner.get("none");
+  if (none?.items.length) rows.push(build(null, "No owner", none.items));
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Suggested work orders: free, from plain rules (no AI). They show up on their own;
+// a person taps "Review and add" for each one. Nothing is created automatically.
+// ---------------------------------------------------------------------------
+
+export const SUGGEST_RULES = {
+  /** At most this many suggestions at once. */
+  max: 6,
+  /** An active client with no work order or issue in this many days gets a routine check. */
+  quietDays: 30,
+  /** Minutes per service for a routine check / an onboarding setup. */
+  checkMinutesPerService: 60,
+  setupMinutesPerService: 120,
+} as const;
+
+const SERVICE_CHECK: Record<string, string[]> = {
+  SEO: ["Check rankings for the main keywords", "Review Google Search Console for errors or drops", "Check the Google Business Profile (posts, reviews, hours)"],
+  Ads: ["Review spend against this month's budget", "Check leads and cost per lead", "Pause weak keywords or ads; review search terms"],
+  Website: ["Check the site on mobile and desktop", "Test every contact form and phone link", "Run PageSpeed and note the score"],
+};
+const SERVICE_SETUP: Record<string, string[]> = {
+  SEO: ["Get Search Console and Analytics access", "Set up rank tracking for the main keywords", "Audit the Google Business Profile"],
+  Ads: ["Get ad account access", "Set up conversion tracking", "Build the first campaign for review"],
+  Website: ["Collect logins, logo and content", "Confirm the pages with the client", "Set up the staging site"],
+};
+
+export interface SuggestedWorkOrder extends WorkOrderDraft {
+  /** Which rule made it (shown as the reason's label). */
+  rule: "risk" | "onboarding" | "routine";
+}
+
+/**
+ * Up to SUGGEST_RULES.max suggestions, most urgent first:
+ * 1. at-risk clients (critical/high alerts) with no open work order or issue → the alert's action, for the client's owner;
+ * 2. new clients with no work order yet → an onboarding setup for their services;
+ * 3. active clients with no work order or issue in quietDays → a routine check for their services.
+ * Developer work goes to the developer with the least open hours (spread as it's assigned).
+ * `actions` should include canceled items, so canceling a suggestion doesn't bring it straight back.
+ */
+export function suggestWorkOrders(input: {
+  clients: RosterClient[];
+  risks: RiskAlert[];
+  actions: ClientAction[];
+  team: { id: string; name: string; role: TeamRole }[];
+  workload: WorkloadRow[];
+  today: string;
+}): SuggestedWorkOrder[] {
+  const { clients, risks, actions, team, workload, today } = input;
+  const since = new Date(Date.parse(`${today}T00:00:00Z`) - SUGGEST_RULES.quietDays * 86_400_000).toISOString();
+  const work = actions.filter((a) => a.kind !== "follow_up" && a.client);
+  const openWork = new Set(work.filter((a) => a.status !== "done" && a.status !== "canceled").map((a) => a.client!.slug));
+  const recentWork = new Set(work.filter((a) => (a.status !== "done" && a.status !== "canceled") || a.createdAt >= since || (a.canceledAt ?? "") >= since).map((a) => a.client!.slug));
+  const everWork = new Set(actions.filter((a) => a.kind === "work_order" && a.client).map((a) => a.client!.slug));
+  const nameOf = new Map(team.map((m) => [m.id, m.name]));
+  // Hours each developer has open; grows as suggestions are handed out, so they spread.
+  const load = new Map(team.filter((m) => m.role === "seo_developer").map((m) => [m.id, workload.find((r) => r.ownerId === m.id)?.hours ?? 0]));
+  const pickDeveloper = (minutes: number): { id: string | null; why: string } => {
+    const best = [...load.entries()].sort((x, y) => x[1] - y[1] || (nameOf.get(x[0]) ?? "").localeCompare(nameOf.get(y[0]) ?? ""))[0];
+    if (!best) return { id: null, why: "" };
+    load.set(best[0], best[1] + minutes / 60);
+    return { id: best[0], why: `developer with the least open work (~${Math.round(best[1] * 10) / 10}h)` };
+  };
+  const svc = (c: RosterClient) => c.services.filter((s) => SERVICE_CHECK[s]);
+  const out: SuggestedWorkOrder[] = [];
+  const taken = new Set<string>();
+  const push = (s: SuggestedWorkOrder) => {
+    if (out.length >= SUGGEST_RULES.max || !s.clientSlug || taken.has(s.clientSlug) || draftAdded(s, actions)) return;
+    taken.add(s.clientSlug);
+    out.push(s);
+  };
+  const base = (c: RosterClient) => ({ clientSlug: c.id, clientName: c.name });
+
+  for (const r of risks) {
+    if (r.severity === "medium" || openWork.has(r.client.slug)) continue;
+    const c = clients.find((x) => x.id === r.client.slug);
+    if (!c || c.status !== "active") continue;
+    const owner = c.ownerId && nameOf.has(c.ownerId) ? c.ownerId : null;
+    push({
+      ...base(c),
+      rule: "risk",
+      title: r.action.slice(0, 120),
+      why: `At risk (score ${r.score}): ${r.problem}`.slice(0, 300),
+      steps: ["Read the latest from the client", r.action, "Log what happened in Atlas"],
+      priority: r.severity === "critical" ? "critical" : "high",
+      estMinutes: 30,
+      assigneeId: owner,
+      assigneeName: owner ? (nameOf.get(owner) ?? null) : null,
+      assigneeWhy: owner ? "owns this client" : "",
+    });
+  }
+  for (const c of clients) {
+    if (c.status !== "active" || everWork.has(c.id) || daysBetween(c.startDate, today) > OPS_RULES.newClientDays || !svc(c).length) continue;
+    const minutes = svc(c).length * SUGGEST_RULES.setupMinutesPerService;
+    const dev = pickDeveloper(minutes);
+    push({
+      ...base(c),
+      rule: "onboarding",
+      title: `Onboarding setup: ${svc(c).join(" + ")}`,
+      why: `New client (started ${c.startDate}) with no work orders yet.`,
+      steps: svc(c).flatMap((s) => SERVICE_SETUP[s] ?? []),
+      priority: "high",
+      estMinutes: minutes,
+      assigneeId: dev.id,
+      assigneeName: dev.id ? (nameOf.get(dev.id) ?? null) : null,
+      assigneeWhy: dev.why,
+    });
+  }
+  const quiet = clients
+    .filter((c) => c.status === "active" && svc(c).length && !recentWork.has(c.id) && daysBetween(c.startDate, today) > OPS_RULES.newClientDays)
+    .sort((x, y) => y.monthlyUsd - x.monthlyUsd || x.name.localeCompare(y.name));
+  for (const c of quiet) {
+    const minutes = svc(c).length * SUGGEST_RULES.checkMinutesPerService;
+    const dev = pickDeveloper(minutes);
+    push({
+      ...base(c),
+      rule: "routine",
+      title: `Monthly check: ${svc(c).join(" + ")}`,
+      why: `No work order or issue for this client in ${SUGGEST_RULES.quietDays} days ($${c.monthlyUsd.toLocaleString("en-US")}/mo).`,
+      steps: [...svc(c).flatMap((s) => SERVICE_CHECK[s] ?? []), "Write 2–3 lines of results for the client update"],
+      priority: "normal",
+      estMinutes: minutes,
+      assigneeId: dev.id,
+      assigneeName: dev.id ? (nameOf.get(dev.id) ?? null) : null,
+      assigneeWhy: dev.why,
+    });
+  }
+  return out;
 }

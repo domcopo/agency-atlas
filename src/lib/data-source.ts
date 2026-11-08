@@ -20,6 +20,7 @@ import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import type { OwnerSummaryInput } from "@/lib/owner-summary";
+import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import { buildPriorities, healthScore, healthSummary, isSalesStage, kindLabel, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote, type ClientContactDates } from "@/lib/ops";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
@@ -433,6 +434,7 @@ const ACTION_COLS = "id, client_id, lead_ghl_id, kind, title, notes, owner_staff
 const PROMISE_COLS = "blocked_reason, promised_on"; // 0009
 const ORDER_COLS = "steps, source_link, source_note, est_minutes, ai_suggested"; // 0010
 const REVIEW_COLS = "submitted_at, sent_back_count, review_note"; // 0011
+const CANCEL_COLS = "canceled_at, cancel_note"; // 0013
 
 /** Item kind from the database (unknown values read as follow-ups). */
 const asActionKind = (v: unknown): ClientAction["kind"] => (v === "issue" || v === "work_order" ? v : "follow_up");
@@ -455,17 +457,18 @@ function orderDetails(r: Record<string, unknown>) {
  * All actions (open and done), read as the signed-in person. ready=false before 0006 is run.
  * promises=false before 0009 (no blocked reason / promise date yet): reads still work.
  */
-export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; review: boolean; actions: ClientAction[] }> => {
-  const none = { ready: false, promises: false, orders: false, review: false, actions: [] as ClientAction[] };
+export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; review: boolean; cancel: boolean; actions: ClientAction[]; canceled: ClientAction[] }> => {
+  const none = { ready: false, promises: false, orders: false, review: false, cancel: false, actions: [] as ClientAction[], canceled: [] as ClientAction[] };
   if (!usesDatabase()) return none;
   const db = await createDatabaseClient();
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
   // Newest setup level first; step down if a later setup step hasn't been run yet.
   const levels = [
-    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}`, promises: true, orders: true, review: true }, // 0011
-    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`, promises: true, orders: true, review: false }, // 0010
-    { cols: `${ACTION_COLS}, ${PROMISE_COLS}`, promises: true, orders: false, review: false }, // 0009
-    { cols: ACTION_COLS, promises: false, orders: false, review: false }, // 0006
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}`, promises: true, orders: true, review: true, cancel: true }, // 0013
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}`, promises: true, orders: true, review: true, cancel: false }, // 0011
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`, promises: true, orders: true, review: false, cancel: false }, // 0010
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}`, promises: true, orders: false, review: false, cancel: false }, // 0009
+    { cols: ACTION_COLS, promises: false, orders: false, review: false, cancel: false }, // 0006
   ];
   const [first, team] = await Promise.all([read(levels[0]!.cols), getTeam()]);
   let res = first;
@@ -476,15 +479,10 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
     level = next;
   }
   if (res.error) return none;
-  const { promises, orders, review } = level;
+  const { promises, orders, review, cancel } = level;
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
-  return {
-    ready: true,
-    promises,
-    orders,
-    review,
-    actions: ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
+  const all = ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
       const c = r.client_id ? byDbId.get(r.client_id) : undefined;
       return {
         ...orderDetails(r),
@@ -503,8 +501,19 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
         leadGhlId: r.lead_ghl_id,
         blockedReason: r.blocked_reason ?? null,
         promisedOn: r.promised_on ?? null,
+        canceledAt: r.canceled_at ?? null,
+        cancelNote: r.cancel_note ?? null,
       } as ClientAction;
-    }),
+    });
+  // Canceled work (0013) is kept but left out of every list, count and rule; the owner sees it apart.
+  return {
+    ready: true,
+    promises,
+    orders,
+    review,
+    cancel,
+    actions: all.filter((a) => a.status !== "canceled"),
+    canceled: all.filter((a) => a.status === "canceled").sort((x, y) => (y.canceledAt ?? "").localeCompare(x.canceledAt ?? "")),
   };
 });
 
@@ -559,7 +568,7 @@ export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClie
 
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const [{ clients }, { ready, promises, orders, review, actions }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
+  const [{ clients }, { ready, promises, orders, review, cancel, actions, canceled }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
@@ -585,7 +594,7 @@ export const getOps = cache(async () => {
     : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { orders, review, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
+  return { orders, review, cancel, canceled, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -656,7 +665,7 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
   const t = today();
   const me = await getMember();
   return (data as unknown as Record<string, unknown>[])
-    .filter((r) => r.status !== "done")
+    .filter((r) => r.status !== "done" && r.status !== "canceled")
     .map((r) => {
       const action: ClientAction = {
         ...orderDetails(r),
@@ -1368,4 +1377,79 @@ export async function getRecentCheckInsByClient(perClient = 3): Promise<Map<stri
     out.set(r.client_id, list);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Kit (0014): handbook pages and the tools list. Read as the signed-in person: the
+// database decides what each role sees (developers: pages for them + team_tools).
+// ready=false before 0014 is run.
+// ---------------------------------------------------------------------------
+
+const KIT_KIND_SET = new Set(["readme", "sop", "faq", "template"]);
+
+function kitDocFrom(r: Record<string, unknown>): KitDoc {
+  return {
+    id: String(r.id),
+    kind: (KIT_KIND_SET.has(String(r.kind)) ? r.kind : "sop") as KitDoc["kind"],
+    title: String(r.title ?? ""),
+    category: typeof r.category === "string" && r.category ? r.category : null,
+    body: String(r.body ?? ""),
+    audience: (Array.isArray(r.audience) ? r.audience : []).filter((a): a is KitDoc["audience"][number] => a === "manager" || a === "developer"),
+    reviewedOn: typeof r.reviewed_on === "string" ? r.reviewed_on : null,
+    archived: r.archived === true,
+    updatedAt: String(r.updated_at ?? ""),
+  };
+}
+
+export const getKit = cache(async (): Promise<{ ready: boolean; docs: KitDoc[]; tools: KitTool[]; teamTools: TeamTool[] }> => {
+  const none = { ready: false, docs: [], tools: [], teamTools: [] };
+  if (!usesDatabase()) return none;
+  const db = await createDatabaseClient();
+  const docs = await db.from("kit_docs").select("id, kind, title, category, body, audience, reviewed_on, archived, updated_at").order("title").limit(1000);
+  if (docs.error) return none;
+  const member = await getMember();
+  const manager = member?.role === "owner" || member?.role === "manager";
+  let tools: KitTool[] = [];
+  let teamTools: TeamTool[] = [];
+  if (manager) {
+    const { data } = await db
+      .from("kit_tools")
+      .select("id, name, purpose, url, login_where, manager_staff_id, access_note, monthly_usd, renews_on, for_developers, archived")
+      .order("name")
+      .limit(500);
+    tools = (data ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      purpose: t.purpose,
+      url: typeof t.url === "string" && t.url.startsWith("https://") ? t.url : null,
+      loginWhere: t.login_where,
+      managerId: t.manager_staff_id,
+      accessNote: t.access_note,
+      monthlyUsd: t.monthly_usd === null ? null : Number(t.monthly_usd),
+      renewsOn: t.renews_on,
+      forDevelopers: t.for_developers === true,
+      archived: t.archived === true,
+    }));
+  } else {
+    const { data } = await db.from("team_tools").select("id, name, purpose, url, login_where").order("name").limit(500);
+    teamTools = (data ?? []).map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, url: typeof t.url === "string" && t.url.startsWith("https://") ? t.url : null, loginWhere: t.login_where }));
+  }
+  return { ready: true, docs: (docs.data ?? []).map((r) => kitDocFrom(r as Record<string, unknown>)), tools, teamTools };
+});
+
+/** One page and (owner/managers only; the database decides) its saved versions, newest first. */
+export async function getKitDoc(id: string): Promise<{ doc: KitDoc; versions: KitVersion[] } | null> {
+  if (!usesDatabase() || !/^[0-9a-f-]{36}$/.test(id)) return null;
+  const db = await createDatabaseClient();
+  const { data } = await db.from("kit_docs").select("id, kind, title, category, body, audience, reviewed_on, archived, updated_at").eq("id", id).maybeSingle();
+  if (!data) return null;
+  const { data: v } = await db.from("kit_doc_versions").select("id, title, body, saved_at, saved_by").eq("doc_id", id).order("saved_at", { ascending: false }).limit(50);
+  // Who saved each version (team_members names; whatever the database lets this person read).
+  const ids = [...new Set((v ?? []).map((r) => r.saved_by).filter(Boolean))];
+  const { data: people } = ids.length ? await db.from("team_members").select("user_id, display_name").in("user_id", ids) : { data: [] };
+  const names = new Map((people ?? []).map((m) => [m.user_id as string, m.display_name as string]));
+  return {
+    doc: kitDocFrom(data as Record<string, unknown>),
+    versions: (v ?? []).map((r) => ({ id: r.id, title: r.title, body: r.body, savedAt: r.saved_at, savedBy: r.saved_by ? (names.get(r.saved_by) ?? "A teammate") : "Setup" })),
+  };
 }

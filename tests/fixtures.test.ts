@@ -1137,3 +1137,181 @@ describe("review before done", () => {
     expect(boardColumns([item()], undefined, today).review.map((a) => a.id)).toEqual(["r1"]);
   });
 });
+
+describe("cancel, workload chips, suggestions and quick add (0013)", () => {
+  const today = "2026-11-08";
+  type A = import("@/lib/types").ClientAction;
+  type C = import("@/lib/types").RosterClient;
+  const wo = (over: Partial<A> = {}): A => ({
+    id: "w1",
+    kind: "work_order",
+    title: "Fix contact form (test)",
+    notes: null,
+    priority: "normal",
+    status: "open",
+    dueOn: "2026-11-10",
+    doneAt: null,
+    createdAt: "2026-11-01T00:00:00Z",
+    ownerId: "d1",
+    ownerName: "Dev (test)",
+    client: { slug: "sam-sample", dbId: "db1", name: "Sam Sample (fictional)" },
+    leadGhlId: null,
+    ...over,
+  });
+  const client = (over: Partial<C> = {}): C => ({
+    id: "sam-sample",
+    dbId: "db1",
+    name: "Sam Sample (fictional)",
+    monthlyUsd: 500,
+    startDate: "2026-01-05",
+    status: "active",
+    listedIn: [],
+    services: ["SEO"],
+    lastContact: "2026-11-01",
+    ...over,
+  });
+  const staff = [
+    { id: "d1", name: "Dev (test)" },
+    { id: "d2", name: "Dev Two (test)" },
+    { id: "m1", name: "Manager (test)" },
+  ];
+  const team = [
+    { id: "d1", name: "Dev (test)", role: "seo_developer" as const },
+    { id: "d2", name: "Dev Two (test)", role: "seo_developer" as const },
+    { id: "m1", name: "Manager (test)", role: "client_manager" as const },
+  ];
+
+  it("the board never shows canceled work", async () => {
+    const { boardColumns } = await import("@/lib/ops");
+    const cols = boardColumns([wo({ id: "x", status: "canceled" }), wo({ id: "y" })], undefined, today);
+    expect(Object.values(cols).flat().map((a) => a.id)).toEqual(["y"]);
+  });
+
+  it("workload: one chip per open item, sized by time, overdue marked, everyone listed, no owner last", async () => {
+    const { workloadRows, WORKLOAD } = await import("@/lib/ops");
+    const rows = workloadRows({
+      actions: [
+        wo({ id: "a", estMinutes: 15 }),
+        wo({ id: "b", estMinutes: 960, dueOn: "2026-11-01" }),
+        wo({ id: "c" }), // no estimate: counted as WORKLOAD.unestimatedMinutes
+        wo({ id: "d", status: "done", doneAt: "2026-11-07T00:00:00Z" }), // done: no chip
+        wo({ id: "e", kind: "follow_up" }), // follow-ups aren't delivery work
+        wo({ id: "f", ownerId: null }),
+      ],
+      staff,
+      today,
+    });
+    expect(rows.map((r) => r.ownerName)).toEqual(["Dev (test)", "Dev Two (test)", "Manager (test)", "No owner"]);
+    const dev = rows[0]!;
+    expect(dev.chips.map((c) => c.id).sort()).toEqual(["a", "b", "c"]);
+    expect(dev.chips.find((c) => c.id === "a")!.size).toBe("s");
+    expect(dev.chips.find((c) => c.id === "b")).toMatchObject({ size: "xl", overdue: true });
+    expect(dev.chips.find((c) => c.id === "c")).toMatchObject({ estimated: false, minutes: WORKLOAD.unestimatedMinutes });
+    expect(dev.hours).toBe(Math.round((15 + 960 + WORKLOAD.unestimatedMinutes) / 6) / 10);
+    expect(dev.level).toBe("busy");
+    expect(dev.overdue).toBe(1);
+    expect(rows[1]).toMatchObject({ level: "free", chips: [] });
+  });
+
+  it("suggestions: at-risk first, then new clients, then quiet clients; spread across developers; never repeats", async () => {
+    const { suggestWorkOrders, workloadRows } = await import("@/lib/ops");
+    const risky = client({ id: "risky", name: "Risky Roofing (fictional)", ownerId: "m1" });
+    const fresh = client({ id: "fresh", name: "Fresh Flowers (fictional)", startDate: "2026-11-01", services: ["SEO", "Website"] });
+    const quiet = client({ id: "quiet", name: "Quiet Quilts (fictional)", monthlyUsd: 900, services: ["Ads"] });
+    const busy = client({ id: "busy", name: "Busy Bakery (fictional)" });
+    const paused = client({ id: "paused", name: "Paused Pets (fictional)", status: "paused" });
+    const risk = {
+      id: "r",
+      severity: "high" as const,
+      client: { slug: "risky", name: risky.name, monthlyUsd: 500, ownerName: "Manager (test)" },
+      problem: "No contact in 30 days",
+      evidence: [],
+      confidence: "Confirmed facts" as const,
+      action: "Call the client today",
+      score: 35,
+      trend: null,
+      detectedOn: today,
+      href: "/clients/risky",
+    };
+    const actions = [wo({ id: "x", client: { slug: "busy", dbId: "dbB", name: busy.name }, ownerId: "d1", estMinutes: 480 })];
+    const workload = workloadRows({ actions, staff, today });
+    const s = suggestWorkOrders({ clients: [risky, fresh, quiet, busy, paused], risks: [risk], actions, team, workload, today });
+    expect(s.map((x) => [x.rule, x.clientSlug])).toEqual([
+      ["risk", "risky"],
+      ["onboarding", "fresh"],
+      ["routine", "quiet"],
+    ]);
+    expect(s[0]).toMatchObject({ title: "Call the client today", assigneeId: "m1", priority: "high" });
+    // d1 already has 8h of work, so new developer work goes to d2 first.
+    expect(s[1]!.assigneeId).toBe("d2");
+    expect(s[1]!.steps.length).toBeGreaterThan(3);
+    // Once added (same client + title), it isn't suggested again; a recently canceled one isn't either.
+    const added = wo({ id: "y", title: s[2]!.title, client: { slug: "quiet", dbId: "dbQ", name: quiet.name } });
+    expect(suggestWorkOrders({ clients: [quiet], risks: [], actions: [added], team, workload, today })).toEqual([]);
+    const canceled = { ...added, status: "canceled" as const, canceledAt: "2026-11-07T00:00:00Z" };
+    expect(suggestWorkOrders({ clients: [quiet], risks: [], actions: [canceled], team, workload, today })).toEqual([]);
+  });
+
+  it("quick add: team and client names in the note become codes; picture names match only clearly", async () => {
+    const { buildCodebook, buildStaffBook, redact, redactStaff, matchClientName, restoreQuickAdd } = await import("@/lib/ai/snapshot");
+    const book = buildCodebook([client({ id: "sam-sample", name: "Sam Sample Plumbing (fictional)" }), client({ id: "sun", name: "Sunrise Dental (fictional)" }), client({ id: "sun2", name: "Sunrise Dental Two (fictional)" })]);
+    const sb = buildStaffBook(staff);
+    expect(redactStaff(redact("Ask Dev Two (test) to fix Sam Sample Plumbing (fictional)'s form", book), sb)).toBe("Ask [T2] to fix [C1]'s form");
+    expect(matchClientName("SAM SAMPLE PLUMBING (FICTIONAL) LLC", book)).toEqual({ slug: "sam-sample", name: "Sam Sample Plumbing (fictional)" });
+    expect(matchClientName("Sunrise Dental", book)).toBeNull(); // two possible clients: no guess
+    expect(matchClientName("abc", book)).toBeNull();
+    const drafts = restoreQuickAdd(
+      {
+        headline: "Fix the form",
+        orders: [
+          { client: "", client_name_seen: "Sam Sample Plumbing (fictional)", title: "Fix the contact form", why: "Client texted", steps: ["Test it"], priority: "high", est_minutes: 60, assignee: "T2", assignee_why: "least load" },
+          { client: "", client_name_seen: "", title: "", why: "", steps: [], priority: "low", est_minutes: 5, assignee: "", assignee_why: "" },
+          { client: "C2", client_name_seen: "", title: "New photos for [C2]", why: "", steps: [], priority: "normal", est_minutes: 30, assignee: "T9", assignee_why: "" },
+        ],
+      },
+      book,
+      sb,
+    );
+    expect(drafts.orders.map((o) => [o.title, o.clientSlug, o.assigneeId])).toEqual([
+      ["Fix the contact form", "sam-sample", "d2"],
+      ["New photos for Sunrise Dental (fictional)", "sun", null],
+    ]);
+  });
+});
+
+describe("Kit (0014)", () => {
+  it("refuses passwords and keys, allows saying where a login is kept", async () => {
+    const { findSecrets } = await import("@/lib/kit");
+    expect(findSecrets("WordPress password: hunter2")).toMatch(/password/);
+    expect(findSecrets("pwd=abc")).toMatch(/password/);
+    expect(findSecrets("key sk-abcdefghijklmnopqrstuvwxyz12")).toMatch(/API key/);
+    expect(findSecrets("-----BEGIN RSA PRIVATE KEY-----")).toMatch(/private key/);
+    expect(findSecrets("Login is in the team password manager")).toBeNull();
+    expect(findSecrets("Reset your password from the login page")).toBeNull();
+  });
+
+  it("reads simple marks; HTML and non-https links stay plain text", async () => {
+    const { parseKitText, plainText } = await import("@/lib/kit");
+    const blocks = parseKitText("# Goal\nKeep it **fast**.\nSecond line.\n\n## Steps\n1. Open [Search Console](https://search.google.com)\n2. Check errors\n- tip one\n- tip two\n<script>alert(1)</script> [bad](javascript:alert(1))");
+    expect(blocks.map((b) => b.t)).toEqual(["h1", "p", "h2", "ol", "ul", "p"]);
+    expect(blocks[1]).toEqual({ t: "p", parts: [{ t: "text", v: "Keep it " }, { t: "bold", v: "fast" }, { t: "text", v: ". Second line." }] });
+    const ol = blocks[3] as { t: "ol"; items: { t: string; v: string; href?: string }[][] };
+    expect(ol.items[0]![1]).toEqual({ t: "link", v: "Search Console", href: "https://search.google.com" });
+    const last = blocks[5] as { t: "p"; parts: { t: string; v: string }[] };
+    expect(last.parts).toEqual([{ t: "text", v: "<script>alert(1)</script> [bad](javascript:alert(1))" }]);
+    expect(plainText("# Hi\n**Bold** and [site](https://example.com)")).toBe("Hi\nBold and site (https://example.com)");
+  });
+
+  it("flags SOPs not reviewed in 90 days, renewals, and searches every word", async () => {
+    const { reviewNote, renewsIn, searchKit } = await import("@/lib/kit");
+    const doc = { id: "1", kind: "sop" as const, title: "Monthly SEO check", category: "SEO", body: "Check rankings and Search Console", audience: ["developer" as const], reviewedOn: null, archived: false, updatedAt: "2026-07-01T00:00:00Z" };
+    expect(reviewNote(doc, "2026-11-08")).toMatch(/Not reviewed in 130 days/);
+    expect(reviewNote({ ...doc, reviewedOn: "2026-11-01" }, "2026-11-08")).toBeNull();
+    expect(reviewNote({ ...doc, kind: "faq" }, "2026-11-08")).toBeNull();
+    expect(renewsIn({ renewsOn: "2026-11-15" }, "2026-11-08")).toBe(7);
+    expect(renewsIn({ renewsOn: null }, "2026-11-08")).toBeNull();
+    expect(searchKit([doc], "seo console")).toHaveLength(1);
+    expect(searchKit([doc], "seo ads")).toHaveLength(0);
+    expect(searchKit([doc], "  ")).toHaveLength(1);
+  });
+});

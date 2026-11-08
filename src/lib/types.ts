@@ -624,7 +624,7 @@ export interface ClientProfile {
 
 export type ActionKind = "follow_up" | "issue" | "work_order";
 export type ActionPriority = "critical" | "high" | "normal" | "low";
-export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "review" | "done";
+export type ActionStatus = "open" | "in_progress" | "waiting" | "blocked" | "review" | "done" | "canceled";
 
 export interface ClientAction {
   id: string;
@@ -656,6 +656,9 @@ export interface ClientAction {
   submittedAt?: string | null;
   sentBackCount?: number;
   reviewNote?: string | null;
+  /** Canceled by the owner (0013): kept, never deleted; hidden from every list and count. */
+  canceledAt?: string | null;
+  cancelNote?: string | null;
 }
 
 /** The one health word shown for a client. Reasons explain it. */

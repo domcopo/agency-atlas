@@ -9,10 +9,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, type AiResult } from "@/lib/ai/client";
-import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, restoreOpsBriefing, restoreProfile, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
+import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
+import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
 import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
+import type { WorkOrderDrafts } from "@/lib/types";
+import { findSecrets } from "@/lib/kit";
 import {
   getAiStatus,
   getAtlasQuestions,
@@ -509,6 +511,18 @@ export async function updateAction(form: FormData) {
     const note = text(form, "note", 200);
     patch = { status: "open", done_at: null, review_note: note || null };
     summary = `Sent back${note ? ` (${note})` : ""}: ${a.title}`;
+  } else if (op === "cancel") {
+    // Owner only (0013; the database refuses anyone else too). Kept, never deleted.
+    if (me.role !== "owner" || a.status === "canceled") return;
+    const note = text(form, "note", 200);
+    patch = { status: "canceled", cancel_note: note || null };
+    summary = `Canceled${note ? ` (${note})` : ""}: ${a.title}`;
+    kind = "action_status"; // the history table's existing kinds; the summary says "Canceled"
+  } else if (op === "restore") {
+    if (me.role !== "owner" || a.status !== "canceled") return;
+    patch = { status: "open", done_at: null };
+    summary = `Restored: ${a.title}`;
+    kind = "action_reopened";
   } else if (op === "reopen") {
     patch = { status: "open", done_at: null };
     summary = `Reopened: ${a.title}`;
@@ -964,7 +978,7 @@ export async function decideContactMatch(form: FormData) {
 // log every request's exact cost, and save the answer for people to review.
 // ---------------------------------------------------------------------------
 
-async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt", r: AiResult) {
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add", r: AiResult) {
   if (!r.usage || r.costUsd === undefined) return; // nothing was sent, nothing was charged
   const { error } = await db.from("ai_usage").insert({
     feature,
@@ -1129,6 +1143,64 @@ export async function generateWorkOrderDrafts(): Promise<{ error?: string; messa
   revalidatePath("/", "layout");
   if (error) return { error: "The drafts were written but couldn't be saved." };
   return { message: `${drafts.orders.length} drafts ready to review. Cost: $${result.costUsd.toFixed(3)}.` };
+}
+
+/** A picture's real type from its first bytes (the name and the browser's label can lie). */
+function imageType(b: Uint8Array): "image/jpeg" | "image/png" | "image/webp" | null {
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (String.fromCharCode(...b.slice(0, 4)) === "RIFF" && String.fromCharCode(...b.slice(8, 12)) === "WEBP") return "image/webp";
+  return null;
+}
+
+const MAX_PHOTO_BYTES = 1_500_000;
+
+export type QuickAddState = { error?: string; drafts?: WorkOrderDrafts; costUsd?: number; hadPhoto?: boolean };
+
+/**
+ * Quick add (0013): the owner or a manager types or dictates a note and/or adds a photo;
+ * the AI outlines draft work orders. Names in the note are swapped for codes first; a
+ * photo can't be, so the screen warns about it. Nothing is saved: the drafts come back
+ * once for review, and a person taps Add on each. The photo is never stored. Cost logged.
+ */
+export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form: FormData): Promise<QuickAddState> {
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const note = typeof form.get("note") === "string" ? String(form.get("note")).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").trim().slice(0, 3000) : "";
+  const file = form.get("image");
+  let image: { mediaType: "image/jpeg" | "image/png" | "image/webp"; base64: string } | undefined;
+  if (file instanceof File && file.size > 0) {
+    if (file.size > MAX_PHOTO_BYTES) return { error: "That photo is too big. Try a screenshot or a smaller photo." };
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const mediaType = imageType(bytes);
+    if (!mediaType) return { error: "Only photos and screenshots (JPEG, PNG or WebP) work here." };
+    image = { mediaType, base64: Buffer.from(bytes).toString("base64") };
+  }
+  if (!note && !image) return { error: "Type or say what needs doing, or add a photo." };
+  const ops = await getOps();
+  // Before 0013 the cost log can't record this feature, so don't spend anything.
+  if (!ops.cancel) return { error: "Quick add needs one setup step first (0013 SQL)." };
+  const team = (await getTeam()).members;
+  const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
+  const book = buildCodebook(current);
+  const staff = buildStaffBook(team.map((m) => ({ id: m.id, name: m.name })));
+  const open = ops.actions.filter((a) => a.status !== "done");
+  const data = {
+    today: ops.today,
+    note: note ? redactStaff(redact(note, book), staff) : null,
+    picture_attached: Boolean(image),
+    clients: current.map((c) => ({ code: book.codeOf.get(c.id), status: c.status, services: c.services.length ? c.services : ["not recorded"], owner: c.ownerId ? (staff.codeOf.get(c.ownerId) ?? "unknown") : "none" })),
+    team: team.map((m) => {
+      const mine = open.filter((a) => a.ownerId === m.id);
+      return { code: staff.codeOf.get(m.id), role: m.role, open_work: mine.length, est_hours_open: Math.round(mine.reduce((n, a) => n + (a.estMinutes ?? 60), 0) / 6) / 10 };
+    }),
+  };
+  const result = await askAi({ task: QUICK_ADD_TASK, data, schema: QUICK_ADD_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining, image });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "quick_add", result);
+  revalidatePath("/", "layout");
+  if (!result.ok) return { error: result.message };
+  return { drafts: restoreQuickAdd(result.data, book, staff), costUsd: result.costUsd, hadPhoto: Boolean(image) };
 }
 
 /**
@@ -1298,4 +1370,122 @@ export async function autoPublishOwnerSummary(): Promise<void> {
 export async function publishOwnerSummaryNow(_prev: { error?: string; message?: string } | undefined): Promise<{ error?: string; message?: string }> {
   void _prev;
   return publishOwnerSummary(true);
+}
+
+// ---------------------------------------------------------------------------
+// Kit (0014): handbook pages and the tools list. Owner and managers write; the database
+// enforces it, keeps every page version itself, and refuses passwords/keys. No deletes.
+// ---------------------------------------------------------------------------
+
+const KIT_KINDS = ["readme", "sop", "faq", "template"] as const;
+
+async function kitEditor(): Promise<boolean> {
+  const me = await getCurrentMember();
+  return Boolean(me && (me.role === "owner" || me.role === "manager"));
+}
+
+/** Add or edit a page. Returns the page id so the screen can open it. */
+export async function saveKitDoc(_prev: { error?: string; ok?: boolean; id?: string } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean; id?: string }> {
+  if (!(await kitEditor())) return { error: "Only the owner or a manager can edit Kit." };
+  const id = text(form, "id", 40);
+  const kind = oneOf(KIT_KINDS, text(form, "kind", 10));
+  const title = text(form, "title", 120);
+  const category = text(form, "category", 40);
+  const rawBody = form.get("body");
+  const body = typeof rawBody === "string" ? rawBody.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, 20000) : "";
+  const audience = ["manager", "developer"].filter((a) => form.get(`aud_${a}`) === "on");
+  if (!kind) return { error: "Pick what kind of page it is." };
+  if (!title) return { error: "Give it a title." };
+  const secret = findSecrets(`${title}\n${body}`);
+  if (secret) return { error: secret };
+  if (id && !isUuid(id)) return { error: "Unknown page." };
+  const db = await createDatabaseClient();
+  const row = { kind, title, category: category || null, body, audience };
+  if (id) {
+    const { data, error } = await db.from("kit_docs").update(row).eq("id", id).select("id").maybeSingle();
+    if (error || !data) {
+      console.warn(`Kit page not saved: ${error?.code}`);
+      return { error: error?.code === "23514" ? "That text was refused (it may look like a password or key)." : "Couldn't save it." };
+    }
+  } else {
+    const me = await getCurrentMember();
+    const { data, error } = await db.from("kit_docs").insert({ ...row, updated_by: me!.userId }).select("id").single();
+    if (error || !data) {
+      console.warn(`Kit page not added: ${error?.code}`);
+      return { error: MISSING_TABLE.has(error?.code ?? "") ? "Kit needs one setup step first (0014 SQL)." : error?.code === "23514" ? "That text was refused (it may look like a password or key)." : "Couldn't save it." };
+    }
+    revalidatePath("/kit", "layout");
+    return { ok: true, id: data.id };
+  }
+  revalidatePath("/kit", "layout");
+  return { ok: true, id };
+}
+
+/** Mark reviewed today, archive or bring back a page. */
+export async function kitDocOp(form: FormData) {
+  if (!(await kitEditor())) return;
+  const id = text(form, "id", 40);
+  const op = text(form, "op", 12);
+  if (!isUuid(id)) return;
+  const patch = op === "reviewed" ? { reviewed_on: localToday() } : op === "archive" ? { archived: true } : op === "unarchive" ? { archived: false } : null;
+  if (!patch) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("kit_docs").update(patch).eq("id", id);
+  if (error) console.warn(`Kit page change refused: ${error.code}`);
+  revalidatePath("/kit", "layout");
+}
+
+/** Add or edit a tool. Never a password: only where the login is kept. */
+export async function saveKitTool(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  if (!(await kitEditor())) return { error: "Only the owner or a manager can edit the tools list." };
+  const id = text(form, "id", 40);
+  const name = text(form, "name", 80);
+  const purpose = text(form, "purpose", 200);
+  const urlRaw = text(form, "url", 300);
+  const loginWhere = text(form, "loginWhere", 120);
+  const accessNote = text(form, "accessNote", 200);
+  const managerId = text(form, "managerId", 40);
+  const costRaw = text(form, "monthly", 12);
+  const renewRaw = text(form, "renews", 10);
+  if (!name) return { error: "Name the tool." };
+  if (id && !isUuid(id)) return { error: "Unknown tool." };
+  const secret = findSecrets(`${purpose}\n${loginWhere}\n${accessNote}`);
+  if (secret) return { error: secret };
+  const url = httpsLink(urlRaw);
+  if (urlRaw && !url) return { error: "The link must be a full https:// address." };
+  const monthly = costRaw ? Number(costRaw.replace(/[$,\s]/g, "")) : null;
+  if (monthly !== null && !(Number.isFinite(monthly) && monthly >= 0 && monthly < 100000)) return { error: "Monthly cost should be a number like 49 or 49.99." };
+  const renews = renewRaw ? anyDate(renewRaw) : null;
+  if (renewRaw && !renews) return { error: "Pick a real renewal date." };
+  const db = await createDatabaseClient();
+  if (managerId && !(await staffExists(db, managerId))) return { error: "Pick someone from the team." };
+  const row = {
+    name,
+    purpose: purpose || null,
+    url,
+    login_where: loginWhere || null,
+    access_note: accessNote || null,
+    manager_staff_id: managerId || null,
+    monthly_usd: monthly === null ? null : Math.round(monthly * 100) / 100,
+    renews_on: renews,
+    for_developers: form.get("forDevelopers") === "on",
+  };
+  const { error } = id ? await db.from("kit_tools").update(row).eq("id", id) : await db.from("kit_tools").insert(row);
+  if (error) {
+    console.warn(`Kit tool not saved: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Kit needs one setup step first (0014 SQL)." : error.code === "23514" ? "That was refused (it may look like a password, or the link isn't https)." : "Couldn't save it." };
+  }
+  revalidatePath("/kit", "layout");
+  return { ok: true };
+}
+
+export async function kitToolOp(form: FormData) {
+  if (!(await kitEditor())) return;
+  const id = text(form, "id", 40);
+  const op = text(form, "op", 12);
+  if (!isUuid(id) || (op !== "archive" && op !== "unarchive")) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("kit_tools").update({ archived: op === "archive" }).eq("id", id);
+  if (error) console.warn(`Kit tool change refused: ${error.code}`);
+  revalidatePath("/kit", "layout");
 }

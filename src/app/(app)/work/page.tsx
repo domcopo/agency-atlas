@@ -8,7 +8,7 @@ import { getCompletions, getDeveloperWork, getMember, getMyClientContacts, getOp
 import { MyWork } from "@/components/cards/MyWork";
 import { TaskBoard } from "@/components/cards/TaskBoard";
 import { Fold } from "@/components/shell/Fold";
-import { boardColumns, myWork, promiseMissed, teamLoad, workOrderGroups } from "@/lib/ops";
+import { boardColumns, myWork, promiseMissed, suggestWorkOrders, teamLoad, workloadRows, workOrderGroups } from "@/lib/ops";
 import { WorkOrderList } from "@/components/cards/WorkOrderList";
 import { DeveloperContacts } from "@/components/cards/DeveloperContacts";
 import { ClipboardList } from "lucide-react";
@@ -50,7 +50,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
     );
   }
   const ops = await getOps();
-  const staffList = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const teamMembers = (await getTeam()).members;
+  const staffList = teamMembers.map((m) => ({ id: m.id, name: m.name }));
   // Opens to your own list when your login is linked to your team profile.
   const whoRaw = (await searchParams).who ?? member?.staffId ?? "all";
   const who = whoRaw === "none" || staffList.some((m) => m.id === whoRaw) ? whoRaw : "all";
@@ -68,6 +69,10 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
     (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue, review: t.review + g.stats.inReview }),
     { open: 0, overdue: 0, review: 0 },
   );
+  // Free rule-based suggestions waiting on the Work orders screen (none are added on their own).
+  const suggestedCount = ops.orders
+    ? suggestWorkOrders({ clients: ops.clients, risks: ops.risks, actions: [...ops.actions, ...ops.canceled], team: teamMembers, workload: workloadRows({ actions: ops.actions, staff: staffList, today: ops.today }), today: ops.today }).length
+    : 0;
   const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
   const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
   const orders = getWorkOrders();
@@ -116,8 +121,9 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
             <span className="block text-sm font-semibold">Work orders</span>
             <span className="block truncate text-xs text-muted">
               {workOrderCount.open} open · {workOrderCount.overdue} overdue
-              {workOrderCount.review ? ` · ${workOrderCount.review} waiting for review` : ""} · assign, reassign, AI drafts, copy for GoHighLevel
+              {workOrderCount.review ? ` · ${workOrderCount.review} waiting for review` : ""} · workload, quick add, AI drafts
             </span>
+            {suggestedCount > 0 && <span className="mt-0.5 block text-xs font-semibold text-amber">{suggestedCount} suggested work order{suggestedCount === 1 ? "" : "s"} to look at</span>}
           </span>
           <span aria-hidden className="text-faint">›</span>
         </Link>

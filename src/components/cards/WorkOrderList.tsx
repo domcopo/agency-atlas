@@ -22,6 +22,7 @@ const statusLabel: Record<ClientAction["status"], string> = {
   blocked: "Blocked",
   review: "Ready for review",
   done: "Done",
+  canceled: "Canceled",
 };
 
 export function StatsLine({ s }: { s: WorkOrderStats }) {
@@ -71,24 +72,44 @@ export function ReviewButtons({ a }: { a: ClientAction }) {
   );
 }
 
+/** Owner only (the database refuses anyone else): hide work for good, kept in history, can be restored. */
+function CancelForm({ a }: { a: ClientAction }) {
+  return (
+    <details>
+      <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center text-xs font-semibold text-rose">Cancel this work order</summary>
+      <form action={updateAction} className="mt-1.5 flex flex-wrap gap-1.5">
+        <input type="hidden" name="actionId" value={a.id} />
+        <input type="hidden" name="op" value="cancel" />
+        <input name="note" maxLength={200} placeholder="Why? (optional, e.g. duplicate)" aria-label={`Why "${a.title}" is canceled`} className={cn(input, "flex-1")} />
+        <button type="submit" className={cn(btn, "border-rose/50 text-rose")}>
+          Cancel it
+        </button>
+      </form>
+      <p className="mt-1 text-[11px] text-faint">It leaves every list and workload but isn&apos;t deleted: restore it any time from &quot;Canceled&quot;.</p>
+    </details>
+  );
+}
+
 function ItemCard({
   a,
   today,
   mode,
   staff,
   canUseAi,
+  canCancel,
 }: {
   a: ClientAction;
   today: string;
   mode: "manage" | "developer";
   staff: { id: string; name: string }[];
   canUseAi: boolean;
+  canCancel: boolean;
 }) {
   const steps = parseSteps(a.steps);
   const when = dueWhen(a.dueOn, today);
   const missed = promiseMissed(a, today);
   return (
-    <li className="rounded-2xl border border-line bg-white/[0.03] p-3">
+    <li id={`wo-${a.id}`} className="scroll-mt-4 rounded-2xl border border-line bg-white/[0.03] p-3">
       <div className="flex items-start gap-2">
         <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", priorityTone[a.priority].dot)} aria-label={`${priorityTone[a.priority].label} priority`} />
         <div className="min-w-0 flex-1">
@@ -206,6 +227,7 @@ function ItemCard({
                 </form>
               </details>
               {canUseAi && a.kind !== "follow_up" && <WorkPromptButton actionId={a.id} />}
+              {canCancel && <CancelForm a={a} />}
             </>
           )}
         </div>
@@ -220,6 +242,7 @@ export function WorkOrderList({
   mode,
   staff = [],
   canUseAi = false,
+  canCancel = false,
   empty = "Nothing here.",
 }: {
   groups: WorkOrderGroup[];
@@ -227,6 +250,8 @@ export function WorkOrderList({
   mode: "manage" | "developer";
   staff?: { id: string; name: string }[];
   canUseAi?: boolean;
+  /** The owner only (after 0013); the database refuses everyone else anyway. */
+  canCancel?: boolean;
   empty?: string;
 }) {
   if (!groups.length) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">{empty}</p>;
@@ -241,7 +266,7 @@ export function WorkOrderList({
           {g.items.length ? (
             <ul className="mt-2.5 space-y-2">
               {g.items.map((a) => (
-                <ItemCard key={a.id} a={a} today={today} mode={mode} staff={staff} canUseAi={canUseAi} />
+                <ItemCard key={a.id} a={a} today={today} mode={mode} staff={staff} canUseAi={canUseAi} canCancel={canCancel} />
               ))}
             </ul>
           ) : (
@@ -250,5 +275,32 @@ export function WorkOrderList({
         </section>
       ))}
     </div>
+  );
+}
+
+/** Canceled work (owner only): newest first, with the reason and a Restore button. */
+export function CanceledList({ items }: { items: ClientAction[] }) {
+  if (!items.length) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Nothing canceled.</p>;
+  return (
+    <ul className="glass divide-y divide-line rounded-3xl">
+      {items.map((a) => (
+        <li key={a.id} className="flex items-center gap-2 px-4 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-muted line-through decoration-faint">{a.title}</p>
+            <p className="text-[11px] text-faint">
+              {a.client?.name ?? "No client"} · {a.ownerName ?? "No one"} · canceled {a.canceledAt?.slice(0, 10) ?? ""}
+              {a.cancelNote ? ` · ${a.cancelNote}` : ""}
+            </p>
+          </div>
+          <form action={updateAction}>
+            <input type="hidden" name="actionId" value={a.id} />
+            <input type="hidden" name="op" value="restore" />
+            <button type="submit" className={btn}>
+              Restore
+            </button>
+          </form>
+        </li>
+      ))}
+    </ul>
   );
 }

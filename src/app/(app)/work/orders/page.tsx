@@ -1,15 +1,17 @@
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, Lightbulb, Sparkles } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CopyButton } from "@/components/cards/CopyButton";
-import { StatsLine, WorkOrderList } from "@/components/cards/WorkOrderList";
+import { CanceledList, StatsLine, WorkOrderList } from "@/components/cards/WorkOrderList";
+import { WorkloadChips } from "@/components/cards/WorkloadChips";
 import { WorkOrderDraftsButton } from "@/components/forms/AiButtons";
+import { QuickAddWorkOrders } from "@/components/forms/QuickAddWorkOrders";
 import { WorkOrderForm } from "@/components/forms/WorkOrderForm";
 import { Fold } from "@/components/shell/Fold";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getAiStatus, getMember, getOps, getTeam, getWorkOrderDrafts, usesDatabase } from "@/lib/data-source";
-import { draftAdded, minutesLabel, reviewQueue, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
+import { draftAdded, minutesLabel, reviewQueue, suggestWorkOrders, workloadRows, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
 
 export const metadata: Metadata = { title: "Work orders" };
 
@@ -22,7 +24,9 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
   if (!member || (member.role !== "owner" && member.role !== "manager")) return <RoleNotice title="Work orders" />;
 
   const ops = await getOps();
-  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
+  const team = (await getTeam()).members;
+  const staff = team.map((m) => ({ id: m.id, name: m.name }));
+  const isOwner = member.role === "owner";
   const sp = await searchParams;
   const who = sp.who === "none" ? null : sp.who && staff.some((m) => m.id === sp.who) ? sp.who : undefined;
   const client = sp.client && ops.clients.some((c) => c.id === sp.client) ? sp.client : undefined;
@@ -48,6 +52,10 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
   const ai = await getAiStatus();
   const aiReady = ai.configured && ai.tablesReady && ai.level !== "blocked";
   const drafts = await getWorkOrderDrafts();
+  // Everyone's pile of open work, and free rule-based suggestions (no AI, nothing added on its own).
+  const workload = workloadRows({ actions: ops.actions, staff, today: ops.today });
+  const suggestions = ops.orders ? suggestWorkOrders({ clients: ops.clients, risks: ops.risks, actions: [...ops.actions, ...ops.canceled], team, workload, today: ops.today }) : [];
+  const ruleLabel = { risk: "Client at risk", onboarding: "New client", routine: "Routine check" } as const;
 
   return (
     <>
@@ -73,6 +81,12 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
       )}
 
+      {ops.orders && ops.review && !ops.cancel && (
+        <p className="mb-3 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
+          <span className="font-semibold text-amber">One setup step for Cancel and Quick add.</span> <span className="text-muted">Run 0013 in Supabase. Everything else works already.</span>
+        </p>
+      )}
+
       <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {[
           { label: "Open", value: String(total.open), tone: "" },
@@ -91,6 +105,75 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         {show === "work" ? "Work orders and issues" : "All items, including follow-ups"}
         {total.est ? ` · about ${minutesLabel(total.est)} of open work estimated` : ""}. Saved in this app only; GoHighLevel isn&apos;t changed.
       </p>
+
+      <section aria-label="Workload" className="mt-5">
+        <h2 className="mb-2 px-1 font-display text-base font-bold">Workload</h2>
+        <WorkloadChips rows={workload} />
+      </section>
+
+      {ops.orders && (
+        <Fold
+          label="Suggested work orders"
+          title="Suggested for you"
+          defaultOpen={suggestions.length > 0}
+          summary={suggestions.length ? `${suggestions.length} suggestions from your records · free, no AI` : "Nothing to suggest right now"}
+          badge={suggestions.length ? <span className="inline-flex items-center gap-1 font-semibold text-amber"><Lightbulb aria-hidden className="size-4" />{suggestions.length}</span> : undefined}
+        >
+          <div className="space-y-2.5">
+            {suggestions.map((d) => (
+              <article key={`${d.clientSlug}-${d.title}`} className="glass rounded-3xl p-3.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-amber">{ruleLabel[d.rule]}</p>
+                <p className="text-sm font-semibold">{d.title}</p>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  {d.clientName} · {d.priority} · {d.estMinutes ? `~${minutesLabel(d.estMinutes)}` : "no estimate"} ·{" "}
+                  {d.assigneeName ? <span className="text-violet">suggested: {d.assigneeName}{d.assigneeWhy ? ` (${d.assigneeWhy})` : ""}</span> : "no one suggested"}
+                </p>
+                <p className="mt-1 text-xs text-muted">Why: {d.why}</p>
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-xs text-muted">
+                  {d.steps.map((st, j) => (
+                    <li key={`${j}-${st}`}>{st}</li>
+                  ))}
+                </ol>
+                <details className="mt-2">
+                  <summary className="pressable inline-flex min-h-10 cursor-pointer list-none items-center rounded-xl border border-violet/40 bg-violet/10 px-3 text-xs font-semibold">Review and add</summary>
+                  <div className="mt-2">
+                    <WorkOrderForm
+                      clients={clients}
+                      staff={staff}
+                      today={ops.today}
+                      fromDraft
+                      submitLabel="Add this work order"
+                      defaults={{ slug: d.clientSlug ?? undefined, title: d.title, steps: d.steps.join("\n"), priority: d.priority, ownerId: d.assigneeId ?? undefined, est: d.estMinutes, notes: d.why.slice(0, 500) }}
+                    />
+                  </div>
+                </details>
+              </article>
+            ))}
+            <p className="px-1 text-[11px] text-faint">
+              Made by simple rules: at-risk clients with no open work, new clients with no work orders yet, and clients with no work in 30 days. Developer work goes to whoever has the least open
+              hours. Add the ones you want; the rest go away once the reason does.{isOwner ? " Canceling an added one keeps it from coming straight back." : ""}
+            </p>
+          </div>
+        </Fold>
+      )}
+
+      {ops.orders && (
+        <Fold
+          label="Quick add"
+          title="Quick add: type, talk or photo"
+          summary="Describe it or snap a screenshot; AI outlines the work orders for you to check"
+          badge={<Sparkles aria-hidden className="size-4 text-violet" />}
+        >
+          <QuickAddWorkOrders
+            clients={clients}
+            staff={staff}
+            today={ops.today}
+            disabled={!aiReady || !ops.cancel}
+            disabledNote={!ops.cancel ? "Turns on after one setup step (0013 SQL)." : !aiReady ? "The AI isn't available right now (not set up, or this month's budget is used up)." : undefined}
+          />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">A few cents per outline (a bit more with a photo); budget {ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up"}.</p>
+        </Fold>
+      )}
 
       {ops.review && (
         <Fold
@@ -250,8 +333,17 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
         {listed > 0 && <CopyButton text={copyText} label="Copy this list as text for GoHighLevel" />}
       </div>
-      <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} empty="No work orders match. Add one above, or change the filter." />
+      <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} canCancel={isOwner && ops.cancel} empty="No work orders match. Add one above, or change the filter." />
       {listed > 0 && <p className="mt-2 px-1 text-[11px] text-faint">Copy gives plain text (titles, steps, due dates, links; no money) to paste into a GoHighLevel task yourself, or take a screenshot.</p>}
+
+      {isOwner && ops.cancel && (
+        <div className="mt-5">
+          <Fold label="Canceled work" title="Canceled" summary={ops.canceled.length ? `${ops.canceled.length} canceled · kept for history, restore any time` : "Nothing canceled"}>
+            <CanceledList items={ops.canceled.slice(0, 50)} />
+            <p className="mt-1.5 px-1 text-[11px] text-faint">Only you can cancel or restore. Canceled work leaves every list, count and workload, but nothing is deleted.</p>
+          </Fold>
+        </div>
+      )}
     </>
   );
 }
