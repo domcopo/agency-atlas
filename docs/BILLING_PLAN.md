@@ -1,6 +1,6 @@
 # Billing (read-only): plan for approval
 
-Status: **approved 2026-11-08. Step 1 is built** (migration, tests, read code and owner screens). Step 2 is your token plus the first live refresh. Step 3 is the owner summary metrics (not built yet).
+Status: **approved 2026-11-08. Step 1 is built** (migration, tests, read code and owner screens). Step 2 (token + first live refresh) is done. **Step 3 is built** (owner summary metrics, section 8).
 
 Decisions taken (the plan's recommendations): D1 keep the name only while unmatched; D2 3 days; D3 7/7/30; D4 **no** subscriptions scope (GoHighLevel's screen doesn't offer it, and card charges appear as payment transactions anyway).
 Date: 2026-11-08. This is step 7 ("Money") of `docs/ATLAS_OS_PLAN.md`.
@@ -186,6 +186,8 @@ No change to the key, the fingerprint check, the rate limit or the route. The sn
   - `failed_payments_count` (count).
 - `lists.overdue_clients`: client name plus a detail like "2 invoices, $1,200, 18 days late". Unmatched invoices are counted as "Unmatched (N)", never named.
 - `alerts`: `urgent` "Payments need attention" when anything is more than 30 days overdue or a payment failed this month.
+  - **As built:** the count is matched clients with an urgent payment alert (a failed payment that was later paid no longer counts), plus each unmatched invoice over 30 days late and each unmatched failed payment this month.
+- Snapshots are readable by the owner only (0012), so the summary is the one saved place billing numbers appear.
 - Every value is `null` under the rules in section 6.
 - The existing leak scan (`findLeaks`) and the database check still refuse emails and phones.
 - The schema stays `owner-summary/v1`; the new keys are additions, so AI CEO keeps working.

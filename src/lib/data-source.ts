@@ -1295,13 +1295,14 @@ export const getMyClientContacts = cache(async (): Promise<ClientContactDates[]>
 export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> {
   if (!usesDatabase()) return null;
   const db = await createDatabaseClient();
-  const [ops, team, ai, detections, opps, runs] = await Promise.all([
+  const [ops, team, ai, detections, opps, runs, billing] = await Promise.all([
     getOps(),
     getTeam(),
     getAiStatus(),
     getDetections(),
     db.from("ghl_opportunities").select("ghl_created_at").limit(5000),
     db.from("ai_usage").select("created_at, feature, outcome").order("created_at", { ascending: false }).limit(300),
+    getBilling(), // owner only (null for anyone else, and the database returns nothing to them)
   ]);
   const lastRuns: OwnerSummaryInput["ai"]["lastRuns"] = {};
   for (const r of runs.data ?? []) {
@@ -1330,6 +1331,7 @@ export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> 
     detections,
     staff: team.members.map((m) => ({ id: m.id, name: m.name })),
     ai: { configured: ai.configured, tablesReady: ai.tablesReady, blocked: ai.level === "blocked", spentUsd: ai.spentUsd, lastRuns },
+    billing: billing ? { state: billing.state, records: billing.records } : null,
   };
 }
 

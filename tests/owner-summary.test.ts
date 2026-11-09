@@ -254,3 +254,101 @@ describe("owner summary", () => {
     expect(findLeaks({ t: "2026-11-08T15:04:05.123Z", v: 1234567, d: "health 42, no contact 19 days, $1,500/mo", n: "Gone Co (fictional)" })).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Billing (0015) in the summary: owner-only totals, blank is not zero, unmatched never named.
+// ---------------------------------------------------------------------------
+
+describe("owner summary: billing (0015)", () => {
+  const AS_OF = "2026-11-08T20:00:00Z";
+  const rec = (over: Partial<import("@/lib/billing").BillingRecord>): import("@/lib/billing").BillingRecord => ({
+    kind: "payment",
+    providerId: `p${Math.random()}`,
+    contactId: "ct1",
+    clientDbId: "00000000-0000-0000-0000-0000000000c1",
+    unmatchedLabel: null,
+    amountCents: 0,
+    amountDueCents: null,
+    currency: "USD",
+    status: "paid",
+    issuedOn: null,
+    dueOn: null,
+    paidOn: null,
+    syncedAt: AS_OF,
+    ...over,
+  });
+  const records = [
+    rec({ amountCents: 30_000, paidOn: "2026-11-03", issuedOn: "2026-11-03" }),
+    rec({ amountCents: 20_000, paidOn: "2026-10-28", issuedOn: "2026-10-28" }),
+    rec({ amountCents: 10_000, paidOn: "2026-11-01", issuedOn: "2026-11-01" }),
+    rec({ amountCents: 99_900, paidOn: "2026-11-05", syncedAt: "2026-11-01T10:00:00Z" }), // gone from GoHighLevel: ignored
+    rec({ kind: "invoice", clientDbId: "db2", contactId: "ct2", status: "overdue", amountCents: 120_000, amountDueCents: 120_000, dueOn: "2026-10-21" }),
+    rec({ kind: "invoice", clientDbId: "db4", contactId: "ct4", status: "open", amountCents: 40_000, amountDueCents: 40_000, dueOn: "2026-11-20" }),
+    rec({ kind: "invoice", clientDbId: null, contactId: "ct9", unmatchedLabel: "Someone Private (fictional)", status: "overdue", amountCents: 25_000, amountDueCents: 25_000, dueOn: "2026-09-30" }),
+    rec({ status: "failed", amountCents: 50_000, issuedOn: "2026-11-05" }),
+    rec({ clientDbId: null, contactId: "ct8", unmatchedLabel: "Another Person (fictional)", status: "failed", amountCents: 9_900, issuedOn: "2026-11-06" }),
+  ];
+  const known = { state: { known: true as const, asOf: AS_OF }, records };
+  const metric = (s: import("@/lib/owner-summary").OwnerSummary, key: string, start?: string) => s.metrics.find((m) => m.key === key && (!start || m.period_start === start));
+
+  it("adds collected per week and this month, plus open, overdue and failed totals", async () => {
+    const s = await build({ billing: known });
+    expect(s.metrics.filter((m) => m.key === "collected_revenue" && m.period === "week")).toHaveLength(12);
+    expect(metric(s, "collected_revenue", "2026-11-02")?.value).toBe(300);
+    expect(metric(s, "collected_revenue", "2026-10-26")?.value).toBe(300); // Oct 28 + Nov 1 (Sunday)
+    expect(metric(s, "collected_revenue", "2026-08-17")?.value).toBe(0); // known, nothing paid that week
+    expect(s.metrics.find((m) => m.key === "collected_revenue" && m.period === "month")).toMatchObject({ period_start: "2026-11-01", value: 400, unit: "usd" });
+    expect(metric(s, "open_invoices_usd")).toMatchObject({ period: "month", value: 1850, unit: "usd" });
+    expect(metric(s, "overdue_invoices_usd")?.value).toBe(1450);
+    expect(metric(s, "overdue_invoices_count")).toMatchObject({ value: 2, unit: "count" });
+    expect(metric(s, "failed_payments_count")).toMatchObject({ value: 2, unit: "count" });
+  });
+
+  it("lists overdue clients by name; unmatched invoices are counted, never named", async () => {
+    const s = await build({ billing: known });
+    expect(s.lists.find((l) => l.key === "overdue_clients")?.items).toEqual([
+      { name: "New Ads Co (fictional)", detail: "1 invoice, $1,200, 18 days late" },
+      { name: "Unmatched (1)", detail: "1 invoice, $250, 39 days late, not matched to a client yet" },
+    ]);
+    // Urgent: a matched client's failed payment, the unmatched invoice over 30 days late, the unmatched failed payment.
+    expect(s.alerts).toContainEqual({ severity: "urgent", title: "Payments need attention", count: 3 });
+    const text = JSON.stringify(s);
+    expect(text).not.toContain("Someone Private");
+    expect(text).not.toContain("Another Person");
+    expect(text).not.toMatch(/ct[0-9]/); // no GoHighLevel contact ids
+    const { findLeaks } = await import("@/lib/owner-summary");
+    expect(findLeaks(s)).toEqual([]);
+  });
+
+  it("blank is not zero: not set up, not connected, failed or stale billing gives null everywhere", async () => {
+    const keys = ["collected_revenue", "open_invoices_usd", "overdue_invoices_usd", "overdue_invoices_count", "failed_payments_count"];
+    const cases = [
+      { billing: undefined, note: "billing not set up" },
+      { billing: null, note: "billing not set up" },
+      { billing: { state: { known: false as const, reason: "not_connected" as const, asOf: null }, records }, note: "isn't connected" },
+      { billing: { state: { known: false as const, reason: "last_failed" as const, asOf: AS_OF }, records }, note: "last refresh failed" },
+      { billing: { state: { known: false as const, reason: "stale" as const, asOf: AS_OF }, records }, note: "Not refreshed" },
+    ];
+    for (const c of cases) {
+      const s = await build({ billing: c.billing });
+      for (const key of keys) {
+        const ms = s.metrics.filter((m) => m.key === key);
+        expect(ms.length, key).toBeGreaterThan(0);
+        expect(new Set(ms.map((m) => m.value)), `${key} ${c.note}`).toEqual(new Set([null]));
+        expect(ms.every((m) => m.note?.includes(c.note)), `${key} note`).toBe(true);
+      }
+      const list = s.lists.find((l) => l.key === "overdue_clients");
+      expect(list?.items).toEqual([]);
+      expect(list?.note).toContain(c.note);
+      expect(s.alerts.find((a) => a.title === "Payments need attention")).toBeUndefined();
+    }
+  });
+
+  it("a failed payment followed by a successful one is no longer urgent", async () => {
+    const s = await build({
+      billing: { state: { known: true, asOf: AS_OF }, records: [rec({ status: "failed", amountCents: 50_000, issuedOn: "2026-11-02" }), rec({ amountCents: 50_000, paidOn: "2026-11-04", issuedOn: "2026-11-04" })] },
+    });
+    expect(metric(s, "failed_payments_count")?.value).toBe(1); // still counted this month
+    expect(s.alerts.find((a) => a.title === "Payments need attention")).toBeUndefined();
+  });
+});

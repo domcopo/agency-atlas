@@ -9,6 +9,18 @@
 // - Blank is not zero: value null = Atlas doesn't know or doesn't track it.
 // - Weeks start Monday, America/New_York.
 
+import {
+  BILLING_RULES,
+  type BillingRecord,
+  type BillingState,
+  billingTotals,
+  clientBilling,
+  collectedBetween,
+  liveRecords,
+  overdueDetail,
+  paymentAlerts,
+  stateNote,
+} from "@/lib/billing";
 import { daysBetween } from "@/lib/format";
 import { dueWhen, promiseMissed } from "@/lib/ops";
 import type { ClientAction, Detection, RosterClient } from "@/lib/types";
@@ -73,6 +85,12 @@ export interface OwnerSummaryInput {
     spentUsd: number;
     lastRuns: Partial<Record<"briefing" | "client_profile" | "work_orders", { at: string; outcome: string }>>;
   };
+  /**
+   * Billing (0015), owner only: read-only copy of GoHighLevel invoices and payments.
+   * null/missing = not set up or not readable. When the state isn't known (not connected,
+   * last refresh failed, too old), every billing value is null, never 0.
+   */
+  billing?: { state: BillingState; records: BillingRecord[] } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +157,12 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
   const trackedSince = actions && actions.length ? actions.map((a) => nyDate(a.createdAt)).sort()[0]! : null;
   const issues = (actions ?? []).filter((a) => a.kind === "issue");
 
+  // Billing: one state for every billing value (blank is not zero).
+  const billingStateNow = input.billing?.state ?? null;
+  const billingRecords = input.billing?.records ?? [];
+  const billingKnown = billingStateNow?.known === true;
+  const billingNote = !billingStateNow ? "billing not set up" : billingKnown ? "paid card and invoice payments in USD, from GoHighLevel (read-only)" : stateNote(billingStateNow);
+
   for (const w of weeks) {
     const started = clients.filter((c) => inWeek(c.startDate, w));
     const ended = clients.filter((c) => inWeek(c.endDate, w));
@@ -161,10 +185,19 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     add("clients_with_leads", w, null, "count", "Atlas doesn't know which leads belong to which client");
     const known = trackedSince !== null && w.end >= trackedSince;
     add("problems_opened", w, known ? issues.filter((a) => inWeek(nyDate(a.createdAt), w)).length : null, "count", known ? "client issues opened" : "not tracked yet");
+    add("collected_revenue", w, billingKnown ? collectedBetween(billingRecords, billingStateNow!, w.start, w.current ? today : w.end) : null, "usd", billingNote);
     add("problems_solved", w, known ? issues.filter((a) => a.status === "done" && a.doneAt && inWeek(nyDate(a.doneAt), w)).length : null, "count", known ? "client issues finished" : "not tracked yet");
   }
   const month = `${today.slice(0, 7)}-01`;
   metrics.push({ key: "profit", period: "month", period_start: month, value: null, unit: "usd", note: "no cost data in Atlas" });
+  const bt = billingKnown ? billingTotals(billingRecords, billingStateNow!, today) : null;
+  const billingMonth = (key: string, value: number | null | undefined, unit: "usd" | "count", what: string) =>
+    metrics.push({ key, period: "month", period_start: month, value: bt ? (value ?? null) : null, unit, note: bt ? what : billingNote });
+  billingMonth("collected_revenue", bt?.collectedThisMonthUsd, "usd", "collected this month so far (paid, USD, from GoHighLevel)");
+  billingMonth("open_invoices_usd", bt?.openUsd, "usd", "still owed on sent invoices right now (includes overdue)");
+  billingMonth("overdue_invoices_usd", bt?.overdueUsd, "usd", "owed on invoices past their due date right now");
+  billingMonth("overdue_invoices_count", bt?.overdueCount, "count", "invoices past their due date right now");
+  billingMonth("failed_payments_count", bt?.failedThisMonth, "count", "failed card payments this month");
   metrics.push({ key: "ai_spend", period: "month", period_start: month, value: ai.tablesReady ? Math.round(ai.spentUsd * 100) / 100 : null, unit: "usd", note: "AI cost this month (exact, from the cost log)" });
 
   // --- Lists -----------------------------------------------------------------
@@ -215,6 +248,31 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
       .map(([name, n]) => ({ name, detail: [`${n.overdue} overdue`, `${n.blocked} blocked`, n.review ? `${n.review} waiting for review` : ""].filter(Boolean).join(", ") }));
   }
 
+  // --- Billing: overdue clients (names of matched clients only) -----------------
+  const overdueClients: SummaryList = { key: "overdue_clients", label: "Clients with overdue invoices", items: [] };
+  let urgentPayments = 0;
+  if (!billingKnown) overdueClients.note = billingNote;
+  else {
+    const nameByDb = new Map(clients.filter((c) => c.dbId).map((c) => [c.dbId!, c.name]));
+    const byClient = clientBilling(billingRecords, billingStateNow!, today);
+    overdueClients.items = [...byClient.values()]
+      .filter((b) => b.overdueCount > 0 && b.detail && nameByDb.has(b.clientDbId))
+      .sort((a, b) => b.daysLate - a.daysLate || b.overdueUsd - a.overdueUsd)
+      .map((b) => ({ name: nameByDb.get(b.clientDbId)!, detail: b.detail! }));
+    urgentPayments = paymentAlerts(byClient).filter((a) => a.severity === "urgent" && nameByDb.has(a.clientDbId)).length;
+    // Unmatched invoices are counted, never named (the name on them may not be a client).
+    const live = liveRecords(billingRecords, billingStateNow!).filter((r) => r.clientDbId === null);
+    const unmatchedOverdue = live.filter((r) => r.kind === "invoice" && (r.status === "open" || r.status === "overdue") && r.currency === "USD" && (r.amountDueCents ?? r.amountCents) > 0 && r.dueOn !== null && r.dueOn < today);
+    if (unmatchedOverdue.length) {
+      const cents = unmatchedOverdue.reduce((n, r) => n + (r.amountDueCents ?? r.amountCents), 0);
+      const late = unmatchedOverdue.reduce((m, r) => Math.max(m, daysBetween(r.dueOn!, today)), 0);
+      overdueClients.items.push({ name: `Unmatched (${unmatchedOverdue.length})`, detail: `${overdueDetail(unmatchedOverdue.length, cents / 100, late)}, not matched to a client yet` });
+      if (late > BILLING_RULES.urgentOverdueDays) urgentPayments += 1;
+    }
+    const month7 = today.slice(0, 7);
+    urgentPayments += live.filter((r) => r.kind === "payment" && r.status === "failed" && (r.issuedOn ?? "").startsWith(month7)).length;
+  }
+
   // --- Alerts: the detection rules, as counts ------------------------------------
   const real = detections.filter((d) => !d.isSynthetic);
   const alerts: SummaryAlert[] = [];
@@ -224,6 +282,7 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
   const ideas = count((d) => d.kind === "opportunity");
   const unreadable = real.find((d) => d.id === "d_skip");
   if (atRiskCount) alerts.push({ severity: "urgent", title: "Clients at risk", count: atRiskCount });
+  if (urgentPayments) alerts.push({ severity: "urgent", title: "Payments need attention", count: urgentPayments });
   if (unreadable) alerts.push({ severity: "urgent", title: "Client records couldn't be read", count: 1 });
   if (attention) alerts.push({ severity: "watch", title: "Clients needing attention", count: attention });
   if (ideas) alerts.push({ severity: "info", title: "Upsell or referral ideas", count: ideas });
@@ -241,7 +300,7 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     business: "yo-marketing-co",
     generated_at: now.toISOString(),
     metrics,
-    lists: [atRisk, winBack, byOwner],
+    lists: [atRisk, winBack, byOwner, overdueClients],
     alerts,
     bots: [bot("Ops Briefing", "briefing"), bot("Client Profile", "client_profile"), bot("Work Order Drafts", "work_orders")],
   };
