@@ -8,7 +8,7 @@ import { KitToolForm } from "@/components/forms/KitToolForm";
 import { KitText } from "@/components/kit/KitText";
 import { Fold } from "@/components/shell/Fold";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getKit, getMember, getTeam, getToday, usesDatabase } from "@/lib/data-source";
+import { getKit, getDeveloperViewer, getMember, getTeam, getToday, usesDatabase } from "@/lib/data-source";
 import { KIT_RULES, kitKindLabel, plainText, renewsIn, reviewNote, searchKit, type KitDoc } from "@/lib/kit";
 
 export const metadata: Metadata = { title: "Kit" };
@@ -37,7 +37,8 @@ function DocLink({ d, today }: { d: KitDoc; today: string }) {
 
 export default async function KitPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const member = usesDatabase() ? await getMember() : null;
-  const editor = member?.role === "owner" || member?.role === "manager";
+  // Previewing a developer: no editing (look only), like the developer sees it.
+  const editor = (member?.role === "owner" || member?.role === "manager") && !(await getDeveloperViewer())?.preview;
   const kit = await getKit();
   const today = getToday();
   const q = ((await searchParams).q ?? "").slice(0, 80).trim();

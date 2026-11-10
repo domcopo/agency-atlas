@@ -823,6 +823,121 @@ export function needsReview(a: Pick<ClientAction, "kind">): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// What one developer can see (Preview as developer). These rules MIRROR the database
+// views public.my_work and public.my_client_contacts; the break-in tests check that the
+// real views follow the same rules, so the preview can't drift from what developers see.
+// ---------------------------------------------------------------------------
+
+export const DEVELOPER_SCOPE = {
+  /** Finished items stay visible to the developer this long (my_work). */
+  doneDays: 14,
+} as const;
+
+/** Is this item on the developer's list? Theirs, not canceled, not finished long ago. */
+export function inDeveloperScope(a: Pick<ClientAction, "ownerId" | "status" | "doneAt">, staffId: string, now: Date): boolean {
+  if (!a.ownerId || a.ownerId !== staffId || a.status === "canceled") return false;
+  if (a.status !== "done") return true;
+  return Boolean(a.doneAt && Date.parse(a.doneAt) > now.getTime() - DEVELOPER_SCOPE.doneDays * 86_400_000);
+}
+
+/**
+ * The developer's items, with ONLY the fields their view has (no client database id,
+ * no lead, no AI flag, no cancel details), so the preview shows exactly what they get.
+ */
+export function developerWorkScope(actions: ClientAction[], staff: { id: string; name: string }, now: Date): ClientAction[] {
+  return actions
+    .filter((a) => inDeveloperScope(a, staff.id, now))
+    .map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      title: a.title,
+      notes: a.notes,
+      priority: a.priority,
+      status: a.status,
+      dueOn: a.dueOn,
+      doneAt: a.doneAt,
+      createdAt: a.createdAt,
+      ownerId: staff.id,
+      ownerName: staff.name,
+      client: a.client ? { slug: a.client.slug, dbId: "", name: a.client.name } : null,
+      leadGhlId: null,
+      blockedReason: a.blockedReason ?? null,
+      promisedOn: a.promisedOn ?? null,
+      steps: a.steps ?? null,
+      stepsDone: a.stepsDone ?? [],
+      sourceLink: a.sourceLink ?? null,
+      sourceNote: a.sourceNote ?? null,
+      estMinutes: a.estMinutes ?? null,
+      aiSuggested: false,
+      submittedAt: a.submittedAt ?? null,
+      sentBackCount: a.sentBackCount ?? 0,
+      reviewNote: a.reviewNote ?? null,
+    }));
+}
+
+/** The clients whose contact dates a developer sees: ones they own, or have current work for. */
+export function developerClientScope(clients: RosterClient[], actions: ClientAction[], staffId: string, now: Date): ClientContactDates[] {
+  const withWork = new Set(actions.filter((a) => a.client && inDeveloperScope(a, staffId, now)).map((a) => a.client!.slug));
+  return clients
+    .filter((c) => c.dbId && (c.ownerId === staffId || withWork.has(c.id)))
+    .map((c) => ({
+      slug: c.id,
+      name: c.name,
+      lastLoggedOn: c.lastLogged ?? null,
+      lastInboundAt: c.ghl?.lastInboundAt ?? null,
+      lastOutboundAt: c.ghl?.lastOutboundAt ?? null,
+      lastCallAt: c.ghl?.lastCallAt ?? null,
+      unanswered: c.ghl?.unansweredOutbound ?? 0,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ---------------------------------------------------------------------------
+// The developer's work screen: Now / Next / Waiting / Sent for review.
+// ---------------------------------------------------------------------------
+
+export interface DeveloperSections {
+  now: ClientAction[];
+  next: ClientAction[];
+  waiting: ClientAction[];
+  review: ClientAction[];
+}
+
+/**
+ * Now = in progress. Next = open, most urgent first (overdue, due today, then priority,
+ * then due date). Waiting = stuck (blocked) or waiting on someone. Review = sent to a
+ * manager. Items sent BACK by a manager come first in Next, with the note.
+ */
+export function developerSections(items: ClientAction[], today: string): DeveloperSections {
+  const open = items.filter((a) => a.status !== "done" && a.status !== "canceled");
+  const urgency = (a: ClientAction) => {
+    const w = dueWhen(a.dueOn, today);
+    return w === "overdue" ? 0 : w === "today" ? 1 : 2;
+  };
+  const byUrgency = (x: ClientAction, y: ClientAction) =>
+    Number(Boolean(y.reviewNote)) - Number(Boolean(x.reviewNote)) ||
+    Number(promiseMissed(y, today)) - Number(promiseMissed(x, today)) ||
+    urgency(x) - urgency(y) ||
+    PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] ||
+    (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999") ||
+    x.createdAt.localeCompare(y.createdAt);
+  return {
+    now: open.filter((a) => a.status === "in_progress").sort(byUrgency),
+    next: open.filter((a) => a.status === "open").sort(byUrgency),
+    waiting: open.filter((a) => a.status === "blocked" || a.status === "waiting").sort(byUrgency),
+    review: open.filter((a) => a.status === "review").sort((x, y) => (x.submittedAt ?? "").localeCompare(y.submittedAt ?? "")),
+  };
+}
+
+/** Ticked steps (0016), counted only for steps that exist: "3 of 5". null = no steps. */
+export function stepProgress(a: Pick<ClientAction, "steps" | "stepsDone">): { done: number; total: number; ticked: Set<number> } | null {
+  const total = parseSteps(a.steps).length;
+  if (!total) return null;
+  const ticked = new Set((a.stepsDone ?? []).filter((n) => Number.isInteger(n) && n >= 1 && n <= total));
+  return { done: ticked.size, total, ticked };
+}
+
+// ---------------------------------------------------------------------------
 // Workload chips: one chip per open work item, piled up per person, so a full plate
 // is visible at a glance. Plain rules; tune the numbers here.
 // ---------------------------------------------------------------------------

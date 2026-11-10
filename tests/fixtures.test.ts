@@ -1431,3 +1431,121 @@ describe("billing, read-only and owner-only (0015)", () => {
     expect(suggestBillingMatch(null, clients)).toBeNull();
   });
 });
+
+describe("preview as developer + developer work screen (approved 2026-11-10)", () => {
+  const NOW = new Date("2026-11-10T15:00:00Z");
+  const T = "2026-11-10";
+  const DEV = { id: "00000000-0000-0000-0000-0000000000d1", name: "Dev (fictional)" };
+  const OTHER = "00000000-0000-0000-0000-0000000000d2";
+  const act = (over: Partial<import("@/lib/types").ClientAction>): import("@/lib/types").ClientAction => ({
+    id: "x",
+    kind: "work_order",
+    title: "Task (test)",
+    notes: null,
+    priority: "normal",
+    status: "open",
+    dueOn: null,
+    doneAt: null,
+    createdAt: "2026-11-01T10:00:00Z",
+    ownerId: DEV.id,
+    ownerName: "Someone",
+    client: { slug: "pat-example", dbId: "db-secret", name: "Pat Example (fictional)" },
+    leadGhlId: "lead-1",
+    aiSuggested: true,
+    canceledAt: null,
+    cancelNote: "internal",
+    ...over,
+  });
+
+  it("the preview picks the same items as the developer's view: theirs, not canceled, recent finished", async () => {
+    const { developerWorkScope } = await import("@/lib/ops");
+    const list = developerWorkScope(
+      [
+        act({ id: "mine" }),
+        act({ id: "other", ownerId: OTHER }),
+        act({ id: "nobody", ownerId: null }),
+        act({ id: "canceled", status: "canceled" }),
+        act({ id: "old-done", status: "done", doneAt: "2026-10-20T10:00:00Z" }),
+        act({ id: "new-done", status: "done", doneAt: "2026-11-05T10:00:00Z" }),
+      ],
+      DEV,
+      NOW,
+    );
+    expect(list.map((a) => a.id)).toEqual(["mine", "new-done"]);
+  });
+
+  it("the preview shows only the fields the developer's view has", async () => {
+    const { developerWorkScope } = await import("@/lib/ops");
+    const [a] = developerWorkScope([act({ id: "mine" })], DEV, NOW);
+    expect(a?.client).toEqual({ slug: "pat-example", dbId: "", name: "Pat Example (fictional)" });
+    expect(a?.leadGhlId).toBeNull();
+    expect(a?.aiSuggested).toBe(false);
+    expect(a).not.toHaveProperty("canceledAt");
+    expect(a).not.toHaveProperty("cancelNote");
+    expect(a?.ownerName).toBe(DEV.name);
+  });
+
+  it("contact dates: clients they own or have current work for, dates only", async () => {
+    const { developerClientScope } = await import("@/lib/ops");
+    const client = (id: string, over: Partial<import("@/lib/types").RosterClient> = {}): import("@/lib/types").RosterClient => ({
+      id,
+      dbId: `db-${id}`,
+      name: `${id} (fictional)`,
+      monthlyUsd: 999,
+      startDate: "2026-01-01",
+      status: "active",
+      listedIn: [],
+      services: [],
+      lastLogged: "2026-11-01",
+      ...over,
+    });
+    const out = developerClientScope(
+      [client("owned", { ownerId: DEV.id }), client("pat-example"), client("old-work"), client("others", { ownerId: OTHER })],
+      [act({ id: "a1" }), act({ id: "a2", client: { slug: "old-work", dbId: "x", name: "x" }, status: "done", doneAt: "2026-09-01T00:00:00Z" }), act({ id: "a3", ownerId: OTHER, client: { slug: "others", dbId: "x", name: "x" } })],
+      DEV.id,
+      NOW,
+    );
+    expect(out.map((c) => c.slug)).toEqual(["owned", "pat-example"]);
+    expect(Object.keys(out[0]!).sort()).toEqual(["lastCallAt", "lastInboundAt", "lastLoggedOn", "lastOutboundAt", "name", "slug", "unanswered"]);
+    expect(JSON.stringify(out)).not.toContain("999"); // no revenue
+  });
+
+  it("sections: Now, Next (sent back and most urgent first), Waiting, Sent for review", async () => {
+    const { developerSections } = await import("@/lib/ops");
+    const s = developerSections(
+      [
+        act({ id: "doing", status: "in_progress" }),
+        act({ id: "later", dueOn: "2026-11-20", priority: "critical" }),
+        act({ id: "overdue", dueOn: "2026-11-01", priority: "low" }),
+        act({ id: "today", dueOn: T }),
+        act({ id: "sent-back", reviewNote: "Fix the title (test)", dueOn: "2026-12-01" }),
+        act({ id: "stuck", status: "blocked", blockedReason: "No login (test)" }),
+        act({ id: "waiting", status: "waiting" }),
+        act({ id: "review2", status: "review", submittedAt: "2026-11-09T10:00:00Z" }),
+        act({ id: "review1", status: "review", submittedAt: "2026-11-08T10:00:00Z" }),
+        act({ id: "done", status: "done", doneAt: "2026-11-09T10:00:00Z" }),
+      ],
+      T,
+    );
+    expect(s.now.map((a) => a.id)).toEqual(["doing"]);
+    expect(s.next.map((a) => a.id)).toEqual(["sent-back", "overdue", "today", "later"]);
+    expect(s.waiting.map((a) => a.id).sort()).toEqual(["stuck", "waiting"]);
+    expect(s.review.map((a) => a.id)).toEqual(["review1", "review2"]);
+  });
+
+  it("step progress counts only steps that exist", async () => {
+    const { stepProgress } = await import("@/lib/ops");
+    expect(stepProgress({ steps: null, stepsDone: [1] })).toBeNull();
+    const p = stepProgress({ steps: "One\nTwo\nThree", stepsDone: [1, 3, 7, 0] });
+    expect([p?.done, p?.total, [...(p?.ticked ?? [])]]).toEqual([2, 3, [1, 3]]);
+  });
+
+  it("preview cookie rules: a team member id only; owner and managers only; developer screens only", async () => {
+    const { canPreview, previewAllows, previewTarget } = await import("@/lib/preview");
+    expect(previewTarget(DEV.id)).toBe(DEV.id);
+    for (const bad of [undefined, null, "", "owner", `${DEV.id}x`, "'; drop table x; --"]) expect(previewTarget(bad)).toBeNull();
+    expect([canPreview("owner"), canPreview("manager"), canPreview("developer"), canPreview(null)]).toEqual([true, true, false, false]);
+    for (const ok of ["/", "/work", "/kit", `/kit/${DEV.id}`]) expect(previewAllows(ok), ok).toBe(true);
+    for (const no of ["/billing", "/clients", "/clients/pat-example", "/sales", "/growth", "/safety", "/work/orders", "/account", "/kit/../billing"]) expect(previewAllows(no), no).toBe(false);
+  });
+});

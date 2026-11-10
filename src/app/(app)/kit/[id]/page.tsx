@@ -6,7 +6,7 @@ import { KitDocForm } from "@/components/forms/KitDocForm";
 import { KitText } from "@/components/kit/KitText";
 import { Fold } from "@/components/shell/Fold";
 import { PageHeader } from "@/components/shell/PageHeader";
-import { getKitDoc, getMember, getToday, usesDatabase } from "@/lib/data-source";
+import { getKitDoc, getDeveloperViewer, getMember, getToday, usesDatabase } from "@/lib/data-source";
 import { kitKindLabel, plainText, reviewNote } from "@/lib/kit";
 
 export const metadata: Metadata = { title: "Kit" };
@@ -19,7 +19,8 @@ export default async function KitDocPage({ params }: { params: Promise<{ id: str
   if (!found) notFound(); // missing, or not meant for this person (the database decides)
   const { doc, versions } = found;
   const member = usesDatabase() ? await getMember() : null;
-  const editor = member?.role === "owner" || member?.role === "manager";
+  // Previewing a developer: no editing (look only), like the developer sees it.
+  const editor = (member?.role === "owner" || member?.role === "manager") && !(await getDeveloperViewer())?.preview;
   const today = getToday();
   const stale = reviewNote(doc, today);
 

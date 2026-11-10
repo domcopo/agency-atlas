@@ -518,3 +518,64 @@ describe("owner summary (0012): one read-only route for the owner's dashboard", 
     expect(builder).not.toMatch(/\.(notes|followUp|check|steps|sourceNote|sourceLink|reviewNote|blockedReason|why|title)\b/);
   });
 });
+
+describe("preview as developer: look only, narrows, never grants", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+
+  it("every save refuses while previewing (except signing in/out and starting/stopping the preview)", () => {
+    const EXEMPT = ["signIn", "signOut", "startPreview", "stopPreview"];
+    const names = [...actions.matchAll(/export async function (\w+)/g)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(30);
+    for (const name of names) {
+      if (EXEMPT.includes(name)) continue;
+      const start = actions.indexOf(`export async function ${name}`);
+      const body = actions.slice(start, start + 600);
+      const open = body.indexOf("{\n");
+      // the first statement of the body is the lock
+      expect(body.slice(open, open + 40), name).toMatch(/^\{\n\s+await notWhilePreviewing\(\);/);
+    }
+  });
+
+  it("only the owner or a manager can start a preview, for a real team member, with a short-lived httpOnly cookie", () => {
+    const start = actions.slice(actions.indexOf("export async function startPreview"), actions.indexOf("export async function stopPreview"));
+    expect(start).toMatch(/canPreview\(me\.role\)/);
+    expect(start).toMatch(/previewTarget\(/);
+    expect(start).toMatch(/members\.some\(/);
+    expect(start).toMatch(/COOKIE_OPTIONS/);
+    expect(start).toMatch(/maxAge: PREVIEW_MINUTES \* 60/);
+    const opts = readFileSync(join(ROOT, "src/lib/supabase/server.ts"), "utf8");
+    expect(opts).toMatch(/COOKIE_OPTIONS = \{ httpOnly: true/);
+  });
+
+  it("the preview is re-checked on every request (owner/manager + real person), and signing out ends it", () => {
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const getter = ds.slice(ds.indexOf("export const getPreview"), ds.indexOf("export interface DeveloperViewer"));
+    expect(getter).toMatch(/canPreview\(me\.role\)/);
+    expect(getter).toMatch(/members\.find\(/);
+    expect(actions.slice(actions.indexOf("export async function signOut"), actions.indexOf("export async function signOut") + 200)).toMatch(/cookies\(\)\)\.delete\(PREVIEW_COOKIE\)/);
+  });
+
+  it("while previewing, only Home, Work and Kit open (proxy), and the preview cookie is never public", () => {
+    const proxy = readFileSync(join(ROOT, "src/proxy.ts"), "utf8");
+    expect(proxy).toMatch(/request\.cookies\.has\(PREVIEW_COOKIE\) && !previewAllows\(path\)\) return redirectTo\("\/"/);
+    expect(findMatches([/NEXT_PUBLIC_[A-Z_]*PREVIEW/])).toEqual([]);
+  });
+
+  it("developer screens never read billing, revenue or manager-only data", () => {
+    const comp = readFileSync(join(ROOT, "src/components/cards/DeveloperWork.tsx"), "utf8");
+    expect(comp).not.toMatch(/getBilling|monthlyUsd|data-source/);
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const work = ds.slice(ds.indexOf("export const getDeveloperWork"), ds.indexOf("export const getStepsReady"));
+    expect(work).not.toMatch(/getBilling|getRoster|monthly/);
+    expect(work).toMatch(/developerWorkScope\(/);
+    const ops = readFileSync(join(ROOT, "src/lib/ops.ts"), "utf8");
+    const scope = ops.slice(ops.indexOf("export function developerWorkScope"), ops.indexOf("// The developer's work screen"));
+    expect(scope).not.toMatch(/monthlyUsd|leadGhlId: a\.|cancelNote|canceledAt/);
+  });
+
+  it("step ticks are saved only by toggleStep (checked by the database too)", () => {
+    const writers = contents.filter(({ text }) => /steps_done/.test(text) && /\.update\(/.test(text)).map(({ file }) => file);
+    expect(writers).toEqual(["src/app/actions.ts"]);
+    expect([...actions.matchAll(/update\(\{ steps_done/g)]).toHaveLength(1);
+  });
+});

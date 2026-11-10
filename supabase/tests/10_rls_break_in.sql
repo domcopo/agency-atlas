@@ -934,6 +934,78 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 7m. Step tick boxes (0016) and "Preview as developer" drift check.
+-- ---------------------------------------------------------------------------
+insert into public.clients (id, slug, name, monthly_usd, start_date, status, services, owner_staff_id) values
+  ('00000000-0000-0000-0000-0000000000c7', 'owned-by-dev', 'Owned By Dev (fictional)', 100, '2026-01-05', 'active', '{SEO}', '00000000-0000-0000-0000-0000000000b3'),
+  ('00000000-0000-0000-0000-0000000000c8', 'not-theirs', 'Not Theirs (fictional)', 100, '2026-01-05', 'active', '{SEO}', '00000000-0000-0000-0000-0000000000b2');
+insert into public.actions (id, client_id, kind, title, owner_staff_id, steps, created_by) values
+  ('00000000-0000-0000-0000-000000005d01', '00000000-0000-0000-0000-0000000000c1', 'work_order', 'Three steps (test)', '00000000-0000-0000-0000-0000000000b3', E'First\nSecond\nThird', '00000000-0000-0000-0000-0000000000a1'),
+  ('00000000-0000-0000-0000-000000005d02', '00000000-0000-0000-0000-0000000000c8', 'work_order', 'Not theirs (test)', '00000000-0000-0000-0000-0000000000b2', E'One\nTwo', '00000000-0000-0000-0000-0000000000a1');
+insert into public.actions (id, client_id, kind, title, owner_staff_id, status, done_at, created_by) values
+  ('00000000-0000-0000-0000-000000005d03', '00000000-0000-0000-0000-0000000000c1', 'follow_up', 'Done long ago (test)', '00000000-0000-0000-0000-0000000000b3', 'done', now() - interval '20 days', '00000000-0000-0000-0000-0000000000a1'),
+  ('00000000-0000-0000-0000-000000005d04', '00000000-0000-0000-0000-0000000000c1', 'follow_up', 'Done lately (test)', '00000000-0000-0000-0000-0000000000b3', 'done', now() - interval '3 days', '00000000-0000-0000-0000-0000000000a1');
+
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-000000005d01' and steps_done = '{}'$$, 1, 'new items start with no ticks');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$update public.actions set steps_done = '{3,1}' where id = '00000000-0000-0000-0000-000000005d01'$$, 1, 'developer ticks steps on their own work order');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-000000005d01' and steps_done = '{1,3}'$$, 1, 'ticks are kept in order and shown in my_work');
+select test.expect($$update public.actions set steps_done = '{4}' where id = '00000000-0000-0000-0000-000000005d01'$$, -2, 'a step that does not exist cannot be ticked');
+select test.expect($$update public.actions set steps_done = '{0}' where id = '00000000-0000-0000-0000-000000005d01'$$, -2, 'step numbers start at 1');
+select test.expect($$update public.actions set steps_done = '{2,2}' where id = '00000000-0000-0000-0000-000000005d01'$$, -2, 'a step cannot be ticked twice');
+select test.expect($$update public.actions set steps_done = '{1}' where id = '00000000-0000-0000-0000-000000005d02'$$, 0, 'developer cannot tick someone else''s steps');
+select test.expect($$update public.actions set steps = 'x', steps_done = '{}' where id = '00000000-0000-0000-0000-000000005d01'$$, -1, 'developer still cannot change the steps themselves');
+select test.expect($$update public.actions set title = 'x', steps_done = '{1}' where id = '00000000-0000-0000-0000-000000005d01'$$, -1, 'ticking does not unlock other columns');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect($$update public.actions set steps_done = '{2}' where id = '00000000-0000-0000-0000-000000005d01'$$, 0, 'developer without two-factor cannot tick');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set steps_done = '{1,2}' where id = '00000000-0000-0000-0000-000000005d02'$$, 1, 'manager can tick steps on anyone''s work order');
+select test.expect($$update public.actions set steps = E'One\nTwo\nThree' where id = '00000000-0000-0000-0000-000000005d02'$$, 1, 'manager edits the steps');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-000000005d02' and steps_done = '{}'$$, 1, 'changing the steps clears the ticks');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$update public.actions set steps_done = '{1}'$$, -1, 'signed out cannot tick');
+commit;
+
+-- Drift check: the preview (src/lib/ops.ts developerWorkScope / developerClientScope)
+-- uses these rules. The real developer views must return exactly the same rows.
+create temp table preview_expected_work as
+  select a.id from public.actions a
+  where a.owner_staff_id = '00000000-0000-0000-0000-0000000000b3'
+    and a.status <> 'canceled'
+    and (a.status <> 'done' or a.done_at > now() - interval '14 days');
+create temp table preview_expected_clients as
+  select c.slug from public.clients c
+  where c.owner_staff_id = '00000000-0000-0000-0000-0000000000b3'
+     or exists (select 1 from preview_expected_work w join public.actions a on a.id = w.id where a.client_id = c.id);
+grant select on preview_expected_work, preview_expected_clients to authenticated;
+select test.expect('select * from preview_expected_work where id is not null', (select count(*) from preview_expected_work), 'drift check reads its expected list');
+select test.expect($$select * from preview_expected_work where id = '00000000-0000-0000-0000-000000005d04'$$, 1, 'drift check includes a recently finished item');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$(select id from public.my_work except select id from preview_expected_work) union all (select id from preview_expected_work except select id from public.my_work)$$, 0, 'my_work returns exactly the items the preview rules pick');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-000000005d03'$$, 0, 'items done over 14 days ago drop off (both places)');
+select test.expect($$(select client_slug from public.my_client_contacts except select slug from preview_expected_clients) union all (select slug from preview_expected_clients except select client_slug from public.my_client_contacts)$$, 0, 'my_client_contacts returns exactly the clients the preview rules pick');
+select test.expect($$select * from public.my_client_contacts where client_slug = 'owned-by-dev'$$, 1, 'a client the developer owns shows even with no work');
+select test.expect($$select * from public.my_client_contacts where client_slug = 'not-theirs'$$, 0, 'someone else''s client stays hidden');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

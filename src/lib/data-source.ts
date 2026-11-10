@@ -21,13 +21,29 @@ import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtu
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
-import { buildPriorities, healthScore, healthSummary, isSalesStage, kindLabel, opportunities, ownershipGaps, riskAlerts, scoreTrend, statusNote, type ClientContactDates } from "@/lib/ops";
+import {
+  buildPriorities,
+  developerClientScope,
+  developerWorkScope,
+  healthScore,
+  healthSummary,
+  isSalesStage,
+  kindLabel,
+  opportunities,
+  ownershipGaps,
+  riskAlerts,
+  scoreTrend,
+  statusNote,
+  type ClientContactDates,
+} from "@/lib/ops";
+import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlBillingConfigured, isGhlConfigured } from "@/lib/ghl/client";
 import { billingState, billingTotals, clientBilling, paymentAlerts, planVsCollected, unmatchedGroups, type BillingRecord, type BillingState, type BillingSync, type BillingTotals, type ClientBilling, type PaymentAlert } from "@/lib/billing";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
 import { cache } from "react";
 import type {
   AtlasQuestion,
@@ -95,6 +111,36 @@ function today(): string {
 
 /** The signed-in team member (once per request), or null. */
 export const getMember = cache(getCurrentMember);
+
+/**
+ * "Preview as developer": the team member the owner or a manager is previewing, or null.
+ * Re-checked on every request: owner/manager only, and the person must exist. The cookie
+ * only ever shows LESS; it never grants anything (src/lib/preview.ts).
+ */
+export const getPreview = cache(async (): Promise<{ staffId: string; name: string } | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me || !canPreview(me.role)) return null;
+  const target = previewTarget((await cookies()).get(PREVIEW_COOKIE)?.value);
+  if (!target) return null;
+  const person = (await getTeam()).members.find((m) => m.id === target);
+  return person ? { staffId: person.id, name: person.name } : null;
+});
+
+/** Who the developer screens are for: a signed-in developer, or the person being previewed. null = not a developer view. */
+export interface DeveloperViewer {
+  staffId: string | null;
+  name: string;
+  preview: boolean;
+}
+export const getDeveloperViewer = cache(async (): Promise<DeveloperViewer | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me) return null;
+  if (me.role === "developer") return { staffId: me.staffId, name: me.name, preview: false };
+  const p = await getPreview();
+  return p ? { staffId: p.staffId, name: p.name, preview: true } : null;
+});
 
 /** Whether the signed-in person has an authenticator app set up. */
 export const getTwoFactorStatus = cache(getTwoFactorState);
@@ -436,6 +482,7 @@ const PROMISE_COLS = "blocked_reason, promised_on"; // 0009
 const ORDER_COLS = "steps, source_link, source_note, est_minutes, ai_suggested"; // 0010
 const REVIEW_COLS = "submitted_at, sent_back_count, review_note"; // 0011
 const CANCEL_COLS = "canceled_at, cancel_note"; // 0013
+const STEPS_DONE_COL = "steps_done"; // 0016
 
 /** Item kind from the database (unknown values read as follow-ups). */
 const asActionKind = (v: unknown): ClientAction["kind"] => (v === "issue" || v === "work_order" ? v : "follow_up");
@@ -451,6 +498,7 @@ function orderDetails(r: Record<string, unknown>) {
     submittedAt: typeof r.submitted_at === "string" ? r.submitted_at : null,
     sentBackCount: Number(r.sent_back_count ?? 0) || 0,
     reviewNote: typeof r.review_note === "string" && r.review_note ? r.review_note : null,
+    stepsDone: Array.isArray(r.steps_done) ? (r.steps_done as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 20) : [],
   };
 }
 
@@ -465,6 +513,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
   // Newest setup level first; step down if a later setup step hasn't been run yet.
   const levels = [
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}`, promises: true, orders: true, review: true, cancel: true }, // 0016
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}`, promises: true, orders: true, review: true, cancel: true }, // 0013
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}`, promises: true, orders: true, review: true, cancel: false }, // 0011
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}`, promises: true, orders: true, review: false, cancel: false }, // 0010
@@ -652,46 +701,59 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
 /**
  * A developer's own items (0007). Uses the public.my_work view, which returns only their
  * items and each client's name: never revenue or other clients. [] before 0007.
+ * Preview as developer: the same items, from the owner's/manager's normal read, through
+ * the same rules as the view (developerWorkScope; the break-in tests keep them in step).
  */
 export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
   if (!usesDatabase()) return [];
-  const db = await createDatabaseClient();
-  const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
-  const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-  let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`);
-  if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`)); // before 0011
-  if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}`)); // before 0010
-  if (error) ({ data, error } = await read(base)); // before 0009
-  if (error || !Array.isArray(data)) return [];
+  const viewer = await getDeveloperViewer();
+  if (!viewer) return [];
   const t = today();
-  const me = await getMember();
-  return (data as unknown as Record<string, unknown>[])
-    .filter((r) => r.status !== "done" && r.status !== "canceled")
-    .map((r) => {
-      const action: ClientAction = {
-        ...orderDetails(r),
-        id: String(r.id),
-        kind: asActionKind(r.kind),
-        title: String(r.title ?? ""),
-        notes: (r.notes as string | null) ?? null,
-        priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
-        status: (["open", "in_progress", "waiting", "blocked", "review", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
-        dueOn: (r.due_on as string | null) ?? null,
-        doneAt: (r.done_at as string | null) ?? null,
-        createdAt: String(r.created_at ?? ""),
-        ownerId: me?.staffId ?? null,
-        ownerName: me?.name ?? null,
-        // Name only (from the my_work view); developers can't open client pages.
-        client: r.client_slug && r.client_name ? { slug: String(r.client_slug), dbId: "", name: String(r.client_name) } : null,
-        leadGhlId: null,
-        blockedReason: (r.blocked_reason as string | null) ?? null,
-        promisedOn: (r.promised_on as string | null) ?? null,
-      };
+  let mine: ClientAction[];
+  if (viewer.preview) {
+    if (!viewer.staffId) return [];
+    const { actions } = await getActions();
+    mine = developerWorkScope(actions, { id: viewer.staffId, name: viewer.name }, new Date());
+  } else {
+    const db = await createDatabaseClient();
+    const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
+    const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
+    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}`);
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`)); // before 0016
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`)); // before 0011
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}`)); // before 0010
+    if (error) ({ data, error } = await read(base)); // before 0009
+    if (error || !Array.isArray(data)) return [];
+    mine = (data as unknown as Record<string, unknown>[]).map((r) => ({
+      ...orderDetails(r),
+      aiSuggested: false,
+      id: String(r.id),
+      kind: asActionKind(r.kind),
+      title: String(r.title ?? ""),
+      notes: (r.notes as string | null) ?? null,
+      priority: (["critical", "high", "normal", "low"].includes(String(r.priority)) ? r.priority : "normal") as ClientAction["priority"],
+      status: (["open", "in_progress", "waiting", "blocked", "review", "done"].includes(String(r.status)) ? r.status : "open") as ClientAction["status"],
+      dueOn: (r.due_on as string | null) ?? null,
+      doneAt: (r.done_at as string | null) ?? null,
+      createdAt: String(r.created_at ?? ""),
+      ownerId: viewer.staffId,
+      ownerName: viewer.name,
+      // Name only (from the my_work view); developers can't open client pages.
+      client: r.client_slug && r.client_name ? { slug: String(r.client_slug), dbId: "", name: String(r.client_name) } : null,
+      leadGhlId: null,
+      blockedReason: (r.blocked_reason as string | null) ?? null,
+      promisedOn: (r.promised_on as string | null) ?? null,
+    }));
+  }
+  return mine
+    .filter((a) => a.status !== "done" && a.status !== "canceled")
+    .sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))
+    .map((action) => {
       const when = !action.dueOn ? "none" : action.dueOn < t ? "overdue" : action.dueOn === t ? "today" : "upcoming";
       const due = !action.dueOn ? "No due date" : when === "overdue" ? `Overdue (was due ${action.dueOn})` : when === "today" ? "Due today" : `Due ${action.dueOn}`;
       return {
         id: `a_${action.id}`,
-        title: r.client_name ? `${String(r.client_name)}: ${action.title}` : action.title,
+        title: action.client ? `${action.client.name}: ${action.title}` : action.title,
         reason: `${kindLabel(action.kind)} · ${due}${statusNote(action, t)}`,
         href: "/work#my-work",
         ownerName: action.ownerName,
@@ -702,6 +764,15 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         action,
       } as PriorityItem;
     });
+});
+
+/** Step tick boxes (0016) are set up. Developers check their own view; everyone else the table. */
+export const getStepsReady = cache(async (): Promise<boolean> => {
+  if (!usesDatabase()) return false;
+  const viewer = await getDeveloperViewer();
+  const db = await createDatabaseClient();
+  const { error } = await db.from(viewer && !viewer.preview ? "my_work" : "actions").select("steps_done").limit(1);
+  return !error;
 });
 
 export interface Completion {
@@ -1271,6 +1342,14 @@ export const getWorkOrderDrafts = cache(async (): Promise<{ createdAt: string; c
  */
 export const getMyClientContacts = cache(async (): Promise<ClientContactDates[]> => {
   if (!usesDatabase()) return [];
+  const viewer = await getDeveloperViewer();
+  if (!viewer) return [];
+  if (viewer.preview) {
+    // Same rules as the my_client_contacts view (developerClientScope; tested against it).
+    if (!viewer.staffId) return [];
+    const [{ actions }, r] = await Promise.all([getActions(), roster()]);
+    return developerClientScope(r.clients, actions, viewer.staffId, new Date());
+  }
   const db = await createDatabaseClient();
   const { data, error } = await db
     .from("my_client_contacts")
@@ -1411,6 +1490,17 @@ export const getKit = cache(async (): Promise<{ ready: boolean; docs: KitDoc[]; 
   const docs = await db.from("kit_docs").select("id, kind, title, category, body, audience, reviewed_on, archived, updated_at").order("title").limit(1000);
   if (docs.error) return none;
   const member = await getMember();
+  const viewer = await getDeveloperViewer();
+  if (viewer?.preview) {
+    // Preview as developer: only what the developer's database rules allow (developer
+    // pages that aren't archived; tools marked for developers, with the team_tools fields).
+    const { data } = await db.from("kit_tools").select("id, name, purpose, url, login_where, for_developers, archived").order("name").limit(500);
+    const teamTools = (data ?? [])
+      .filter((t) => t.for_developers === true && t.archived !== true)
+      .map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, url: typeof t.url === "string" && t.url.startsWith("https://") ? t.url : null, loginWhere: t.login_where }));
+    const devDocs = (docs.data ?? []).map((r) => kitDocFrom(r as Record<string, unknown>)).filter((d) => d.audience.includes("developer") && !d.archived);
+    return { ready: true, docs: devDocs, tools: [], teamTools };
+  }
   const manager = member?.role === "owner" || member?.role === "manager";
   let tools: KitTool[] = [];
   let teamTools: TeamTool[] = [];
@@ -1446,6 +1536,11 @@ export async function getKitDoc(id: string): Promise<{ doc: KitDoc; versions: Ki
   const db = await createDatabaseClient();
   const { data } = await db.from("kit_docs").select("id, kind, title, category, body, audience, reviewed_on, archived, updated_at").eq("id", id).maybeSingle();
   if (!data) return null;
+  if ((await getDeveloperViewer())?.preview) {
+    // Preview as developer: developer pages only, and no version history (developers can't read it).
+    const doc = kitDocFrom(data as Record<string, unknown>);
+    return doc.audience.includes("developer") && !doc.archived ? { doc, versions: [] } : null;
+  }
   const { data: v } = await db.from("kit_doc_versions").select("id, title, body, saved_at, saved_by").eq("doc_id", id).order("saved_at", { ascending: false }).limit(50);
   // Who saved each version (team_members names; whatever the database lets this person read).
   const ids = [...new Set((v ?? []).map((r) => r.saved_by).filter(Boolean))];

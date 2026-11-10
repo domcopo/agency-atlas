@@ -4,13 +4,15 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getCompletions, getDeveloperWork, getMember, getMyClientContacts, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { getCompletions, getDeveloperViewer, getDeveloperWork, getMember, getMyClientContacts, getStepsReady, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
 import { TaskBoard } from "@/components/cards/TaskBoard";
 import { Fold } from "@/components/shell/Fold";
 import { boardColumns, myWork, promiseMissed, suggestWorkOrders, teamLoad, workloadRows, workOrderGroups } from "@/lib/ops";
-import { WorkOrderList } from "@/components/cards/WorkOrderList";
 import { DeveloperContacts } from "@/components/cards/DeveloperContacts";
+import { DeveloperWork } from "@/components/cards/DeveloperWork";
+import { startPreview } from "@/app/actions";
+import { canPreview } from "@/lib/preview";
 import { ClipboardList } from "lucide-react";
 import Link from "next/link";
 import { PriorityList } from "@/components/cards/ActionRow";
@@ -30,17 +32,18 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const today = getToday();
   const samples = showsSamples();
   const member = usesDatabase() ? await getMember() : null;
-  if (member?.role === "developer") {
-    const [items, contacts] = await Promise.all([getDeveloperWork(), getMyClientContacts()]);
+  // Developers, or the owner/a manager previewing one (look only): the work-first screen.
+  const dev = await getDeveloperViewer();
+  if (dev) {
+    const [items, contacts, stepsReady] = await Promise.all([getDeveloperWork(), getMyClientContacts(), getStepsReady()]);
     const mine = items.map((i) => i.action!).filter(Boolean);
-    const groups = member.staffId ? workOrderGroups({ actions: mine, staff: [{ id: member.staffId, name: member.name ?? "You" }], today, show: "all" }) : [];
     return (
       <>
-        <PageHeader title="Work" subtitle="Your work orders, issues and follow-ups" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
-        {member.staffId ? (
+        <PageHeader title="Work" subtitle={dev.preview ? `${dev.name}'s work orders, issues and follow-ups` : "Your work orders, issues and follow-ups"} action={dev.preview ? undefined : <a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        {dev.staffId ? (
           <>
-            <WorkOrderList groups={groups} today={today} mode="developer" empty="Nothing assigned to you right now." />
-            <p className="mt-1.5 px-1 text-[11px] text-faint">Update the status as you go. Blocked? Say by what, so a manager can help. Ask a manager to change steps or dates.</p>
+            <DeveloperWork items={mine} today={today} readOnly={dev.preview} stepsReady={stepsReady} />
+            <p className="mt-2 px-1 text-[11px] text-faint">Stuck? Say on what, so a manager can help. Ask a manager to change steps or dates.</p>
             <DeveloperContacts contacts={contacts} today={today} />
           </>
         ) : (
@@ -97,6 +100,33 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   return (
     <>
       <PageHeader title="Work" subtitle="Oversee work orders and developer load" />
+
+      {usesDatabase() && canPreview(member?.role) && teamMembers.length > 0 && (
+        <details className="glass mb-3 rounded-2xl px-3 py-2">
+          <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-sm font-semibold text-violet">Preview as a developer…</summary>
+          <form action={startPreview} className="mt-1 flex gap-2 pb-1">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">Team member</span>
+              <select name="staffId" required defaultValue="" className="min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink">
+                <option value="" disabled>
+                  Pick a person…
+                </option>
+                {[...teamMembers]
+                  .sort((a, b) => Number(b.role === "seo_developer") - Number(a.role === "seo_developer") || a.name.localeCompare(b.name))
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button type="submit" className="pressable min-h-11 rounded-xl bg-violet-deep px-4 text-sm font-semibold">
+              Preview
+            </button>
+          </form>
+          <p className="pb-1 text-[11px] text-faint">See Home, Work and Kit exactly as that person&apos;s developer login shows them. Look only: nothing can be changed until you exit. Ends after an hour.</p>
+        </details>
+      )}
 
       <div className="flex gap-3 rounded-2xl border border-sky/30 bg-sky/8 p-3.5 text-xs text-muted">
         <Wrench aria-hidden className="mt-0.5 size-4 shrink-0 text-sky" />

@@ -9,7 +9,7 @@ import { updateAction } from "@/app/actions";
 import { priorityTone } from "@/components/cards/ActionRow";
 import { WorkPromptButton } from "@/components/forms/WorkPromptButton";
 import { cn } from "@/lib/format";
-import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
+import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
 
 const input = "min-h-9 min-w-0 rounded-lg border border-line bg-white/5 px-1.5 text-xs text-ink";
@@ -106,6 +106,7 @@ function ItemCard({
   canCancel: boolean;
 }) {
   const steps = parseSteps(a.steps);
+  const progress = stepProgress(a);
   const when = dueWhen(a.dueOn, today);
   const missed = promiseMissed(a, today);
   return (
@@ -149,11 +150,20 @@ function ItemCard({
       </div>
 
       {steps.length > 0 && (
-        <ol className="mt-2 list-decimal space-y-0.5 pl-9 text-xs text-muted">
-          {steps.map((s, i) => (
-            <li key={`${i}-${s}`}>{s}</li>
-          ))}
-        </ol>
+        <>
+          {progress && progress.done > 0 && (
+            <p className={cn("mt-2 pl-4 text-[11px] font-semibold", progress.done === progress.total ? "text-lime" : "text-teal")}>
+              {progress.done} of {progress.total} steps ticked
+            </p>
+          )}
+          <ol className="mt-1 list-decimal space-y-0.5 pl-9 text-xs text-muted">
+            {steps.map((s, i) => (
+              <li key={`${i}-${s}`} className={progress?.ticked.has(i + 1) ? "text-faint line-through" : undefined}>
+                {s}
+              </li>
+            ))}
+          </ol>
+        </>
       )}
       {a.notes && <p className="mt-1.5 pl-4 text-xs text-muted">{a.notes}</p>}
       {(a.sourceLink || a.sourceNote) && (

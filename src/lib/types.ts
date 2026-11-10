@@ -647,6 +647,8 @@ export interface ClientAction {
   promisedOn?: ISODate | null;
   /** Work order details (0010): steps (one per line), the GoHighLevel link it came from, a note, time estimate. */
   steps?: string | null;
+  /** Which steps are ticked, numbered from 1 (0016). Developers tick their own. */
+  stepsDone?: number[];
   sourceLink?: string | null;
   sourceNote?: string | null;
   estMinutes?: number | null;

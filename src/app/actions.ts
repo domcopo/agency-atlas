@@ -8,6 +8,7 @@
 // (through the GET-only module) and writes copies into this app's own database.
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
 import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
@@ -25,6 +26,7 @@ import {
   getGhlSummary,
   getOps,
   getOwnerSummaryInput,
+  getPreview,
   getRecentCheckInsByClient,
   getTeam,
   getRoster,
@@ -45,7 +47,8 @@ import {
   type GhlContactActivity,
   type GhlOpportunity,
 } from "@/lib/ghl/client";
-import { createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
+import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
+import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
 
@@ -106,7 +109,34 @@ export async function signIn(_prev: { error?: string } | undefined, form: FormDa
   redirect("/");
 }
 
+// ---------------------------------------------------------------------------
+// Preview as developer (docs/DEVELOPER_VIEW_PLAN.md). LOOK ONLY: every other action
+// in this file starts with notWhilePreviewing() (a guardrail test checks each one), so
+// nothing saves under the owner's or manager's name while they look at a developer's screens.
+// ---------------------------------------------------------------------------
+
+async function notWhilePreviewing(): Promise<void> {
+  if (await getPreview()) throw new Error("You're previewing a developer's view. Exit the preview to make changes.");
+}
+
+/** Owner or manager: show the app as one team member's developer view, for up to an hour. */
+export async function startPreview(form: FormData) {
+  const me = await getCurrentMember();
+  if (!me || !canPreview(me.role)) return;
+  const target = previewTarget(text(form, "staffId", 40));
+  if (!target || !(await getTeam()).members.some((m) => m.id === target)) return;
+  (await cookies()).set(PREVIEW_COOKIE, target, { ...COOKIE_OPTIONS, sameSite: "strict", maxAge: PREVIEW_MINUTES * 60 });
+  redirect("/work");
+}
+
+/** Leave the preview. */
+export async function stopPreview() {
+  (await cookies()).delete(PREVIEW_COOKIE);
+  redirect("/work");
+}
+
 export async function signOut() {
+  (await cookies()).delete(PREVIEW_COOKIE);
   if (isDatabaseConfigured()) {
     const db = await createDatabaseClient();
     await db.auth.signOut();
@@ -116,6 +146,7 @@ export async function signOut() {
 
 /** Change your own password (signed in with two-factor). The new password is never logged. */
 export async function changePassword(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me) return { error: "Please sign in again." };
   const next = form.get("password");
@@ -144,6 +175,7 @@ export async function changePassword(_prev: { error?: string; ok?: boolean } | u
 
 /** Starts authenticator setup. Returns the QR code and the typed-in key, shown once. */
 export async function startTwoFactor(): Promise<{ error?: string; qr?: string; secret?: string }> {
+  await notWhilePreviewing();
   if (!isDatabaseConfigured()) return { error: "The database isn't connected yet." };
   const db = await createDatabaseClient();
   const { data: claims } = await db.auth.getClaims();
@@ -164,6 +196,7 @@ export async function startTwoFactor(): Promise<{ error?: string; qr?: string; s
 
 /** Checks a 6-digit code. Finishes setup the first time; afterwards it's the second sign-in step. */
 export async function verifyTwoFactor(_prev: { error?: string } | undefined, form: FormData): Promise<{ error?: string }> {
+  await notWhilePreviewing();
   if (!isDatabaseConfigured()) return { error: "The database isn't connected yet." };
   const code = text(form, "code", 12).replace(/\s/g, "");
   if (!/^\d{6}$/.test(code)) return { error: "Enter the 6-digit code from your authenticator app." };
@@ -185,6 +218,7 @@ export async function verifyTwoFactor(_prev: { error?: string } | undefined, for
 // ---------------------------------------------------------------------------
 
 export async function logCheckIn(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can log check-ins." };
   const clientId = text(form, "clientId", 40);
@@ -313,6 +347,7 @@ const EST_CHOICES = EST_OPTIONS.map(([v]) => v);
  * draft: the person reviews and edits it first; the AI never adds anything itself.
  */
 export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add work orders." };
   const slug = text(form, "slug", 90);
@@ -362,6 +397,7 @@ export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | 
 
 /** Add a follow-up or an issue to a client. */
 export async function createAction(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add next actions." };
   const clientId = text(form, "clientId", 40);
@@ -389,6 +425,7 @@ export async function createAction(_prev: { error?: string; ok?: boolean } | und
 
 /** A follow-up on a GoHighLevel deal. Stored ONLY in this app; GoHighLevel is never changed. */
 export async function createLeadAction(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add lead follow-ups." };
   const leadId = text(form, "leadId", 40);
@@ -419,6 +456,7 @@ export async function createLeadAction(_prev: { error?: string; ok?: boolean } |
  * Both also go into the client's history (activity).
  */
 export async function completeReminder(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return;
   const slug = text(form, "slug", 90);
@@ -453,6 +491,7 @@ export async function completeReminder(form: FormData) {
 
 /** "Make it a next action" from an AI suggestion: a person taps it; the AI never does. */
 export async function addSuggestedAction(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return;
   const slug = text(form, "slug", 90);
@@ -479,6 +518,7 @@ export async function addSuggestedAction(form: FormData) {
 
 /** Done / reopen / reschedule / assign / status / priority on one action. */
 export async function updateAction(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me) return;
   const id = text(form, "actionId", 40);
@@ -610,8 +650,40 @@ export async function updateAction(form: FormData) {
   refreshOps(text(form, "slug", 90));
 }
 
+/**
+ * Tick or untick one step of a work order (0016). Developers on their own items (the
+ * database checks it: RLS + the developer guard allow only status and steps_done);
+ * owner and managers on any. Step numbers start at 1 and must exist (the database
+ * checks that too). Not written to the history: ticks are progress, not events.
+ */
+export async function toggleStep(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return;
+  const id = text(form, "actionId", 40);
+  const step = Number(text(form, "step", 2));
+  const on = text(form, "on", 1) === "1";
+  if (!isUuid(id) || !Number.isInteger(step) || step < 1 || step > 20) return;
+  const db = await createDatabaseClient();
+  const { data, error: readError } = await db.from("actions").select("id, status, steps, steps_done").eq("id", id).maybeSingle();
+  if (readError || !data) return; // not found, not allowed, or before 0016
+  const row = data as { status: string; steps: string | null; steps_done: number[] | null };
+  if (row.status === "done" || row.status === "canceled" || step > parseSteps(row.steps).length) return;
+  const current = new Set((row.steps_done ?? []).map(Number));
+  if (on) current.add(step);
+  else current.delete(step);
+  const next = [...current].filter((n) => Number.isInteger(n) && n >= 1 && n <= 20).sort((a, b) => a - b);
+  const { error } = await db.from("actions").update({ steps_done: next }).eq("id", id);
+  if (error) {
+    console.warn(`Step tick refused: ${error.code}`);
+    return;
+  }
+  refreshOps();
+}
+
 /** "Set up clients" screen: owner and plan for one client in one save (owner only). */
 export async function saveClientSetup(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const clientId = text(form, "clientId", 40);
@@ -639,6 +711,7 @@ export async function saveClientSetup(form: FormData) {
 
 /** Which services a client buys (owner only; the database enforces this too). */
 export async function setClientServices(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const clientId = text(form, "clientId", 40);
@@ -657,6 +730,7 @@ export async function setClientServices(form: FormData) {
 
 /** Who owns a client (owner only; the database enforces this too). */
 export async function setClientOwner(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const clientId = text(form, "clientId", 40);
@@ -679,6 +753,7 @@ export async function setClientOwner(form: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function answerQuestion(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return;
   const key = text(form, "key", 120);
@@ -748,6 +823,7 @@ export async function answerQuestion(form: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function importPrivateData(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can import." };
   const roster = loadPrivateRoster();
@@ -798,6 +874,7 @@ export async function importPrivateData(): Promise<{ error?: string; message?: s
 // ---------------------------------------------------------------------------
 
 export async function syncFromGhl(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can sync." };
   if (!isGhlConfigured()) return { error: "GoHighLevel isn't set up on this Mac yet." };
@@ -941,6 +1018,7 @@ async function syncContactTimes(db: Db): Promise<string> {
 
 /** Confirm or reject a suggested GoHighLevel contact for a client, or link one by its id. */
 export async function decideContactMatch(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const clientId = text(form, "clientId", 40);
@@ -1010,6 +1088,7 @@ async function aiPreflight(): Promise<{ error: string } | { remaining: number }>
 }
 
 export async function generateBriefing(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
 
@@ -1084,6 +1163,7 @@ export async function generateBriefing(): Promise<{ error?: string; message?: st
  * list for review. Nothing becomes a work order until a person taps "Add".
  */
 export async function generateWorkOrderDrafts(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const ops = await getOps();
@@ -1170,6 +1250,7 @@ export type QuickAddState = { error?: string; drafts?: WorkOrderDrafts; costUsd?
  * once for review, and a person taps Add on each. The photo is never stored. Cost logged.
  */
 export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form: FormData): Promise<QuickAddState> {
+  await notWhilePreviewing();
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const note = typeof form.get("note") === "string" ? String(form.get("note")).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").trim().slice(0, 3000) : "";
@@ -1217,6 +1298,7 @@ export async function generateWorkPrompt(
   _prev: { error?: string; result?: { summary: string; steps: string[]; prompt: string; checks: string[]; costUsd: number } } | undefined,
   form: FormData,
 ): Promise<{ error?: string; result?: { summary: string; steps: string[]; prompt: string; checks: string[]; costUsd: number } }> {
+  await notWhilePreviewing();
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const id = text(form, "actionId", 40);
@@ -1251,6 +1333,7 @@ export async function generateWorkPrompt(
 }
 
 export async function generateClientProfile(_prev: { error?: string; message?: string } | undefined, form: FormData): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const slug = text(form, "slug", 90);
@@ -1277,6 +1360,7 @@ export async function generateClientProfile(_prev: { error?: string; message?: s
 }
 
 export async function markProfileReviewed(form: FormData) {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const id = text(form, "profileId", 40);
@@ -1287,6 +1371,7 @@ export async function markProfileReviewed(form: FormData) {
 }
 
 export async function setAiBudget(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can change the AI budget." };
   const value = Number(text(form, "budget", 8));
@@ -1308,6 +1393,7 @@ export async function setAiBudget(_prev: { error?: string; ok?: boolean } | unde
  * before 0009 is run. The database only accepts today's rows (history can't be faked).
  */
 export async function recordHealthSnapshot(): Promise<void> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return;
   const ops = await getOps();
@@ -1369,11 +1455,13 @@ async function publishOwnerSummary(force: boolean): Promise<{ error?: string; me
 
 /** Called when the owner opens Home: publishes a fresh summary at most once an hour. */
 export async function autoPublishOwnerSummary(): Promise<void> {
+  await notWhilePreviewing();
   await publishOwnerSummary(false);
 }
 
 /** "Publish now" on the Data Safety screen. */
 export async function publishOwnerSummaryNow(_prev: { error?: string; message?: string } | undefined): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   void _prev;
   return publishOwnerSummary(true);
 }
@@ -1392,6 +1480,7 @@ async function kitEditor(): Promise<boolean> {
 
 /** Add or edit a page. Returns the page id so the screen can open it. */
 export async function saveKitDoc(_prev: { error?: string; ok?: boolean; id?: string } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean; id?: string }> {
+  await notWhilePreviewing();
   if (!(await kitEditor())) return { error: "Only the owner or a manager can edit Kit." };
   const id = text(form, "id", 40);
   const kind = oneOf(KIT_KINDS, text(form, "kind", 10));
@@ -1429,6 +1518,7 @@ export async function saveKitDoc(_prev: { error?: string; ok?: boolean; id?: str
 
 /** Mark reviewed today, archive or bring back a page. */
 export async function kitDocOp(form: FormData) {
+  await notWhilePreviewing();
   if (!(await kitEditor())) return;
   const id = text(form, "id", 40);
   const op = text(form, "op", 12);
@@ -1443,6 +1533,7 @@ export async function kitDocOp(form: FormData) {
 
 /** Add or edit a tool. Never a password: only where the login is kept. */
 export async function saveKitTool(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
   if (!(await kitEditor())) return { error: "Only the owner or a manager can edit the tools list." };
   const id = text(form, "id", 40);
   const name = text(form, "name", 80);
@@ -1486,6 +1577,7 @@ export async function saveKitTool(_prev: { error?: string; ok?: boolean } | unde
 }
 
 export async function kitToolOp(form: FormData) {
+  await notWhilePreviewing();
   if (!(await kitEditor())) return;
   const id = text(form, "id", 40);
   const op = text(form, "op", 12);
@@ -1506,6 +1598,7 @@ const errorCode = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]/g, "_").sli
 
 /** Refresh billing from GoHighLevel (read-only). At most every 10 minutes (the database enforces it). */
 export async function syncBilling(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can refresh billing." };
   if (!isGhlBillingConfigured()) return { error: "Billing isn't connected yet (add the billing token in Vercel)." };
@@ -1588,6 +1681,7 @@ export async function syncBilling(): Promise<{ error?: string; message?: string 
 
 /** Match a GoHighLevel billing contact to a client, by hand. Owner only. */
 export async function matchBillingContact(_prev: { error?: string; message?: string } | undefined, form: FormData): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can match billing." };
   const contactId = String(form.get("contact_id") ?? "");

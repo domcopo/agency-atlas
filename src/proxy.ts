@@ -5,6 +5,7 @@
 
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { PREVIEW_COOKIE, previewAllows } from "@/lib/preview";
 import { COOKIE_OPTIONS, databaseSettings } from "@/lib/supabase/server";
 
 /**
@@ -47,6 +48,9 @@ export async function proxy(request: NextRequest) {
   if (!signedIn) return onLogin ? response : redirectTo("/login", request, response);
   if (!twoFactorDone) return onTwoFactor ? response : redirectTo("/mfa", request, response);
   if (onLogin || onTwoFactor) return redirectTo("/", request, response);
+  // Preview as developer: only the developer's screens open; everything else goes to Home.
+  // This only ever narrows what's shown (pages and the database still check everything).
+  if (request.cookies.has(PREVIEW_COOKIE) && !previewAllows(path)) return redirectTo("/", request, response);
   return response;
 }
 
