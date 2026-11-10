@@ -37,6 +37,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
+import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
 import { isGhlBillingConfigured, isGhlConfigured } from "@/lib/ghl/client";
@@ -764,6 +765,30 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
         action,
       } as PriorityItem;
     });
+});
+
+/**
+ * Which Home layout to show (owner and managers; docs/ROLE_HOME_PLAN.md). The person's
+ * own pick (a cookie on this device) wins, else their team profile's job. A layout only
+ * arranges what they can already read; it never changes permissions. null = not offered.
+ */
+export const getHomeLayout = cache(async (): Promise<{ layout: HomeLayout; staffId: string | null } | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return null;
+  const role = me.staffId ? ((await getTeam()).members.find((m) => m.id === me.staffId)?.role ?? null) : null;
+  return { layout: chooseHomeLayout((await cookies()).get(HOME_LAYOUT_COOKIE)?.value, role), staffId: me.staffId };
+});
+
+/** Upcoming GoHighLevel appointments (synced copies): start time, calendar name and status only. */
+export const getUpcomingAppointments = cache(async (): Promise<SalesAppointment[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const from = new Date(Date.now() - 60 * 60_000).toISOString();
+  const to = new Date(Date.now() + 8 * 86_400_000).toISOString();
+  const { data, error } = await db.from("ghl_appointments").select("starts_at, calendar_name, status").gte("starts_at", from).lte("starts_at", to).order("starts_at").limit(200);
+  if (error) return [];
+  return (data ?? []).filter((r) => typeof r.starts_at === "string").map((r) => ({ startsAt: r.starts_at as string, calendar: (r.calendar_name as string | null) ?? null, status: (r.status as string | null) ?? null }));
 });
 
 /** Step tick boxes (0016) are set up. Developers check their own view; everyone else the table. */

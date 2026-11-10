@@ -31,7 +31,12 @@ import { ProspectCard } from "@/components/cards/ProspectCard";
 import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
 import { PulseStrip, type PulseTile } from "@/components/cards/PulseStrip";
 import { Fold } from "@/components/shell/Fold";
-import { developerSections } from "@/lib/ops";
+import { developerSections, workloadRows } from "@/lib/ops";
+import { clientCareView, HOME_LAYOUT_LABEL, salesView, workLeadView } from "@/lib/home-layouts";
+import { HomeSwitcher } from "@/components/home/HomeSwitcher";
+import { ClientCareHome } from "@/components/home/ClientCareHome";
+import { WorkLeadHome } from "@/components/home/WorkLeadHome";
+import { SalesHome } from "@/components/home/SalesHome";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
@@ -46,6 +51,8 @@ import {
   getCoachHints,
   getDetections,
   getDeveloperWork,
+  getHomeLayout,
+  getUpcomingAppointments,
   getToday,
   getCompletions,
   getContactLog,
@@ -158,6 +165,37 @@ export default async function MissionControlPage() {
   // Owner only (null for everyone else; the database also returns them nothing).
   const billing = await getBilling();
   await snapshot;
+  // Home by job (owner and managers): a layout only arranges what they can already see.
+  const homeLayout = await getHomeLayout();
+  const safetyLink = (
+    <Link href="/safety" aria-label="Data Safety" className="pressable glass flex size-11 items-center justify-center rounded-2xl text-lime">
+      <ShieldCheck aria-hidden className="size-5" />
+    </Link>
+  );
+  if (homeLayout && homeLayout.layout !== "everything" && !showsSamples()) {
+    const staffList = team.members.map((m) => ({ id: m.id, name: m.name }));
+    const linked = Boolean(homeLayout.staffId);
+    let body;
+    if (homeLayout.layout === "client_care") {
+      const view = clientCareView({ clients: ops.clients, health: ops.health, checkIns: ops.checkIns, actions: ops.actions, priorities: ops.priorities, staffId: homeLayout.staffId, today: ops.today });
+      body = <ClientCareHome view={view} staff={staffList} canEdit={Boolean(me)} today={ops.today} linked={linked} />;
+    } else if (homeLayout.layout === "work_lead") {
+      body = <WorkLeadHome view={workLeadView(ops.actions, ops.today)} workload={workloadRows({ actions: ops.actions, staff: staffList, today: ops.today })} staff={staffList} today={ops.today} />;
+    } else {
+      const appointments = await getUpcomingAppointments();
+      const nyDay = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+      // Open pipeline uses the same total as Everything and the Sales tab.
+      const view = { ...salesView({ actions: ops.actions, deals: ops.deals, appointments, today: ops.today, now: new Date(), tzDay: nyDay }), openValue: ghl.open.value };
+      body = <SalesHome view={view} leadItems={ops.priorities.filter((p) => p.action?.leadGhlId)} staff={staffList} canEdit={Boolean(me)} synced={Boolean(ghl.lastSync)} />;
+    }
+    return (
+      <>
+        <PageHeader title={HOME_LAYOUT_LABEL[homeLayout.layout]} subtitle={data.weekLabel} action={safetyLink} />
+        <HomeSwitcher current={homeLayout.layout} />
+        {body}
+      </>
+    );
+  }
   const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
   const overdueCount = ops.priorities.filter((p) => p.when === "overdue").length;
   const reviewWaiting = ops.actions.filter((a) => a.status === "review").length;
@@ -436,19 +474,8 @@ export default async function MissionControlPage() {
 
   return (
     <>
-      <PageHeader
-        title="Mission Control"
-        subtitle={data.weekLabel}
-        action={
-          <Link
-            href="/safety"
-            aria-label="Data Safety"
-            className="pressable glass flex size-11 items-center justify-center rounded-2xl text-lime"
-          >
-            <ShieldCheck aria-hidden className="size-5" />
-          </Link>
-        }
-      />
+      <PageHeader title="Mission Control" subtitle={data.weekLabel} action={safetyLink} />
+      {homeLayout && !samples && <HomeSwitcher current={homeLayout.layout} />}
 
       {ai.tablesReady && (ai.level === "warning" || ai.level === "blocked") && (
         <Link href="/safety#ai" className="mb-3 block rounded-2xl border border-rose/40 bg-rose/10 p-3 text-sm">

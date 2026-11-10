@@ -579,3 +579,41 @@ describe("preview as developer: look only, narrows, never grants", () => {
     expect([...actions.matchAll(/update\(\{ steps_done/g)]).toHaveLength(1);
   });
 });
+
+describe("Home by job: arranges only, never widens", () => {
+  const homeDir = join(ROOT, "src/components/home");
+  const files = readdirSync(homeDir).map((f) => ({ f, text: readFileSync(join(homeDir, f), "utf8") }));
+
+  it("layouts get their data from the Home page (data-source), never GoHighLevel, the AI or billing", () => {
+    for (const { f, text } of files) {
+      expect(text, f).not.toMatch(/@\/lib\/ghl|@\/lib\/ai|@\/lib\/data-source|@\/lib\/billing|getBilling|billing/i);
+    }
+    const rules = readFileSync(join(ROOT, "src/lib/home-layouts.ts"), "utf8");
+    expect(rules).not.toMatch(/@\/lib\/ghl|@\/lib\/ai|data-source|billing|supabase/i);
+  });
+
+  it("the owner-only Billing card stays on the Everything layout", () => {
+    const home = readFileSync(join(ROOT, "src/app/(app)/page.tsx"), "utf8");
+    const layoutBranch = home.slice(home.indexOf("const homeLayout = await getHomeLayout()"), home.indexOf('<PageHeader title="Mission Control"'));
+    expect(layoutBranch).toMatch(/homeLayout\.layout !== "everything"/);
+    expect(layoutBranch).not.toMatch(/billing/i);
+  });
+
+  it("the saved choice is one of four names, in an httpOnly cookie, owner/managers only", () => {
+    const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+    const fn = actions.slice(actions.indexOf("export async function setHomeLayout"), actions.indexOf("export async function signOut"));
+    expect(fn).toMatch(/await notWhilePreviewing\(\)/);
+    expect(fn).toMatch(/me\.role !== "owner" && me\.role !== "manager"/);
+    expect(fn).toMatch(/asHomeLayout\(/);
+    expect(fn).toMatch(/COOKIE_OPTIONS/);
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const getter = ds.slice(ds.indexOf("export const getHomeLayout"), ds.indexOf("export const getUpcomingAppointments"));
+    expect(getter).toMatch(/!me \|\| \(me\.role !== "owner" && me\.role !== "manager"\)\) return null/);
+  });
+
+  it("appointments are read as times, calendar names and status only", () => {
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const fn = ds.slice(ds.indexOf("export const getUpcomingAppointments"), ds.indexOf("/** Step tick boxes"));
+    expect(fn).toMatch(/select\("starts_at, calendar_name, status"\)/);
+  });
+});

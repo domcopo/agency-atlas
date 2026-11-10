@@ -48,6 +48,7 @@ import {
   type GhlOpportunity,
 } from "@/lib/ghl/client";
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
+import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -133,6 +134,20 @@ export async function startPreview(form: FormData) {
 export async function stopPreview() {
   (await cookies()).delete(PREVIEW_COOKIE);
   redirect("/work");
+}
+
+/**
+ * Owner/managers: which Home layout this device opens on (docs/ROLE_HOME_PLAN.md).
+ * Only the four layout names; it arranges Home and changes no permissions.
+ */
+export async function setHomeLayout(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const layout = asHomeLayout(text(form, "layout", 20));
+  if (!layout) return;
+  (await cookies()).set(HOME_LAYOUT_COOKIE, layout, { ...COOKIE_OPTIONS, maxAge: 365 * 86_400 });
+  redirect("/");
 }
 
 export async function signOut() {

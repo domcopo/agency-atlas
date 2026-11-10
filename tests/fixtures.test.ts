@@ -1549,3 +1549,134 @@ describe("preview as developer + developer work screen (approved 2026-11-10)", (
     for (const no of ["/billing", "/clients", "/clients/pat-example", "/sales", "/growth", "/safety", "/work/orders", "/account", "/kit/../billing"]) expect(previewAllows(no), no).toBe(false);
   });
 });
+
+describe("Home by job (approved 2026-11-10)", () => {
+  const T = "2026-11-10";
+  const ME = "00000000-0000-0000-0000-0000000000e1";
+  const OTHER = "00000000-0000-0000-0000-0000000000e2";
+  const client = (id: string, over: Partial<import("@/lib/types").RosterClient> = {}): import("@/lib/types").RosterClient => ({
+    id,
+    dbId: `db-${id}`,
+    name: `${id} (fictional)`,
+    monthlyUsd: 300,
+    startDate: "2026-01-01",
+    status: "active",
+    listedIn: [],
+    services: [],
+    ownerId: ME,
+    ...over,
+  });
+  const act = (over: Partial<import("@/lib/types").ClientAction>): import("@/lib/types").ClientAction => ({
+    id: "x",
+    kind: "work_order",
+    title: "Task (test)",
+    notes: null,
+    priority: "normal",
+    status: "open",
+    dueOn: null,
+    doneAt: null,
+    createdAt: "2026-11-01T10:00:00Z",
+    ownerId: ME,
+    ownerName: "Me (test)",
+    client: { slug: "mine", dbId: "db-mine", name: "mine (fictional)" },
+    leadGhlId: null,
+    ...over,
+  });
+
+  it("each job starts on its layout; a saved pick wins; anything odd is ignored", async () => {
+    const { asHomeLayout, chooseHomeLayout, defaultHomeLayout } = await import("@/lib/home-layouts");
+    expect([defaultHomeLayout("founder"), defaultHomeLayout("client_manager"), defaultHomeLayout("client_comms"), defaultHomeLayout("seo_developer"), defaultHomeLayout(null)]).toEqual(["everything", "client_care", "work_lead", "everything", "everything"]);
+    expect(chooseHomeLayout("sales", "client_manager")).toBe("sales");
+    expect(chooseHomeLayout("admin", "client_manager")).toBe("client_care");
+    for (const bad of ["", "owner", "SALES", "sales;", undefined, null]) expect(asHomeLayout(bad)).toBeNull();
+  });
+
+  it("client care: only my clients, at risk first, replies waiting, promises due soon or missed", async () => {
+    const { clientCareView } = await import("@/lib/home-layouts");
+    const clients = [
+      client("mine", { ghl: { lastInboundAt: "2026-11-07T12:00:00Z", lastOutboundAt: "2026-11-01T12:00:00Z", lastCallAt: null, lastCallSeconds: null, lastChannel: null, lastDirection: "inbound", unansweredOutbound: 0, syncedAt: "2026-11-10T00:00:00Z" } }),
+      client("mine-risk", { monthlyUsd: 100 }),
+      client("other", { ownerId: OTHER }),
+      client("old", { status: "canceled" }),
+    ];
+    const health = new Map<string, import("@/lib/types").HealthSummary | null>([
+      ["mine", { state: "needs_attention", reasons: ["Client reached out 3 days ago; no reply yet"] }],
+      ["mine-risk", { state: "at_risk", reasons: ["No contact in 40 days"] }],
+      ["other", { state: "at_risk", reasons: ["x"] }],
+    ]);
+    const checkIns = new Map<string, import("@/lib/types").CheckIn>([["mine-risk", { cadenceDays: 14, state: "overdue" }], ["other", { cadenceDays: 14, state: "overdue" }]]);
+    const v = clientCareView({
+      clients,
+      health,
+      checkIns,
+      actions: [
+        act({ id: "p1", promisedOn: "2026-11-12" }),
+        act({ id: "p2", promisedOn: "2026-11-30" }),
+        act({ id: "p3", promisedOn: "2026-11-05" }),
+        act({ id: "p4", promisedOn: "2026-11-11", client: { slug: "other", dbId: "db-other", name: "other" } }),
+      ],
+      priorities: [
+        { id: "a", title: "mine", reason: "", href: "/", ownerName: null, ownerId: ME, dueOn: null, when: "none", priority: "normal" },
+        { id: "b", title: "theirs", reason: "", href: "/", ownerName: null, ownerId: OTHER, dueOn: null, when: "none", priority: "normal" },
+        { id: "c", title: "unowned, my client", reason: "", href: "/", ownerName: null, ownerId: null, clientSlug: "mine", dueOn: null, when: "none", priority: "normal" },
+      ],
+      staffId: ME,
+      today: T,
+    });
+    expect(v.mine.map((c) => c.id)).toEqual(["mine", "mine-risk"]);
+    expect(v.attention.map((a) => a.client.id)).toEqual(["mine-risk", "mine"]);
+    expect(v.replyWaiting).toEqual([{ client: clients[0], days: 3 }]);
+    expect(v.checkInsOverdue).toBe(1);
+    expect(v.promises.map((a) => a.id)).toEqual(["p3", "p1"]);
+    expect(v.priorities.map((p) => p.id)).toEqual(["a", "c"]);
+    // Not linked to a team profile: everyone's current clients.
+    expect(clientCareView({ clients, health, checkIns, actions: [], priorities: [], staffId: null, today: T }).mine).toHaveLength(3);
+  });
+
+  it("work lead: review oldest first, stuck, overdue, unassigned (work orders and issues only)", async () => {
+    const { workLeadView } = await import("@/lib/home-layouts");
+    const v = workLeadView(
+      [
+        act({ id: "r2", status: "review", submittedAt: "2026-11-09T10:00:00Z" }),
+        act({ id: "r1", status: "review", submittedAt: "2026-11-08T10:00:00Z", dueOn: "2026-11-01" }),
+        act({ id: "stuck", status: "blocked", blockedReason: "No access (test)" }),
+        act({ id: "late", dueOn: "2026-11-03" }),
+        act({ id: "nobody", ownerId: null }),
+        act({ id: "follow", kind: "follow_up", ownerId: null, dueOn: "2026-11-01" }),
+        act({ id: "done", status: "done", dueOn: "2026-11-01" }),
+        act({ id: "gone", status: "canceled", ownerId: null }),
+      ],
+      T,
+    );
+    expect(v.review.map((a) => a.id)).toEqual(["r1", "r2"]);
+    expect(v.blocked.map((a) => a.id)).toEqual(["stuck"]);
+    expect(v.overdue.map((a) => a.id)).toEqual(["late"]);
+    expect(v.unassigned.map((a) => a.id)).toEqual(["nobody"]);
+  });
+
+  it("sales: lead follow-ups only (never client work), new selling-stage leads, appointments by day", async () => {
+    const { salesView } = await import("@/lib/home-layouts");
+    const v = salesView({
+      actions: [act({ id: "lead1", kind: "follow_up", client: null, leadGhlId: "abc123", dueOn: "2026-11-09" }), act({ id: "lead2", kind: "follow_up", client: null, leadGhlId: "abc124", dueOn: "2026-11-20" }), act({ id: "client-work" }), act({ id: "lead-done", leadGhlId: "abc125", status: "done" })],
+      deals: [
+        { ghlId: "d1", name: "New Lead (fictional)", stage: "New lead", value: 500, createdAt: "2026-11-08T10:00:00Z" },
+        { ghlId: "d2", name: "Old Lead (fictional)", stage: "New lead", value: 100, createdAt: "2026-10-01T10:00:00Z" },
+        { ghlId: "d3", name: "Onboarding (fictional)", stage: "Onboarding", value: 900, createdAt: "2026-11-09T10:00:00Z" },
+      ],
+      appointments: [
+        { startsAt: "2026-11-10T18:00:00Z", calendar: "Discovery (sample)", status: "confirmed" },
+        { startsAt: "2026-11-10T19:00:00Z", calendar: "Discovery (sample)", status: "cancelled" },
+        { startsAt: "2026-11-12T15:00:00Z", calendar: "Discovery (sample)", status: "confirmed" },
+        { startsAt: "2026-11-25T15:00:00Z", calendar: "Discovery (sample)", status: "confirmed" },
+      ],
+      today: T,
+      now: new Date("2026-11-10T14:00:00Z"),
+      tzDay: (iso) => iso.slice(0, 10),
+    });
+    expect(v.followUps.map((a) => a.id)).toEqual(["lead1", "lead2"]);
+    expect(v.followUpsDue).toBe(1);
+    expect(v.newLeads.map((d) => d.ghlId)).toEqual(["d1"]);
+    expect(v.appointmentsToday).toHaveLength(1);
+    expect(v.appointmentsWeek.map((a) => a.startsAt)).toEqual(["2026-11-12T15:00:00Z"]);
+  });
+});
