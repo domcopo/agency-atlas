@@ -1006,6 +1006,146 @@ select test.expect($$select * from public.my_client_contacts where client_slug =
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7n. Work Orders phase 1 (0017): two developers, comments, history, notices, archive.
+--     a3 = developer 1 (staff b3); a5 = developer 2 (staff b5).
+-- ---------------------------------------------------------------------------
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000a5', 'developer2@example.com');
+insert into public.staff (id, name, role) values ('00000000-0000-0000-0000-0000000000b5', 'Dev C (test)', 'seo_developer');
+insert into public.team_members (user_id, display_name, role, staff_id) values ('00000000-0000-0000-0000-0000000000a5', 'Developer 2 (test)', 'developer', '00000000-0000-0000-0000-0000000000b5');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.actions (id, client_id, kind, title, owner_staff_id, due_on, created_by) values ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-0000000000c1', 'work_order', 'Landing page (test)', '00000000-0000-0000-0000-0000000000b3', '2026-11-20', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'manager creates a work order for developer 1');
+select test.expect($$insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values ('00000000-0000-0000-0000-00000000f002', '00000000-0000-0000-0000-0000000000c1', 'work_order', 'SEO report (test)', '00000000-0000-0000-0000-0000000000b5', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'manager creates a work order for developer 2');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f002', 'Use the new logo (test)')$$, 1, 'manager comments on developer 2''s work order');
+select test.expect($$update public.actions set links = '{http://example.com}' where id = '00000000-0000-0000-0000-00000000f001'$$, -2, 'links must be https');
+select test.expect($$update public.actions set links = '{https://user:pw@example.com}' where id = '00000000-0000-0000-0000-00000000f001'$$, -2, 'links cannot carry a login');
+select test.expect($$update public.actions set links = '{https://a.example.com,https://b.example.com,https://c.example.com,https://d.example.com,https://e.example.com,https://f.example.com}' where id = '00000000-0000-0000-0000-00000000f001'$$, -2, 'at most 5 links');
+select test.expect($$update public.actions set links = '{https://www.figma.com/file/x,https://example.com}', start_on = '2026-11-12' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'manager adds links and a start date');
+select test.expect($$update public.actions set start_on = '2026-12-30' where id = '00000000-0000-0000-0000-00000000f001'$$, -2, 'start date cannot be after the due date');
+select test.expect($$update public.actions set archived_at = now() where id = '00000000-0000-0000-0000-00000000f002'$$, -1, 'managers cannot archive');
+commit;
+
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field in ('created', 'owner', 'start_on')$$, 3, 'the database records creation, assignee and start date');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a3' and kind = 'assigned' and action_id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer 1 is notified of the assignment');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a2'$$, 0, 'nobody is notified about their own change');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+-- Developer 1 cannot reach developer 2's work order, even by its exact id.
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'developer cannot read another developer''s work order by guessing its id');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'another developer''s work order is not in my_work');
+select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'developer cannot edit another developer''s work order');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'developer cannot read another developer''s comments');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'developer cannot read another developer''s history');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f002', 'x')$$, -1, 'developer cannot comment on another developer''s work order');
+select test.expect($$select * from public.notifications where user_id <> '00000000-0000-0000-0000-0000000000a3'$$, 0, 'developer cannot read other people''s notices');
+select test.expect($$update public.notifications set read_at = now() where user_id <> '00000000-0000-0000-0000-0000000000a3'$$, 0, 'developer cannot mark other people''s notices');
+-- No billing.
+select test.expect('select * from public.billing_records', 0, 'developer cannot read billing records');
+select test.expect('select * from public.billing_syncs', 0, 'developer cannot read billing refreshes');
+-- Their own work order: status, time, comments, reassignment request.
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000f001' and cardinality(links) = 2 and start_on is not null$$, 1, 'developer sees their work order with links and start date');
+select test.expect($$update public.actions set status = 'in_progress', actual_minutes = 90 where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer updates status and time on their own work order');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Hero section done (test)')$$, 1, 'developer comments on their own work order');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Email pat@example.com (test)')$$, -2, 'comments refuse email addresses');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Call 555-010-1234 (test)')$$, -2, 'comments refuse phone numbers');
+select test.expect($$insert into public.work_order_comments (action_id, author, body) values ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-0000000000a1', 'x')$$, -1, 'developer cannot comment in someone else''s name');
+select test.expect($$update public.actions set reassign_reason = 'Needs a designer (test)' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer asks for reassignment with a reason');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f001' and reassign_requested_at is not null$$, 1, 'the request time is stamped by the database');
+select test.expect($$update public.actions set reassign_reason = null where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot clear the request (owner or manager decides)');
+-- Nothing else.
+select test.expect($$update public.actions set owner_staff_id = '00000000-0000-0000-0000-0000000000b5' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot reassign');
+select test.expect($$update public.actions set due_on = '2026-12-01' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot change the due date');
+select test.expect($$update public.actions set start_on = '2026-11-11' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot change the start date');
+select test.expect($$update public.actions set links = '{}' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot change the links');
+select test.expect($$update public.actions set archived_at = now() where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot archive');
+select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot cancel');
+select test.expect($$insert into public.actions (client_id, kind, title, owner_staff_id, created_by) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3')$$, -1, 'developer cannot create work orders');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot delete work orders');
+select test.expect($$delete from public.work_order_comments$$, -1, 'nobody can delete comments');
+select test.expect($$update public.work_order_comments set body = 'x'$$, -1, 'nobody can edit comments');
+select test.expect($$insert into public.work_order_history (action_id, field) values ('00000000-0000-0000-0000-00000000f001', 'status')$$, -1, 'nobody can write history by hand');
+select test.expect($$insert into public.notifications (user_id, kind, title) values ('00000000-0000-0000-0000-0000000000a3', 'assigned', 'x')$$, -1, 'nobody can write notices by hand');
+-- Mute.
+select test.expect($$insert into public.notification_settings (muted) values ('{comment}')$$, 1, 'developer mutes comment notices for themselves');
+select test.expect($$insert into public.notification_settings (user_id, muted) values ('00000000-0000-0000-0000-0000000000a5', '{assigned}')$$, -1, 'nobody can change someone else''s mutes');
+select test.expect($$update public.notification_settings set muted = '{nagging}'$$, -2, 'only known notice kinds can be muted');
+commit;
+
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a1' and kind = 'reassign_request'$$, 1, 'the owner is notified of the reassignment request');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a1' and kind = 'comment'$$, 1, 'the owner is notified when a developer comments');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field = 'status' and old_value = 'open' and new_value = 'in_progress' and actor = '00000000-0000-0000-0000-0000000000a3'$$, 1, 'history records who changed the status, from what to what');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Looks good (test)')$$, 1, 'manager comments on developer 1''s work order');
+select test.expect($$update public.actions set due_on = '2026-11-25' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'manager moves the due date');
+select test.expect($$update public.actions set owner_staff_id = '00000000-0000-0000-0000-0000000000b5' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'manager reassigns the work order to developer 2');
+commit;
+
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a3' and action_id = '00000000-0000-0000-0000-00000000f001' and kind = 'comment'$$, 0, 'a muted kind is not sent');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a3' and action_id = '00000000-0000-0000-0000-00000000f001' and kind = 'due_changed'$$, 1, 'developer 1 was told the due date moved');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a3' and action_id = '00000000-0000-0000-0000-00000000f001' and kind = 'unassigned'$$, 1, 'developer 1 is told it was reassigned away');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a5' and kind = 'assigned' and action_id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer 2 is told it is theirs now');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f001' and reassign_reason is null and reassign_requested_at is null$$, 1, 'reassigning answers the request');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field = 'owner' and old_value = '00000000-0000-0000-0000-0000000000b3'$$, 1, 'history records the reassignment');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+-- Developer 1 loses access the moment it's reassigned.
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'after reassignment, developer 1 cannot read the work order');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'after reassignment, it leaves developer 1''s list');
+select test.expect($$update public.actions set status = 'blocked' where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'after reassignment, developer 1 cannot edit it');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'after reassignment, developer 1 cannot read its comments');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'after reassignment, developer 1 cannot read its history');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'x')$$, -1, 'after reassignment, developer 1 cannot comment');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a5","aal":"aal2"}';
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f001'$$, 2, 'developer 2 now sees the comment thread');
+-- assigned f002, manager's comment on f002, assigned f001
+select test.expect($$select * from public.notifications$$, 3, 'developer 2 sees only their own notices');
+select test.expect($$update public.notifications set read_at = now()$$, 3, 'developer 2 marks their notices read');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a5","aal":"aal1"}';
+select test.expect($$select * from public.notifications$$, 0, 'no notices without two-factor');
+select test.expect($$select * from public.work_order_comments$$, 0, 'no comments without two-factor');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.notifications$$, -1, 'signed out cannot read notices');
+select test.expect($$select * from public.work_order_comments$$, -1, 'signed out cannot read comments');
+select test.expect($$select * from public.work_order_history$$, -1, 'signed out cannot read history');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.actions set archived_at = now() where id = '00000000-0000-0000-0000-00000000f002'$$, -2, 'open work cannot be archived (cancel it instead)');
+select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000f002'$$, 1, 'owner marks a work order done');
+select test.expect($$update public.actions set archived_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000f002'$$, 1, 'owner archives finished work');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f002' and archived_at > now() - interval '1 minute'$$, 1, 'the archive time is stamped by the database, not typed');
+select test.expect($$update public.actions set archived_at = null where id = '00000000-0000-0000-0000-00000000f002'$$, 1, 'owner can un-archive');
+select test.expect($$delete from public.work_order_history$$, -1, 'even the owner cannot delete history');
+select test.expect($$update public.work_order_history set new_value = 'x'$$, -1, 'even the owner cannot edit history');
+select test.expect($$delete from public.notifications$$, -1, 'notices are never deleted');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f002'$$, -1, 'even the owner cannot delete work orders');
+commit;
+
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f002' and field = 'archived'$$, 2, 'history records archive and un-archive');
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

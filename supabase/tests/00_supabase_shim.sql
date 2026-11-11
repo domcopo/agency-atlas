@@ -21,7 +21,8 @@ create table auth.users (id uuid primary key, email text);
 create function auth.uid() returns uuid
 language sql stable
 as $$
-  select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
+  -- Like Supabase's own: nobody signed in (no or empty claims) = null, not an error.
+  select nullif(coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb ->> 'sub', '')::uuid
 $$;
 grant execute on function auth.uid() to anon, authenticated;
 
