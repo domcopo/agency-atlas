@@ -732,6 +732,12 @@ export interface WorkOrderDraft {
   assigneeId: string | null;
   assigneeName: string | null;
   assigneeWhy: string;
+  /** Smart add: the AI's suggested days from today, and the checked due date (plain rules). */
+  aiDueDays?: number | null;
+  dueOn?: string | null;
+  dueNote?: string | null;
+  /** The draft text looks like it holds an email or phone number: edit before adding. */
+  contactWarning?: boolean;
 }
 
 export interface WorkOrderDrafts {

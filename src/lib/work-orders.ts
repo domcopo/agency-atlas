@@ -180,3 +180,69 @@ export function historyText(h: HistoryEntry): string {
 }
 
 export { STATUS_WORD, PRIORITY_WORD };
+
+// ---------------------------------------------------------------------------
+// Smart add (docs/SMART_ADD_PLAN.md): who's free, and a realistic deadline.
+// The AI suggests; these plain rules check. A person still confirms every draft.
+// ---------------------------------------------------------------------------
+
+/** Focused work hours one person gets through in a day (for deadline checks). */
+export const CAPACITY_MINUTES_PER_DAY = 300;
+/** If an item has no estimate, count it as this much. */
+export const DEFAULT_ESTIMATE_MINUTES = 60;
+
+export interface PersonLoad {
+  staffId: string;
+  openItems: number;
+  openMinutes: number;
+  withoutEstimate: number;
+  overdue: number;
+  dueNext7: number;
+}
+
+/** Each person's open work (not done, canceled or waiting for review), from plain records. */
+export function personLoads(actions: ClientAction[], staffIds: string[], today: string): Map<string, PersonLoad> {
+  const out = new Map<string, PersonLoad>(staffIds.map((id) => [id, { staffId: id, openItems: 0, openMinutes: 0, withoutEstimate: 0, overdue: 0, dueNext7: 0 }]));
+  const weekEnd = new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
+  for (const a of actions) {
+    if (!a.ownerId || a.status === "done" || a.status === "canceled" || a.status === "review" || a.archivedAt) continue;
+    const p = out.get(a.ownerId);
+    if (!p) continue;
+    p.openItems++;
+    p.openMinutes += a.estMinutes ?? DEFAULT_ESTIMATE_MINUTES;
+    if (!a.estMinutes) p.withoutEstimate++;
+    if (a.dueOn && a.dueOn < today) p.overdue++;
+    else if (a.dueOn && a.dueOn <= weekEnd) p.dueNext7++;
+  }
+  return out;
+}
+
+const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+const weekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay(); // 0 Sunday … 6 Saturday
+
+/** Saturday or Sunday → the Monday after. */
+export function nextWorkday(day: string): string {
+  const d = weekday(day);
+  return d === 6 ? addDays(day, 2) : d === 0 ? addDays(day, 1) : day;
+}
+
+/**
+ * A draft's due date, checked: never in the past, never on a weekend, and never sooner
+ * than the person could fit it in after their open work (urgent work jumps the queue).
+ * The AI's suggestion is kept when it's realistic; otherwise it's moved, with the reason.
+ */
+export function checkDraftDue(input: { today: string; aiDays: number | null | undefined; priority: ClientAction["priority"]; estMinutes: number | null; load: PersonLoad | null }): { dueOn: string; moved: string | null } {
+  const { today, aiDays, priority, estMinutes, load } = input;
+  const est = estMinutes ?? DEFAULT_ESTIMATE_MINUTES;
+  const queue = priority === "critical" || !load ? 0 : load.openMinutes;
+  const earliestDays = Math.max(0, Math.ceil((queue + est) / CAPACITY_MINUTES_PER_DAY) - 1);
+  const earliest = nextWorkday(addDays(today, earliestDays));
+  const wanted = Number.isInteger(aiDays) && aiDays! >= 0 && aiDays! <= 90 ? nextWorkday(addDays(today, aiDays!)) : null;
+  if (wanted && wanted >= earliest) return { dueOn: wanted, moved: null };
+  const reason = !wanted
+    ? "No date was suggested, so this is the earliest realistic day."
+    : load && queue > 0
+      ? `Moved later: the person already has about ${Math.round(load.openMinutes / 60)} h of open work.`
+      : "Moved later: the work needs more time than that.";
+  return { dueOn: earliest, moved: reason };
+}

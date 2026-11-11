@@ -811,6 +811,52 @@ export const getWorkOrderDetail = cache(async (id: string) => {
   };
 });
 
+/** In-app notices (0017). Written only by the database; each person reads only their own. */
+export interface Notice {
+  id: string;
+  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow";
+  title: string;
+  actionId: string | null;
+  at: string;
+  read: boolean;
+}
+export const NOTICE_KINDS: { kind: Notice["kind"]; label: string; who: "developer" | "owner" | "everyone" }[] = [
+  { kind: "assigned", label: "Assigned to me", who: "everyone" },
+  { kind: "unassigned", label: "Reassigned away from me", who: "everyone" },
+  { kind: "due_changed", label: "Due date changed", who: "everyone" },
+  { kind: "comment", label: "New comments", who: "everyone" },
+  { kind: "due_tomorrow", label: "Due tomorrow (shown when I open Atlas)", who: "everyone" },
+  { kind: "reassign_request", label: "A developer asks to be reassigned", who: "owner" },
+];
+
+/**
+ * My notices, newest first, plus "due tomorrow" for my own open work orders (worked out
+ * when the page loads: nothing is scheduled or sent). null = not set up, or previewing.
+ */
+export const getNotices = cache(async (): Promise<{ items: Notice[]; unread: number; muted: string[] } | null> => {
+  if (!usesDatabase()) return null;
+  const viewer = await getDeveloperViewer();
+  if (viewer?.preview) return null;
+  const me = await getMember();
+  if (!me) return null;
+  const db = await createDatabaseClient();
+  const [n, st] = await Promise.all([
+    db.from("notifications").select("id, kind, title, action_id, created_at, read_at").order("created_at", { ascending: false }).limit(40),
+    db.from("notification_settings").select("muted").maybeSingle(),
+  ]);
+  if (n.error) return null; // before 0017
+  const muted = Array.isArray(st.data?.muted) ? (st.data!.muted as string[]) : [];
+  const items: Notice[] = (n.data ?? []).map((r) => ({ id: r.id, kind: r.kind, title: r.title, actionId: r.action_id, at: r.created_at, read: Boolean(r.read_at) }));
+  const tomorrow = new Date(Date.parse(`${today()}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  if (!muted.includes("due_tomorrow") && me.staffId) {
+    const mine = viewer ? await getDeveloperActions() : (await getActions()).actions.filter((a) => a.ownerId === me.staffId);
+    for (const a of mine.filter((x) => x.kind === "work_order" && x.dueOn === tomorrow && x.status !== "done" && x.status !== "canceled" && x.status !== "review"))
+      items.unshift({ id: `due-${a.id}`, kind: "due_tomorrow", title: a.title, actionId: a.id, at: `${tomorrow}T00:00:00Z`, read: false });
+  }
+  // "Due tomorrow" lines are reminders on the list, not counted (no nagging badge).
+  return { items, unread: items.filter((i) => !i.read && i.kind !== "due_tomorrow").length, muted };
+});
+
 /** The floating Work Orders button's count: overdue or urgent open work orders (yours, if you're a developer). */
 export const getWorkOrderBadge = cache(async (): Promise<number | null> => {
   if (!usesDatabase()) return null;
@@ -1490,7 +1536,17 @@ export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> 
     staff: team.members.map((m) => ({ id: m.id, name: m.name })),
     ai: { configured: ai.configured, tablesReady: ai.tablesReady, blocked: ai.level === "blocked", spentUsd: ai.spentUsd, lastRuns },
     billing: billing ? { state: billing.state, records: billing.records } : null,
+    workOrderStatusSince: await workOrderStatusSince(db),
   };
+}
+
+/** When each work order's status last changed, from the database's own history (0017). null before 0017. */
+async function workOrderStatusSince(db: DbClient): Promise<Map<string, string> | null> {
+  const { data, error } = await db.from("work_order_history").select("action_id, at").in("field", ["status", "created"]).order("at", { ascending: true }).limit(20000);
+  if (error) return null;
+  const out = new Map<string, string>();
+  for (const r of data ?? []) out.set(r.action_id as string, r.at as string); // later rows win
+  return out;
 }
 
 /** Owner summary status for the Data Safety screen: last published, last dashboard read. null before 0012 or for non-owners. */

@@ -1764,3 +1764,78 @@ describe("Work Orders phase 1 (0017)", () => {
     expect(previewAllows("/work/orders/x/../../billing")).toBe(false);
   });
 });
+
+describe("Smart add, notices and AI CEO work order numbers (approved 2026-11-11)", () => {
+  const T = "2026-11-11"; // a Wednesday
+  const act = (over: Partial<import("@/lib/types").ClientAction>): import("@/lib/types").ClientAction => ({ id: "x", kind: "work_order", title: "Task (test)", notes: null, priority: "normal", status: "open", dueOn: null, doneAt: null, createdAt: "2026-11-01T10:00:00Z", ownerId: "s1", ownerName: "Dana Example (fictional)", client: { slug: "pat-example", dbId: "db1", name: "Pat Example (fictional)" }, leadGhlId: null, ...over });
+
+  it("who's free: open hours from estimates (60 min if none), overdue, due in the next 7 days; review and finished work don't count", async () => {
+    const { personLoads } = await import("@/lib/work-orders");
+    const l = personLoads(
+      [act({ estMinutes: 120, dueOn: "2026-11-01" }), act({ dueOn: "2026-11-15" }), act({ status: "review", estMinutes: 600 }), act({ status: "done", estMinutes: 600 }), act({ ownerId: "s2", estMinutes: 30 })],
+      ["s1", "s2", "s3"],
+      T,
+    );
+    expect(l.get("s1")).toEqual({ staffId: "s1", openItems: 2, openMinutes: 180, withoutEstimate: 1, overdue: 1, dueNext7: 1 });
+    expect(l.get("s2")?.openMinutes).toBe(30);
+    expect(l.get("s3")?.openItems).toBe(0);
+  });
+
+  it("deadlines: the AI's date is kept when realistic, moved when not, never in the past or on a weekend", async () => {
+    const { checkDraftDue, nextWorkday } = await import("@/lib/work-orders");
+    const busy = { staffId: "s1", openItems: 5, openMinutes: 1200, withoutEstimate: 0, overdue: 0, dueNext7: 2 }; // 20 h queued
+    expect(nextWorkday("2026-11-14")).toBe("2026-11-16"); // Saturday → Monday
+    expect(checkDraftDue({ today: T, aiDays: 7, priority: "normal", estMinutes: 120, load: busy })).toEqual({ dueOn: "2026-11-18", moved: null });
+    const moved = checkDraftDue({ today: T, aiDays: 0, priority: "normal", estMinutes: 120, load: busy });
+    expect(moved.dueOn).toBe("2026-11-16"); // 22 h at 5 h/day = 5th day (Sun) → Monday
+    expect(moved.moved).toMatch(/20 h of open work/);
+    expect(checkDraftDue({ today: T, aiDays: 0, priority: "critical", estMinutes: 120, load: busy })).toEqual({ dueOn: T, moved: null }); // urgent jumps the queue
+    expect(checkDraftDue({ today: T, aiDays: -3, priority: "normal", estMinutes: 60, load: null }).dueOn).toBe(T);
+    expect(checkDraftDue({ today: T, aiDays: null, priority: "low", estMinutes: 60, load: null }).moved).toMatch(/No date was suggested/);
+  });
+
+  it("AI CEO: open, overdue, blocked, due this week, done per week, the overdue/blocked list with first names, and both alerts", async () => {
+    const { buildOwnerSummary } = await import("@/lib/owner-summary");
+    const now = new Date("2026-11-11T17:00:00Z");
+    const s = buildOwnerSummary({
+      now,
+      clients: [],
+      actions: [
+        act({ id: "w1", title: "Fix the form (test)", dueOn: "2026-11-08" }), // 3 days late → urgent
+        act({ id: "w2", title: "New page (test)", dueOn: "2026-11-10" }), // 1 day late
+        act({ id: "w3", title: "Waiting (test)", status: "blocked", dueOn: "2026-11-20" }),
+        act({ id: "w4", title: "Soon (test)", dueOn: "2026-11-14" }),
+        act({ id: "w5", status: "done", doneAt: "2026-11-10T15:00:00Z" }),
+        act({ id: "w6", title: "Call 555-010-1234 (test)", dueOn: "2026-11-01" }),
+        act({ id: "w7", status: "canceled", dueOn: "2026-11-01" }),
+        act({ id: "f1", kind: "follow_up", dueOn: "2026-11-01" }),
+      ],
+      opportunities: null,
+      latestHealth: null,
+      trends: new Map(),
+      detections: [],
+      staff: [],
+      ai: { configured: false, tablesReady: false, blocked: false, spentUsd: 0, lastRuns: {} },
+      workOrderStatusSince: new Map([["w3", "2026-11-05T10:00:00Z"]]),
+    });
+    const v = (k: string) => s.metrics.filter((m) => m.key === k).at(-1)?.value;
+    expect([v("work_orders_open"), v("work_orders_overdue"), v("work_orders_blocked"), v("work_orders_due_this_week"), v("work_orders_done_this_week")]).toEqual([5, 3, 1, 1, 1]);
+    expect(s.metrics.filter((m) => m.key === "work_orders_done_this_week")).toHaveLength(12);
+    const list = s.lists.find((l) => l.key === "work_orders_overdue_or_blocked")!;
+    expect(list.items.map((i) => i.name)).toEqual(["(title hidden: it looked like contact details)", "Fix the form (test)", "New page (test)", "Waiting (test)"]);
+    expect(list.items[1]?.detail).toBe("Pat Example (fictional) · Dana · due 2026-11-08 · New");
+    expect(s.alerts).toContainEqual({ severity: "urgent", title: "Work orders overdue by 2+ days", count: 2 });
+    expect(s.alerts).toContainEqual({ severity: "watch", title: "Work orders blocked or waiting on the client for 3+ days", count: 1 });
+    const { findLeaks } = await import("@/lib/owner-summary");
+    expect(findLeaks(s)).toEqual([]);
+  });
+
+  it("AI CEO: blank is not zero when work orders aren't set up; no 'stuck' alert without history", async () => {
+    const { buildOwnerSummary } = await import("@/lib/owner-summary");
+    const base = { now: new Date("2026-11-11T17:00:00Z"), clients: [], opportunities: null, latestHealth: null, trends: new Map(), detections: [], staff: [], ai: { configured: false, tablesReady: false, blocked: false, spentUsd: 0, lastRuns: {} } };
+    const none = buildOwnerSummary({ ...base, actions: null });
+    for (const k of ["work_orders_open", "work_orders_overdue", "work_orders_blocked", "work_orders_due_this_week", "work_orders_done_this_week"]) expect(new Set(none.metrics.filter((m) => m.key === k).map((m) => m.value)), k).toEqual(new Set([null]));
+    const noHistory = buildOwnerSummary({ ...base, actions: [act({ status: "blocked" })], workOrderStatusSince: null });
+    expect(noHistory.alerts.find((a) => a.title.startsWith("Work orders blocked"))).toBeUndefined();
+  });
+});

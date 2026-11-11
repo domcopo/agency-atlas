@@ -20,10 +20,11 @@ export interface WorkOrderDefaults {
   ownerId?: string;
   est?: number | null;
   notes?: string;
+  due?: string;
 }
 
 /** Nearest estimate choice (AI estimates can be any number). */
-function nearestEst(min: number | null | undefined): string {
+export function nearestEst(min: number | null | undefined): string {
   if (!min) return "";
   return String(EST_OPTIONS.reduce((best, [v]) => (Math.abs(v - min) < Math.abs(best - min) ? v : best), EST_OPTIONS[0][0] as number));
 }
@@ -101,7 +102,7 @@ export function WorkOrderForm({
         </label>
         <label className="block text-xs text-muted">
           Due
-          <input name="due" type="date" defaultValue={today} className={field} />
+          <input name="due" type="date" defaultValue={defaults.due ?? today} className={field} />
         </label>
         <label className="block text-xs text-muted">
           Priority

@@ -43,7 +43,14 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
         {dev.staffId ? (
           <>
             <DeveloperWork items={mine} today={today} readOnly={dev.preview} stepsReady={stepsReady} />
-            <p className="mt-2 px-1 text-[11px] text-faint">Stuck? Say on what, so a manager can help. Ask a manager to change steps or dates.</p>
+            <p className="mt-2 px-1 text-[11px] text-faint">
+              Stuck? Say on what, so a manager can help. Ask a manager to change steps or dates.{" "}
+              {!dev.preview && (
+                <Link href="/notifications" className="font-semibold text-violet">
+                  Notices &amp; mute
+                </Link>
+              )}
+            </p>
             <DeveloperContacts contacts={contacts} today={today} />
           </>
         ) : (

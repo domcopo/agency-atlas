@@ -513,9 +513,19 @@ describe("owner summary (0012): one read-only route for the owner's dashboard", 
     expect(access).not.toMatch(/console\./); // the key is never logged
   });
 
-  it("the summary itself is built from totals: the builder never reads notes, messages or titles", () => {
+  it("the summary itself is built from totals: the builder never reads notes, messages, steps, reasons or comments", () => {
     const builder = readFileSync(join(ROOT, "src/lib/owner-summary.ts"), "utf8");
-    expect(builder).not.toMatch(/\.(notes|followUp|check|steps|sourceNote|sourceLink|reviewNote|blockedReason|why|title)\b/);
+    expect(builder).not.toMatch(/\.(notes|followUp|check|steps|sourceNote|sourceLink|reviewNote|blockedReason|reassignReason|why|body)\b/);
+  });
+
+  it("titles: only work order titles, only in the overdue/blocked list (owner-approved 2026-11-10), checked for contact details first", () => {
+    const builder = readFileSync(join(ROOT, "src/lib/owner-summary.ts"), "utf8");
+    const reads = [...builder.matchAll(/\.title\b/g)];
+    expect(reads).toHaveLength(1);
+    const block = builder.slice(builder.indexOf('key: "work_orders_overdue_or_blocked"'), builder.indexOf("// --- Billing: overdue clients"));
+    expect(block).toMatch(/const label = a\.title;/);
+    expect(block).toMatch(/LEAK_PATTERNS\.some\(\(p\) => p\.re\.test\(label\)\)/);
+    expect(block).toMatch(/firstName\(a\.ownerName\)/);
   });
 });
 
@@ -649,5 +659,39 @@ describe("Work Orders phase 1 (0017): who may do what, no GoHighLevel", () => {
       const text = readFileSync(join(ROOT, f), "utf8");
       expect(text, f).not.toMatch(/@\/lib\/ghl|@\/lib\/ai|askAi|getBilling/);
     }
+  });
+});
+
+describe("Smart add and notices: suggestions only, in-app only", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const fn = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const next = actions.indexOf("export async function", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("Smart add creates nothing itself: owner/managers only, no database writes except the cost log, pictures never stored", () => {
+    const q = fn("quickAddWorkOrders");
+    expect(q).toMatch(/me\.role !== "owner" && me\.role !== "manager"/);
+    expect(q).not.toMatch(/\.from\("actions"\)|\.insert\(|\.update\(|\.upsert\(|storage/);
+    expect(q).toMatch(/logAiUsage\(db, "quick_add", result\)/);
+    expect(q).toMatch(/checkDraftDue\(/);
+  });
+
+  it("the one-tap Confirm goes through the normal add-work-order action (same checks as typing it in)", () => {
+    const form = readFileSync(join(ROOT, "src/components/forms/QuickAddWorkOrders.tsx"), "utf8");
+    expect(form).toMatch(/useActionState\(createWorkOrder/);
+    expect(form).not.toMatch(/fetch\(|XMLHttpRequest|localStorage|indexedDB/);
+  });
+
+  it("notices: people only read and mark their own; nothing is sent outside Atlas; 'due tomorrow' isn't counted on the badge", () => {
+    expect(fn("markNoticesRead")).toMatch(/from\("notifications"\)\.update\(\{ read_at:/);
+    expect(fn("saveNoticeMutes")).toMatch(/NOTICE_KIND_SET\.has/);
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    const getter = ds.slice(ds.indexOf("export const getNotices"), ds.indexOf("/** The floating Work Orders button"));
+    expect(getter).toMatch(/i\.kind !== "due_tomorrow"/);
+    expect(getter).toMatch(/viewer\?\.preview\) return null/);
+    // No email/SMS/WhatsApp sending services or their addresses (reading a past message's channel name is fine).
+    expect(findMatches([/\bresend\b|nodemailer|twilio|sendgrid|postmark|graph\.facebook\.com|api\.whatsapp|wa\.me\//i])).toEqual([]);
   });
 });

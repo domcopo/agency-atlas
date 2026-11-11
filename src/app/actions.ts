@@ -49,7 +49,7 @@ import {
 } from "@/lib/ghl/client";
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
 import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
-import { cleanLinks, contactDetailsIn, hoursToMinutes } from "@/lib/work-orders";
+import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -821,6 +821,37 @@ export async function archiveWorkOrder(form: FormData) {
   refreshWorkOrder(id);
 }
 
+/** Mark all my notices read (the database lets each person change only their own). */
+export async function markNoticesRead() {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("notifications").update({ read_at: new Date().toISOString() }).is("read_at", null);
+  if (error) console.warn(`Mark read refused: ${error.code}`);
+  revalidatePath("/", "layout");
+}
+
+const NOTICE_KIND_SET = new Set(["assigned", "unassigned", "due_changed", "comment", "reassign_request", "due_tomorrow"]);
+
+/** Which notice kinds I've muted (my own settings only; the database checks it's me). */
+export async function saveNoticeMutes(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return { error: "Please sign in again." };
+  const muted = form.getAll("muted").map(String).filter((k) => NOTICE_KIND_SET.has(k));
+  const db = await createDatabaseClient();
+  const upd = await db.from("notification_settings").update({ muted, updated_at: new Date().toISOString() }).eq("user_id", me.userId).select("user_id");
+  let error = upd.error;
+  if (!error && !upd.data?.length) ({ error } = await db.from("notification_settings").insert({ muted }));
+  if (error) {
+    console.warn(`Mute settings refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "This needs one setup step first (0017 SQL)." : "Couldn't save." };
+  }
+  revalidatePath("/notifications");
+  return { ok: true };
+}
+
 /** "Set up clients" screen: owner and plan for one client in one save (owner only). */
 export async function saveClientSetup(form: FormData) {
   await notWhilePreviewing();
@@ -1380,6 +1411,9 @@ function imageType(b: Uint8Array): "image/jpeg" | "image/png" | "image/webp" | n
 }
 
 const MAX_PHOTO_BYTES = 1_500_000;
+const MAX_PHOTOS = 3;
+/** The server's request limit is 2 MB (next.config); leave room for the text. */
+const MAX_PHOTOS_TOTAL_BYTES = 1_850_000;
 
 export type QuickAddState = { error?: string; drafts?: WorkOrderDrafts; costUsd?: number; hadPhoto?: boolean };
 
@@ -1394,16 +1428,22 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const note = typeof form.get("note") === "string" ? String(form.get("note")).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").trim().slice(0, 3000) : "";
-  const file = form.get("image");
-  let image: { mediaType: "image/jpeg" | "image/png" | "image/webp"; base64: string } | undefined;
-  if (file instanceof File && file.size > 0) {
+  // Up to 3 pictures (Smart add), each shrunk on the phone first, checked by its real file type, never saved.
+  const files = form.getAll("image").filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length > MAX_PHOTOS) return { error: `Up to ${MAX_PHOTOS} pictures at a time.` };
+  if (files.reduce((n, f) => n + f.size, 0) > MAX_PHOTOS_TOTAL_BYTES) return { error: "Those pictures are too big together. Try fewer, or screenshots." };
+  const images: { mediaType: "image/jpeg" | "image/png" | "image/webp"; base64: string }[] = [];
+  for (const file of files) {
     if (file.size > MAX_PHOTO_BYTES) return { error: "That photo is too big. Try a screenshot or a smaller photo." };
     const bytes = new Uint8Array(await file.arrayBuffer());
     const mediaType = imageType(bytes);
     if (!mediaType) return { error: "Only photos and screenshots (JPEG, PNG or WebP) work here." };
-    image = { mediaType, base64: Buffer.from(bytes).toString("base64") };
+    images.push({ mediaType, base64: Buffer.from(bytes).toString("base64") });
   }
+  const image = images.length > 0;
   if (!note && !image) return { error: "Type or say what needs doing, or add a photo." };
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add work orders." };
   const ops = await getOps();
   // Before 0013 the cost log can't record this feature, so don't spend anything.
   if (!ops.cancel) return { error: "Quick add needs one setup step first (0013 SQL)." };
@@ -1411,23 +1451,33 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
   const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
   const book = buildCodebook(current);
   const staff = buildStaffBook(team.map((m) => ({ id: m.id, name: m.name })));
-  const open = ops.actions.filter((a) => a.status !== "done");
+  // Who's free, in plain numbers (open hours from estimates, overdue, due in the next 7 days).
+  const loads = personLoads(ops.actions, team.map((m) => m.id), ops.today);
   const data = {
     today: ops.today,
     note: note ? redactStaff(redact(note, book), staff) : null,
-    picture_attached: Boolean(image),
+    pictures_attached: images.length,
     clients: current.map((c) => ({ code: book.codeOf.get(c.id), status: c.status, services: c.services.length ? c.services : ["not recorded"], owner: c.ownerId ? (staff.codeOf.get(c.ownerId) ?? "unknown") : "none" })),
     team: team.map((m) => {
-      const mine = open.filter((a) => a.ownerId === m.id);
-      return { code: staff.codeOf.get(m.id), role: m.role, open_work: mine.length, est_hours_open: Math.round(mine.reduce((n, a) => n + (a.estMinutes ?? 60), 0) / 6) / 10 };
+      const l = loads.get(m.id)!;
+      return { code: staff.codeOf.get(m.id), role: m.role, open_items: l.openItems, open_hours: Math.round(l.openMinutes / 6) / 10, items_without_estimate: l.withoutEstimate, overdue: l.overdue, due_next_7_days: l.dueNext7 };
     }),
   };
-  const result = await askAi({ task: QUICK_ADD_TASK, data, schema: QUICK_ADD_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining, image });
+  const result = await askAi({ task: QUICK_ADD_TASK, data, schema: QUICK_ADD_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining, images });
   const db = await createDatabaseClient();
   await logAiUsage(db, "quick_add", result);
   revalidatePath("/", "layout");
   if (!result.ok) return { error: result.message };
-  return { drafts: restoreQuickAdd(result.data, book, staff), costUsd: result.costUsd, hadPhoto: Boolean(image) };
+  const drafts = restoreQuickAdd(result.data, book, staff);
+  // The AI suggests a date; plain rules check it against the person's real load.
+  for (const d of drafts.orders) {
+    const checked = checkDraftDue({ today: ops.today, aiDays: d.aiDueDays, priority: d.priority, estMinutes: d.estMinutes, load: d.assigneeId ? (loads.get(d.assigneeId) ?? null) : null });
+    d.dueOn = checked.dueOn;
+    d.dueNote = checked.moved;
+    // A draft that still carries contact details can't be confirmed in one tap.
+    d.contactWarning = contactDetailsIn([d.title, ...d.steps, d.why].join("\n")).length > 0;
+  }
+  return { drafts, costUsd: result.costUsd, hadPhoto: image };
 }
 
 /**

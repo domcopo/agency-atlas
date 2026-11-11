@@ -91,6 +91,16 @@ export interface OwnerSummaryInput {
    * last refresh failed, too old), every billing value is null, never 0.
    */
   billing?: { state: BillingState; records: BillingRecord[] } | null;
+  /**
+   * Work orders (0017): when each one's status last changed (from the database's own
+   * history), by work order id. null/missing = history not set up yet.
+   */
+  workOrderStatusSince?: Map<string, string> | null;
+}
+
+/** First name only, for the owner's dashboard. */
+export function firstName(name: string | null | undefined): string {
+  return (name ?? "").trim().split(/\s+/)[0] || "No one";
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +208,19 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
   billingMonth("overdue_invoices_usd", bt?.overdueUsd, "usd", "owed on invoices past their due date right now");
   billingMonth("overdue_invoices_count", bt?.overdueCount, "count", "invoices past their due date right now");
   billingMonth("failed_payments_count", bt?.failedThisMonth, "count", "failed card payments this month");
+  // --- Work orders (totals right now; done per week) ------------------------------
+  const work = actions ? actions.filter((a) => a.kind === "work_order" && a.status !== "canceled" && !a.archivedAt) : null;
+  const openWork = work ? work.filter((a) => a.status !== "done") : null;
+  const nextWeek = addDays(today, 6);
+  const current = weeks[weeks.length - 1]!;
+  const nowMetric = (key: string, value: number | null, note: string) =>
+    metrics.push({ key, period: "week", period_start: current.start, value, unit: "count", note: value === null ? "work orders not set up yet" : note });
+  nowMetric("work_orders_open", openWork ? openWork.length : null, "open right now");
+  nowMetric("work_orders_overdue", openWork ? openWork.filter((a) => a.dueOn !== null && a.dueOn < today).length : null, "past their due date right now");
+  nowMetric("work_orders_blocked", openWork ? openWork.filter((a) => a.status === "blocked").length : null, "marked blocked right now");
+  nowMetric("work_orders_due_this_week", openWork ? openWork.filter((a) => a.dueOn !== null && a.dueOn >= today && a.dueOn <= nextWeek).length : null, "due in the next 7 days");
+  for (const w of weeks)
+    add("work_orders_done_this_week", w, work ? work.filter((a) => a.status === "done" && a.doneAt && inWeek(nyDate(a.doneAt), w)).length : null, "count", work ? "work orders finished" : "work orders not set up yet");
   metrics.push({ key: "ai_spend", period: "month", period_start: month, value: ai.tablesReady ? Math.round(ai.spentUsd * 100) / 100 : null, unit: "usd", note: "AI cost this month (exact, from the cost log)" });
 
   // --- Lists -----------------------------------------------------------------
@@ -248,6 +271,23 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
       .map(([name, n]) => ({ name, detail: [`${n.overdue} overdue`, `${n.blocked} blocked`, n.review ? `${n.review} waiting for review` : ""].filter(Boolean).join(", ") }));
   }
 
+  // --- Work orders overdue or blocked: title, client, developer's first name, due, status.
+  // No notes, steps or comments. A title that looks like contact details is hidden.
+  const workList: SummaryList = { key: "work_orders_overdue_or_blocked", label: "Work orders overdue or blocked", items: [] };
+  if (!openWork) workList.note = "work orders not set up yet";
+  else {
+    const STATUS = { open: "New", in_progress: "In progress", waiting: "Waiting on client", blocked: "Blocked", review: "In review", done: "Done", canceled: "Canceled" } as const;
+    workList.items = openWork
+      .filter((a) => a.status === "blocked" || (a.dueOn !== null && a.dueOn < today))
+      .sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))
+      .slice(0, 25)
+      .map((a) => {
+        const label = a.title;
+        const safe = LEAK_PATTERNS.some((p) => p.re.test(label)) ? "(title hidden: it looked like contact details)" : label.slice(0, 120);
+        return { name: safe, detail: [a.client?.name ?? "No client", firstName(a.ownerName), a.dueOn ? `due ${a.dueOn}` : "no due date", STATUS[a.status]].join(" · ") };
+      });
+  }
+
   // --- Billing: overdue clients (names of matched clients only) -----------------
   const overdueClients: SummaryList = { key: "overdue_clients", label: "Clients with overdue invoices", items: [] };
   let urgentPayments = 0;
@@ -282,6 +322,17 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
   const ideas = count((d) => d.kind === "opportunity");
   const unreadable = real.find((d) => d.id === "d_skip");
   if (atRiskCount) alerts.push({ severity: "urgent", title: "Clients at risk", count: atRiskCount });
+  if (openWork) {
+    const twoDaysAgo = addDays(today, -2);
+    const late = openWork.filter((a) => a.dueOn !== null && a.dueOn <= twoDaysAgo).length;
+    if (late) alerts.push({ severity: "urgent", title: "Work orders overdue by 2+ days", count: late });
+    const since = input.workOrderStatusSince;
+    if (since) {
+      const cutoff = now.getTime() - 3 * 86_400_000;
+      const stuck = openWork.filter((a) => (a.status === "blocked" || a.status === "waiting") && since.has(a.id) && Date.parse(since.get(a.id)!) <= cutoff).length;
+      if (stuck) alerts.push({ severity: "watch", title: "Work orders blocked or waiting on the client for 3+ days", count: stuck });
+    }
+  }
   if (urgentPayments) alerts.push({ severity: "urgent", title: "Payments need attention", count: urgentPayments });
   if (unreadable) alerts.push({ severity: "urgent", title: "Client records couldn't be read", count: 1 });
   if (attention) alerts.push({ severity: "watch", title: "Clients needing attention", count: attention });
@@ -300,7 +351,7 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     business: "yo-marketing-co",
     generated_at: now.toISOString(),
     metrics,
-    lists: [atRisk, winBack, byOwner, overdueClients],
+    lists: [atRisk, winBack, byOwner, overdueClients, workList],
     alerts,
     bots: [bot("Ops Briefing", "briefing"), bot("Client Profile", "client_profile"), bot("Work Order Drafts", "work_orders")],
   };

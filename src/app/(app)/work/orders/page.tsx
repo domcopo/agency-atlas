@@ -114,6 +114,25 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
       )}
 
+      {ops.orders && (
+        <Fold
+          label="Smart add"
+          title="Smart add: type, talk or screenshots"
+          defaultOpen
+          summary="AI organizes it, suggests who's free and a deadline; you confirm or edit"
+          badge={<Sparkles aria-hidden className="size-4 text-violet" />}
+        >
+          <QuickAddWorkOrders
+            clients={clients}
+            staff={staff}
+            today={ops.today}
+            disabled={!aiReady || !ops.cancel}
+            disabledNote={!ops.cancel ? "Turns on after one setup step (0013 SQL)." : !aiReady ? "The AI isn't available right now (not set up, or this month's budget is used up)." : undefined}
+          />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">About 2–5 cents per request (5–10 with screenshots); budget {ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up"}.</p>
+        </Fold>
+      )}
+
       <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {[
           { label: "Open", value: String(total.open), tone: "" },
@@ -129,6 +148,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         ))}
       </section>
       <p className="mt-1.5 px-1 text-[11px] text-faint">
+        <Link href="/notifications" className="font-semibold text-violet">Notices &amp; mute</Link> ·{" "}
         {show === "work" ? "Work orders and issues" : "All items, including follow-ups"}
         {total.est ? ` · about ${minutesLabel(total.est)} of open work estimated` : ""}. Saved in this app only; GoHighLevel isn&apos;t changed.
       </p>
@@ -181,24 +201,6 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
               hours. Add the ones you want; the rest go away once the reason does.{isOwner ? " Canceling an added one keeps it from coming straight back." : ""}
             </p>
           </div>
-        </Fold>
-      )}
-
-      {ops.orders && (
-        <Fold
-          label="Quick add"
-          title="Quick add: type, talk or photo"
-          summary="Describe it or snap a screenshot; AI outlines the work orders for you to check"
-          badge={<Sparkles aria-hidden className="size-4 text-violet" />}
-        >
-          <QuickAddWorkOrders
-            clients={clients}
-            staff={staff}
-            today={ops.today}
-            disabled={!aiReady || !ops.cancel}
-            disabledNote={!ops.cancel ? "Turns on after one setup step (0013 SQL)." : !aiReady ? "The AI isn't available right now (not set up, or this month's budget is used up)." : undefined}
-          />
-          <p className="mt-1.5 px-1 text-[11px] text-faint">A few cents per outline (a bit more with a photo); budget {ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up"}.</p>
         </Fold>
       )}
 

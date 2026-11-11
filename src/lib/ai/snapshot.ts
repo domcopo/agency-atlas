@@ -305,6 +305,7 @@ export function restoreQuickAdd(raw: unknown, book: Codebook, staff: StaffBook):
     const title = typeof o.title === "string" ? o.title.trim() : "";
     if (!title) continue; // restoreWorkOrderDrafts dropped it too
     const d = drafts.orders[i++];
+    if (d) d.aiDueDays = Number.isInteger(o.due_in_days) && (o.due_in_days as number) >= 0 && (o.due_in_days as number) <= 90 ? (o.due_in_days as number) : null;
     if (d && !d.clientSlug && typeof o.client_name_seen === "string") {
       const hit = matchClientName(o.client_name_seen.slice(0, 120), book);
       if (hit) {
