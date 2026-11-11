@@ -13,6 +13,7 @@ import { priorityTone } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
 import { developerSections, dueLabel, dueWhen, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
+import { DEADLINE_STYLE, deadlineColor } from "@/lib/work-orders";
 
 const bigBtn = "pressable inline-flex min-h-11 flex-1 items-center justify-center rounded-xl px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50";
 const input = "min-h-11 min-w-0 flex-1 rounded-xl border border-line bg-white/5 px-3 text-sm text-ink disabled:opacity-50";
@@ -94,7 +95,7 @@ function Card({ a, today, readOnly, stepsReady, open }: { a: ClientAction; today
             <span className="mt-0.5 block text-[11px] text-muted">
               {a.client ? a.client.name : "No client"} · {kindLabel(a.kind)}
               {" · "}
-              <span className={when === "overdue" ? "font-semibold text-rose" : when === "today" ? "font-semibold text-amber" : ""}>{dueLabel(a.dueOn, today)}</span>
+              <span className={cn(DEADLINE_STYLE[deadlineColor(a.dueOn, today, a.status)].text, when === "overdue" || when === "today" ? "font-semibold" : "")}>{dueLabel(a.dueOn, today)}</span>
               {progress && (
                 <span className={progress.done === progress.total ? "text-lime" : "text-teal"}>
                   {" · "}
@@ -127,6 +128,11 @@ function Card({ a, today, readOnly, stepsReady, open }: { a: ClientAction; today
           )}
 
           {a.notes && <p className="text-xs text-muted">{a.notes}</p>}
+          {a.kind === "work_order" && (
+            <Link href={`/work/orders/${a.id}`} className="inline-flex min-h-9 items-center text-xs font-semibold text-violet hover:underline">
+              Open: comments, links, hours, history →
+            </Link>
+          )}
           {(a.sourceLink || a.sourceNote) && (
             <p className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
               {a.sourceNote && <span>From: {a.sourceNote}</span>}
@@ -191,7 +197,7 @@ function StatusButton({ a, status, className, children }: { a: ClientAction; sta
   );
 }
 
-function Step({ a, n, text, ticked, readOnly }: { a: ClientAction; n: number; text: string; ticked: boolean; readOnly: boolean }) {
+export function Step({ a, n, text, ticked, readOnly }: { a: ClientAction; n: number; text: string; ticked: boolean; readOnly: boolean }) {
   return (
     <li>
       <form action={toggleStep}>

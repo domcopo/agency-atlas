@@ -617,3 +617,37 @@ describe("Home by job: arranges only, never widens", () => {
     expect(fn).toMatch(/select\("starts_at, calendar_name, status"\)/);
   });
 });
+
+describe("Work Orders phase 1 (0017): who may do what, no GoHighLevel", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const fn = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const next = actions.indexOf("export async function", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("archive is owner only; start date/links and closing a request are owner/manager; asking is developer only", () => {
+    expect(fn("archiveWorkOrder")).toMatch(/me\.role !== "owner"\) return;/);
+    expect(fn("saveWorkOrderInfo")).toMatch(/me\.role !== "owner" && me\.role !== "manager"/);
+    expect(fn("closeReassignRequest")).toMatch(/me\.role !== "owner" && me\.role !== "manager"/);
+    expect(fn("requestReassignment")).toMatch(/me\.role !== "developer"/);
+  });
+
+  it("comments never carry a typed author (the database fills in who wrote it) and refuse contact details first", () => {
+    const c = fn("addWorkOrderComment");
+    expect(c).toMatch(/insert\(\{ action_id: id, body: raw \}\)/);
+    expect(c.indexOf("contactDetailsIn(")).toBeLessThan(c.indexOf(".insert("));
+    expect(fn("createWorkOrder")).toMatch(/contactDetailsIn\(/);
+  });
+
+  it("history and notices are never written by the app", () => {
+    expect(findMatches([/from\("work_order_history"\)\.(insert|update|upsert)/, /from\("notifications"\)\.(insert|upsert)/])).toEqual([]);
+  });
+
+  it("work order screens and rules never touch GoHighLevel or the AI", () => {
+    for (const f of ["src/lib/work-orders.ts", "src/components/cards/WorkOrderBoard.tsx", "src/components/forms/WorkOrderDetailForms.tsx", "src/app/(app)/work/orders/[id]/page.tsx", "src/components/shell/WorkOrdersButton.tsx"]) {
+      const text = readFileSync(join(ROOT, f), "utf8");
+      expect(text, f).not.toMatch(/@\/lib\/ghl|@\/lib\/ai|askAi|getBilling/);
+    }
+  });
+});

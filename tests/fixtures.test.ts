@@ -1680,3 +1680,87 @@ describe("Home by job (approved 2026-11-10)", () => {
     expect(v.appointmentsWeek.map((a) => a.startsAt)).toEqual(["2026-11-12T15:00:00Z"]);
   });
 });
+
+describe("Work Orders phase 1 (0017)", () => {
+  const T = "2026-11-10";
+
+  it("deadline colors: red due/late, orange 1–2 days, yellow 3–6, green 7+ or no date, none when finished", async () => {
+    const { deadlineColor, deadlineText } = await import("@/lib/work-orders");
+    const c = (d: string | null) => deadlineColor(d, T);
+    expect([c("2026-11-01"), c(T), c("2026-11-11"), c("2026-11-12"), c("2026-11-13"), c("2026-11-16"), c("2026-11-17"), c(null)]).toEqual(["red", "red", "orange", "orange", "yellow", "yellow", "green", "green"]);
+    expect(deadlineColor("2026-11-01", T, "done")).toBe("none");
+    expect(deadlineColor("2026-11-01", T, "canceled")).toBe("none");
+    expect([deadlineText("2026-11-08", T), deadlineText(T, T), deadlineText("2026-11-11", T), deadlineText(null, T)]).toEqual(["2 days late", "Due today", "Due in 1 day", "No due date"]);
+  });
+
+  it("due filters: overdue, this week (today + 6), overdue + this week, later, no date", async () => {
+    const { matchesDue } = await import("@/lib/work-orders");
+    const pick = (f: Parameters<typeof matchesDue>[1]) => ["2026-11-09", T, "2026-11-16", "2026-11-17", null].filter((d) => matchesDue({ dueOn: d }, f, T));
+    expect(pick("overdue")).toEqual(["2026-11-09"]);
+    expect(pick("week")).toEqual([T, "2026-11-16"]);
+    expect(pick("soon")).toEqual(["2026-11-09", T, "2026-11-16"]);
+    expect(pick("later")).toEqual(["2026-11-17"]);
+    expect(pick("none")).toEqual([null]);
+    expect(pick("any")).toHaveLength(5);
+  });
+
+  it("the floating button counts open work orders that are overdue or urgent", async () => {
+    const { needsAttentionCount } = await import("@/lib/work-orders");
+    const a = (over: Partial<import("@/lib/types").ClientAction>): import("@/lib/types").ClientAction => ({ id: "x", kind: "work_order", title: "t", notes: null, priority: "normal", status: "open", dueOn: null, doneAt: null, createdAt: "", ownerId: null, ownerName: null, client: null, leadGhlId: null, ...over });
+    expect(
+      needsAttentionCount(
+        [
+          a({ dueOn: "2026-11-09" }), // late
+          a({ priority: "critical" }), // urgent
+          a({ dueOn: T }), // due today: not late yet
+          a({ dueOn: "2026-11-01", status: "done" }),
+          a({ dueOn: "2026-11-01", status: "canceled" }),
+          a({ dueOn: "2026-11-01", kind: "issue" }),
+          a({ dueOn: "2026-11-01", status: "done", archivedAt: "2026-11-02T00:00:00Z" }),
+        ],
+        T,
+      ),
+    ).toBe(2);
+  });
+
+  it("links: https only, no logins inside, up to 5, no duplicates", async () => {
+    const { cleanLinks, linkLabel } = await import("@/lib/work-orders");
+    expect(cleanLinks("https://www.figma.com/file/x\nhttps://example.com https://example.com")).toEqual({ links: ["https://www.figma.com/file/x", "https://example.com"], rejected: 1 });
+    expect(cleanLinks("http://example.com").rejected).toBe(1);
+    expect(cleanLinks("https://user:pw@example.com").rejected).toBe(1);
+    expect(cleanLinks("javascript:alert(1)").rejected).toBe(1);
+    expect(cleanLinks(Array.from({ length: 7 }, (_, i) => `https://e${i}.example.com`).join("\n")).links).toHaveLength(5);
+    expect(linkLabel("https://www.figma.com/file/x")).toBe("figma.com");
+  });
+
+  it("warns about emails and phone numbers, not ordinary text", async () => {
+    const { contactDetailsIn } = await import("@/lib/work-orders");
+    expect(contactDetailsIn("Send it to pat@example.com")).toEqual(["an email address"]);
+    expect(contactDetailsIn("Call (555) 010-1234 today")).toEqual(["a phone number"]);
+    expect(contactDetailsIn("Fix the hero, 3 steps, 2026-11-10, $1,500")).toEqual([]);
+  });
+
+  it("hours: decimals become minutes; blank clears; nonsense is refused", async () => {
+    const { hoursToMinutes, hoursLabel } = await import("@/lib/work-orders");
+    expect([hoursToMinutes("1.5"), hoursToMinutes(""), hoursToMinutes("-1"), hoursToMinutes("abc"), hoursToMinutes("5000")]).toEqual([90, null, undefined, undefined, undefined]);
+    expect([hoursLabel(90), hoursLabel(120), hoursLabel(null)]).toEqual(["1.5 h", "2 h", "–"]);
+  });
+
+  it("history reads as plain words", async () => {
+    const { historyText } = await import("@/lib/work-orders");
+    const h = (field: import("@/lib/work-orders").HistoryEntry["field"], oldValue: string | null, newValue: string | null) => historyText({ at: "", actorName: null, field, oldValue, newValue });
+    expect(h("owner", "Dev B (test)", "Dev C (test)")).toBe("Reassigned from Dev B (test) to Dev C (test)");
+    expect(h("owner", null, "Dev B (test)")).toBe("Assigned to Dev B (test)");
+    expect(h("status", "open", "in_progress")).toBe("Status: New → In progress");
+    expect(h("priority", "normal", "critical")).toBe("Priority: Normal → Urgent");
+    expect(h("archived", null, "archived")).toBe("Archived");
+    expect(h("reassign_request", null, "Needs a designer (test)")).toBe("Asked to be reassigned: Needs a designer (test)");
+  });
+
+  it("preview: the developer's work order pages open, nothing else new", async () => {
+    const { previewAllows } = await import("@/lib/preview");
+    expect(previewAllows("/work/orders/00000000-0000-0000-0000-00000000f001")).toBe(true);
+    expect(previewAllows("/work/orders")).toBe(false);
+    expect(previewAllows("/work/orders/x/../../billing")).toBe(false);
+  });
+});

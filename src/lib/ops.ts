@@ -872,6 +872,11 @@ export function developerWorkScope(actions: ClientAction[], staff: { id: string;
       submittedAt: a.submittedAt ?? null,
       sentBackCount: a.sentBackCount ?? 0,
       reviewNote: a.reviewNote ?? null,
+      startOn: a.startOn ?? null,
+      actualMinutes: a.actualMinutes ?? null,
+      links: a.links ?? [],
+      reassignReason: a.reassignReason ?? null,
+      reassignRequestedAt: a.reassignRequestedAt ?? null,
     }));
 }
 

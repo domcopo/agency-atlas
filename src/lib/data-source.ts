@@ -37,6 +37,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
+import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
@@ -484,6 +485,7 @@ const ORDER_COLS = "steps, source_link, source_note, est_minutes, ai_suggested";
 const REVIEW_COLS = "submitted_at, sent_back_count, review_note"; // 0011
 const CANCEL_COLS = "canceled_at, cancel_note"; // 0013
 const STEPS_DONE_COL = "steps_done"; // 0016
+const V2_COLS = "start_on, actual_minutes, links, reassign_reason, reassign_requested_at"; // 0017 (also in my_work)
 
 /** Item kind from the database (unknown values read as follow-ups). */
 const asActionKind = (v: unknown): ClientAction["kind"] => (v === "issue" || v === "work_order" ? v : "follow_up");
@@ -499,6 +501,12 @@ function orderDetails(r: Record<string, unknown>) {
     submittedAt: typeof r.submitted_at === "string" ? r.submitted_at : null,
     sentBackCount: Number(r.sent_back_count ?? 0) || 0,
     reviewNote: typeof r.review_note === "string" && r.review_note ? r.review_note : null,
+    startOn: typeof r.start_on === "string" ? r.start_on : null,
+    actualMinutes: Number.isFinite(Number(r.actual_minutes)) && r.actual_minutes !== null && r.actual_minutes !== undefined ? Number(r.actual_minutes) : null,
+    links: Array.isArray(r.links) ? (r.links as unknown[]).filter((l): l is string => typeof l === "string" && l.startsWith("https://")).slice(0, 5) : [],
+    archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+    reassignReason: typeof r.reassign_reason === "string" && r.reassign_reason ? r.reassign_reason : null,
+    reassignRequestedAt: typeof r.reassign_requested_at === "string" ? r.reassign_requested_at : null,
     stepsDone: Array.isArray(r.steps_done) ? (r.steps_done as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 20) : [],
   };
 }
@@ -514,6 +522,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
   // Newest setup level first; step down if a later setup step hasn't been run yet.
   const levels = [
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at`, promises: true, orders: true, review: true, cancel: true }, // 0017
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}`, promises: true, orders: true, review: true, cancel: true }, // 0016
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}`, promises: true, orders: true, review: true, cancel: true }, // 0013
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}`, promises: true, orders: true, review: true, cancel: false }, // 0011
@@ -706,10 +715,33 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
  * the same rules as the view (developerWorkScope; the break-in tests keep them in step).
  */
 export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
+  const t = today();
+  return (await getDeveloperActions())
+    .filter((a) => a.status !== "done" && a.status !== "canceled")
+    .sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))
+    .map((action) => {
+      const when = !action.dueOn ? "none" : action.dueOn < t ? "overdue" : action.dueOn === t ? "today" : "upcoming";
+      const due = !action.dueOn ? "No due date" : when === "overdue" ? `Overdue (was due ${action.dueOn})` : when === "today" ? "Due today" : `Due ${action.dueOn}`;
+      return {
+        id: `a_${action.id}`,
+        title: action.client ? `${action.client.name}: ${action.title}` : action.title,
+        reason: `${kindLabel(action.kind)} · ${due}${statusNote(action, t)}`,
+        href: "/work#my-work",
+        ownerName: action.ownerName,
+        ownerId: action.ownerId,
+        dueOn: action.dueOn,
+        when,
+        priority: action.priority,
+        action,
+      } as PriorityItem;
+    });
+});
+
+/** Everything on the developer's list (including items finished in the last 14 days). */
+export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
   if (!usesDatabase()) return [];
   const viewer = await getDeveloperViewer();
   if (!viewer) return [];
-  const t = today();
   let mine: ClientAction[];
   if (viewer.preview) {
     if (!viewer.staffId) return [];
@@ -719,7 +751,8 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
     const db = await createDatabaseClient();
     const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
     const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}`);
+    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}`);
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}`)); // before 0017
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`)); // before 0016
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`)); // before 0011
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}`)); // before 0010
@@ -746,25 +779,46 @@ export const getDeveloperWork = cache(async (): Promise<PriorityItem[]> => {
       promisedOn: (r.promised_on as string | null) ?? null,
     }));
   }
-  return mine
-    .filter((a) => a.status !== "done" && a.status !== "canceled")
-    .sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))
-    .map((action) => {
-      const when = !action.dueOn ? "none" : action.dueOn < t ? "overdue" : action.dueOn === t ? "today" : "upcoming";
-      const due = !action.dueOn ? "No due date" : when === "overdue" ? `Overdue (was due ${action.dueOn})` : when === "today" ? "Due today" : `Due ${action.dueOn}`;
-      return {
-        id: `a_${action.id}`,
-        title: action.client ? `${action.client.name}: ${action.title}` : action.title,
-        reason: `${kindLabel(action.kind)} · ${due}${statusNote(action, t)}`,
-        href: "/work#my-work",
-        ownerName: action.ownerName,
-        ownerId: action.ownerId,
-        dueOn: action.dueOn,
-        when,
-        priority: action.priority,
-        action,
-      } as PriorityItem;
-    });
+  return mine;
+});
+
+/**
+ * One work order with its comments and history (0017), for its own page. Read as the
+ * signed-in person: developers (and a preview of one) only reach their current items;
+ * the database's rules decide comments and history too. null = not found / not theirs.
+ */
+export const getWorkOrderDetail = cache(async (id: string) => {
+  if (!usesDatabase() || !/^[0-9a-f-]{36}$/.test(id)) return null;
+  const viewer = await getDeveloperViewer();
+  const me = await getMember();
+  let action: ClientAction | undefined;
+  if (viewer) action = (await getDeveloperActions()).find((a) => a.id === id);
+  else if (me && (me.role === "owner" || me.role === "manager")) {
+    const all = await getActions();
+    action = [...all.actions, ...all.canceled].find((a) => a.id === id);
+  }
+  if (!action || action.kind !== "work_order") return null;
+  const db = await createDatabaseClient();
+  const [c, h] = await Promise.all([
+    db.from("work_order_comments").select("id, author, author_name, body, created_at").eq("action_id", id).order("created_at").limit(500),
+    db.from("work_order_history").select("at, actor_name, field, old_value, new_value").eq("action_id", id).order("at").limit(500),
+  ]);
+  return {
+    action,
+    ready: !c.error && !h.error,
+    comments: (c.data ?? []).map((r) => ({ id: r.id as string, mine: r.author === me?.userId, authorName: (r.author_name as string | null) ?? "Teammate", body: String(r.body), at: String(r.created_at) })),
+    history: (h.data ?? []).map((r) => ({ at: String(r.at), actorName: (r.actor_name as string | null) ?? null, field: r.field as HistoryEntry["field"], oldValue: (r.old_value as string | null) ?? null, newValue: (r.new_value as string | null) ?? null })),
+  };
+});
+
+/** The floating Work Orders button's count: overdue or urgent open work orders (yours, if you're a developer). */
+export const getWorkOrderBadge = cache(async (): Promise<number | null> => {
+  if (!usesDatabase()) return null;
+  const viewer = await getDeveloperViewer();
+  if (viewer) return needsAttentionCount(await getDeveloperActions(), today());
+  const me = await getMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return null;
+  return needsAttentionCount((await getActions()).actions, today());
 });
 
 /**

@@ -1053,6 +1053,8 @@ select test.expect($$insert into public.work_order_comments (action_id, body) va
 select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Email pat@example.com (test)')$$, -2, 'comments refuse email addresses');
 select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000f001', 'Call 555-010-1234 (test)')$$, -2, 'comments refuse phone numbers');
 select test.expect($$insert into public.work_order_comments (action_id, author, body) values ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-0000000000a1', 'x')$$, -1, 'developer cannot comment in someone else''s name');
+select test.expect($$insert into public.work_order_comments (action_id, author_name, body) values ('00000000-0000-0000-0000-00000000f001', 'The Owner', 'Signed by me (test)')$$, 1, 'a typed name is ignored…');
+select test.expect($$select * from public.work_order_comments where body = 'Signed by me (test)' and author_name = 'Developer (test)'$$, 1, '…the database fills in the real writer''s name');
 select test.expect($$update public.actions set reassign_reason = 'Needs a designer (test)' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer asks for reassignment with a reason');
 select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f001' and reassign_requested_at is not null$$, 1, 'the request time is stamped by the database');
 select test.expect($$update public.actions set reassign_reason = null where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot clear the request (owner or manager decides)');
@@ -1076,7 +1078,7 @@ select test.expect($$update public.notification_settings set muted = '{nagging}'
 commit;
 
 select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a1' and kind = 'reassign_request'$$, 1, 'the owner is notified of the reassignment request');
-select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a1' and kind = 'comment'$$, 1, 'the owner is notified when a developer comments');
+select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a1' and kind = 'comment'$$, 2, 'the owner is notified for each developer comment (two above)');
 select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field = 'status' and old_value = 'open' and new_value = 'in_progress' and actor = '00000000-0000-0000-0000-0000000000a3'$$, 1, 'history records who changed the status, from what to what');
 
 begin;
@@ -1092,7 +1094,7 @@ select test.expect($$select * from public.notifications where user_id = '0000000
 select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a3' and action_id = '00000000-0000-0000-0000-00000000f001' and kind = 'unassigned'$$, 1, 'developer 1 is told it was reassigned away');
 select test.expect($$select * from public.notifications where user_id = '00000000-0000-0000-0000-0000000000a5' and kind = 'assigned' and action_id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'developer 2 is told it is theirs now');
 select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f001' and reassign_reason is null and reassign_requested_at is null$$, 1, 'reassigning answers the request');
-select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field = 'owner' and old_value = '00000000-0000-0000-0000-0000000000b3'$$, 1, 'history records the reassignment');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f001' and field = 'owner' and old_value = 'Dev B (test)' and new_value = 'Dev C (test)' and actor_name = 'Manager (test)'$$, 1, 'history records the reassignment, by name');
 
 begin;
 set local role authenticated;
@@ -1109,7 +1111,8 @@ commit;
 begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a5","aal":"aal2"}';
-select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f001'$$, 2, 'developer 2 now sees the comment thread');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f001'$$, 3, 'developer 2 now sees the whole comment thread');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000f001' and author_name in ('Developer (test)', 'Manager (test)')$$, 3, 'comments show the writer''s team name (filled by the database)');
 -- assigned f002, manager's comment on f002, assigned f001
 select test.expect($$select * from public.notifications$$, 3, 'developer 2 sees only their own notices');
 select test.expect($$update public.notifications set read_at = now()$$, 3, 'developer 2 marks their notices read');

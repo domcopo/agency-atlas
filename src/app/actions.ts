@@ -49,6 +49,7 @@ import {
 } from "@/lib/ghl/client";
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
 import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
+import { cleanLinks, contactDetailsIn, hoursToMinutes } from "@/lib/work-orders";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -378,6 +379,8 @@ export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | 
   const estRaw = Number(text(form, "est", 5));
   const fromDraft = text(form, "fromDraft", 1) === "1";
   if (!title) return { error: "Say what needs to be done." };
+  const contact = contactDetailsIn([title, steps ?? "", notes].join("\n"));
+  if (contact.length) return { error: `That looks like ${contact.join(" and ")}. Keep contact details in the client record, not in work orders.` };
   // Look the client up on the server; never trust ids from the page.
   const client = (await getRoster()).find((c) => c.id === slug);
   if (!client?.dbId) return { error: "Pick a client." };
@@ -694,6 +697,128 @@ export async function toggleStep(form: FormData) {
     return;
   }
   refreshOps();
+}
+
+// ---------------------------------------------------------------------------
+// Work Orders phase 1 (0017). History and notices are written by the database itself.
+// ---------------------------------------------------------------------------
+
+function refreshWorkOrder(id: string) {
+  revalidatePath(`/work/orders/${id}`);
+  refreshOps();
+}
+
+/** Add a comment. Owner/managers on any work order; developers on their current ones (the database checks). */
+export async function addWorkOrderComment(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return { error: "Please sign in again." };
+  const id = text(form, "actionId", 40);
+  const raw = typeof form.get("body") === "string" ? String(form.get("body")).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim() : "";
+  if (!isUuid(id)) return { error: "Something went wrong. Reload and try again." };
+  if (!raw) return { error: "Write something first." };
+  if (raw.length > 2000) return { error: "Keep it under 2,000 characters." };
+  const found = contactDetailsIn(raw);
+  if (found.length) return { error: `That looks like ${found.join(" and ")}. Leave contact details in the client record, not in work orders.` };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("work_order_comments").insert({ action_id: id, body: raw });
+  if (error) {
+    console.warn(`Comment refused: ${error.code}`);
+    if (MISSING_TABLE.has(error.code ?? "")) return { error: "Comments need one setup step first (0017 SQL)." };
+    if (error.code === "23514") return { error: "That looks like contact details. Remove them and try again." };
+    return { error: "You can't comment on this work order." };
+  }
+  refreshWorkOrder(id);
+  return { ok: true };
+}
+
+/** Owner/managers: start date and links. */
+export async function saveWorkOrderInfo(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can change this." };
+  const id = text(form, "actionId", 40);
+  if (!isUuid(id)) return { error: "Something went wrong. Reload and try again." };
+  const startRaw = text(form, "start", 10);
+  const start = startRaw ? anyDate(startRaw) : null;
+  if (startRaw && !start) return { error: "That start date doesn't look right." };
+  const { links, rejected } = cleanLinks(typeof form.get("links") === "string" ? String(form.get("links")).slice(0, 3000) : "");
+  if (rejected) return { error: "Links must start with https:// (up to 5, no logins inside them)." };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("actions").update({ start_on: start, links }).eq("id", id);
+  if (error) {
+    console.warn(`Work order info refused: ${error.code}`);
+    if (MISSING_COLUMN.has(error.code ?? "")) return { error: "This needs one setup step first (0017 SQL)." };
+    if (error.code === "23514") return { error: "The start date can't be after the due date." };
+    return { error: "Couldn't save." };
+  }
+  refreshWorkOrder(id);
+  return { ok: true };
+}
+
+/** Actual time spent. Developers on their own items, owner/managers on any (the database checks). */
+export async function saveActualHours(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return { error: "Please sign in again." };
+  const id = text(form, "actionId", 40);
+  const minutes = hoursToMinutes(text(form, "hours", 8));
+  if (!isUuid(id) || minutes === undefined) return { error: "Enter hours as a number, like 1.5" };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("actions").update({ actual_minutes: minutes }).eq("id", id).select("id");
+  if (error || !data?.length) {
+    if (error) console.warn(`Hours refused: ${error.code}`);
+    return { error: error && MISSING_COLUMN.has(error.code ?? "") ? "This needs one setup step first (0017 SQL)." : "Couldn't save the hours." };
+  }
+  refreshWorkOrder(id);
+  return { ok: true };
+}
+
+/** Developer: "Needs reassignment" on their own work order, with a reason. The owner is notified by the database. */
+export async function requestReassignment(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "developer") return { error: "Only the assigned developer can ask for this." };
+  const id = text(form, "actionId", 40);
+  const reason = text(form, "reason", 200);
+  if (!isUuid(id)) return { error: "Something went wrong. Reload and try again." };
+  if (!reason) return { error: "Say why, so the owner can decide." };
+  if (contactDetailsIn(reason).length) return { error: "Leave contact details out of the reason." };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("actions").update({ reassign_reason: reason }).eq("id", id).select("id");
+  if (error || !data?.length) {
+    if (error) console.warn(`Reassignment request refused: ${error.code}`);
+    return { error: "Couldn't send the request." };
+  }
+  refreshWorkOrder(id);
+  return { ok: true };
+}
+
+/** Owner/managers: close a reassignment request without reassigning. (Reassigning closes it too.) */
+export async function closeReassignRequest(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const id = text(form, "actionId", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("actions").update({ reassign_reason: null }).eq("id", id);
+  if (error) console.warn(`Close request refused: ${error.code}`);
+  refreshWorkOrder(id);
+}
+
+/** Owner only: archive finished or canceled work, or take it back out. Never deleted. */
+export async function archiveWorkOrder(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const id = text(form, "actionId", 40);
+  const restore = text(form, "op", 10) === "restore";
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("actions").update({ archived_at: restore ? null : new Date().toISOString() }).eq("id", id);
+  if (error) console.warn(`Archive refused: ${error.code}`);
+  refreshWorkOrder(id);
 }
 
 /** "Set up clients" screen: owner and plan for one client in one save (owner only). */

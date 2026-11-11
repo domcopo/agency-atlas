@@ -11,6 +11,7 @@ import { WorkPromptButton } from "@/components/forms/WorkPromptButton";
 import { cn } from "@/lib/format";
 import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
+import { DEADLINE_STYLE, deadlineColor } from "@/lib/work-orders";
 
 const input = "min-h-9 min-w-0 rounded-lg border border-line bg-white/5 px-1.5 text-xs text-ink";
 const btn = "pressable min-h-9 shrink-0 rounded-lg border border-line bg-white/5 px-2.5 text-xs font-semibold";
@@ -114,7 +115,15 @@ function ItemCard({
       <div className="flex items-start gap-2">
         <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", priorityTone[a.priority].dot)} aria-label={`${priorityTone[a.priority].label} priority`} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold leading-snug">{a.title}</p>
+          <p className="text-sm font-semibold leading-snug">
+            {a.kind === "work_order" ? (
+              <Link href={`/work/orders/${a.id}`} className="hover:underline">
+                {a.title}
+              </Link>
+            ) : (
+              a.title
+            )}
+          </p>
           <p className="mt-0.5 text-[11px] text-muted">
             {a.client ? (
               mode === "manage" ? (
@@ -135,7 +144,7 @@ function ItemCard({
             {a.status === "done" ? (
               <span className="text-lime">Done {a.doneAt?.slice(0, 10)}</span>
             ) : (
-              <span className={when === "overdue" ? "font-semibold text-rose" : when === "today" ? "font-semibold text-amber" : "text-faint"}>{dueLabel(a.dueOn, today)}</span>
+              <span className={cn(DEADLINE_STYLE[deadlineColor(a.dueOn, today, a.status)].text, when === "overdue" || when === "today" ? "font-semibold" : "")}>{dueLabel(a.dueOn, today)}</span>
             )}
             {a.status !== "done" && a.status !== "open" && <span className={a.status === "blocked" ? "text-rose" : "text-teal"}> · {statusLabel[a.status]}</span>}
             {a.status === "blocked" && <span className="text-rose">{a.blockedReason ? `: ${a.blockedReason}` : " (no reason given)"}</span>}

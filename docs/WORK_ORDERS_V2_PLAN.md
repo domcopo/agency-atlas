@@ -2,6 +2,8 @@
 
 Status: **approved 2026-11-10** with both recommended answers (managers keep create/reassign; developers keep their follow-ups, contact dates and Kit). **Step 1 built:** `supabase/migrations/0017_work_orders_v2.sql` + break-in tests (section 7n). Not run in Supabase yet: waiting for your review.
 
+**Step 2 built (screens):** floating button, list + board + due filter, deadline colors, work order page with comments, history, links, hours and reassignment request, archive. Comments and history store the writer's name (filled by the database), because managers and developers can't read other people's logins.
+
 Notes from building step 1:
 - History and comments are for **work orders** (not follow-ups or issues).
 - Owner and managers can dismiss a reassignment request; reassigning clears it automatically. Developers can't withdraw it themselves.

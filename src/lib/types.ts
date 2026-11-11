@@ -658,6 +658,13 @@ export interface ClientAction {
   submittedAt?: string | null;
   sentBackCount?: number;
   reviewNote?: string | null;
+  /** Work Orders phase 1 (0017): start date, time spent, links, archive, reassignment request. */
+  startOn?: ISODate | null;
+  actualMinutes?: number | null;
+  links?: string[];
+  archivedAt?: string | null;
+  reassignReason?: string | null;
+  reassignRequestedAt?: string | null;
   /** Canceled by the owner (0013): kept, never deleted; hidden from every list and count. */
   canceledAt?: string | null;
   cancelNote?: string | null;

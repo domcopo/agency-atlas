@@ -28,5 +28,5 @@ export function canPreview(role: string | null | undefined): boolean {
 
 /** While previewing, only the developer's screens open; anything else goes back to Home. */
 export function previewAllows(path: string): boolean {
-  return path === "/" || path === "/work" || path === "/kit" || /^\/kit\/[0-9a-f-]{36}$/.test(path) || path === "/login" || path === "/mfa";
+  return path === "/" || path === "/work" || path === "/kit" || /^\/(kit|work\/orders)\/[0-9a-f-]{36}$/.test(path) || path === "/login" || path === "/mfa";
 }

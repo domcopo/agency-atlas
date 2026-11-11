@@ -4,6 +4,7 @@ import Link from "next/link";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { CanceledList, StatsLine, WorkOrderList } from "@/components/cards/WorkOrderList";
 import { WorkloadChips } from "@/components/cards/WorkloadChips";
+import { WorkOrderBoard, type BoardCard } from "@/components/cards/WorkOrderBoard";
 import { WorkOrderDraftsButton } from "@/components/forms/AiButtons";
 import { QuickAddWorkOrders } from "@/components/forms/QuickAddWorkOrders";
 import { WorkOrderForm } from "@/components/forms/WorkOrderForm";
@@ -11,13 +12,14 @@ import { Fold } from "@/components/shell/Fold";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getAiStatus, getMember, getOps, getTeam, getWorkOrderDrafts, usesDatabase } from "@/lib/data-source";
+import { asDueFilter, deadlineColor, deadlineText, DUE_FILTERS, matchesDue } from "@/lib/work-orders";
 import { draftAdded, minutesLabel, reviewQueue, suggestWorkOrders, workloadRows, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
 
 export const metadata: Metadata = { title: "Work orders" };
 
 const field = "min-h-10 w-full rounded-xl border border-line bg-white/5 px-2 text-sm text-ink";
 
-export default async function WorkOrdersPage({ searchParams }: { searchParams: Promise<{ who?: string; client?: string; show?: string; status?: string }> }) {
+export default async function WorkOrdersPage({ searchParams }: { searchParams: Promise<{ who?: string; client?: string; show?: string; status?: string; due?: string; view?: string }> }) {
   if (!usesDatabase()) return <RoleNotice title="Work orders" />;
   const member = await getMember();
   // Developers have their own list on the Work tab (the database limits what they can read anyway).
@@ -33,7 +35,32 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
   const show: WorkOrderShow = sp.show === "all" ? "all" : "work";
   const status: WorkOrderStatusFilter = sp.status === "blocked" || sp.status === "overdue" || sp.status === "review" || sp.status === "done" ? sp.status : "open";
 
-  const groups = workOrderGroups({ actions: ops.actions, staff, today: ops.today, show, who, client, status });
+  const due = asDueFilter(sp.due);
+  const view = sp.view === "board" ? "board" : "list";
+  // Archived work (finished or canceled, owner only) leaves every list; it's kept below.
+  const live = ops.actions.filter((a) => !a.archivedAt);
+  const archived = ops.actions.filter((a) => a.archivedAt && a.kind === "work_order");
+  const groups = workOrderGroups({ actions: live.filter((a) => matchesDue(a, due, ops.today)), staff, today: ops.today, show, who, client, status });
+  const boardCards: BoardCard[] = live
+    .filter((a) => a.kind === "work_order" && (who === undefined || (a.ownerId ?? null) === who) && (!client || a.client?.slug === client) && matchesDue(a, due, ops.today))
+    .filter((a) => a.status !== "done" || (a.doneAt ?? "") >= new Date(Date.parse(`${ops.today}T00:00:00Z`) - 7 * 86_400_000).toISOString())
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      client: a.client?.name ?? null,
+      owner: a.ownerName,
+      status: a.status === "canceled" ? "done" : a.status,
+      color: deadlineColor(a.dueOn, ops.today, a.status),
+      deadline: a.status === "done" ? "Done" : deadlineText(a.dueOn, ops.today),
+      urgent: a.priority === "critical",
+    }));
+  const query = (over: Record<string, string | undefined>) => {
+    const q = new URLSearchParams();
+    const all = { who: sp.who, client: sp.client, show: sp.show, status: sp.status, due: sp.due, view: sp.view, ...over };
+    for (const [k, v] of Object.entries(all)) if (v) q.set(k, v);
+    const str = q.toString();
+    return `/work/orders${str ? `?${str}` : ""}`;
+  };
   const everyone = workOrderGroups({ actions: ops.actions, staff, today: ops.today, show });
   const total = everyone.reduce(
     (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue, blocked: t.blocked + g.stats.blocked, est: t.est + g.stats.estMinutesOpen, done7: t.done7 + g.stats.done7 }),
@@ -281,7 +308,21 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </div>
       </Fold>
 
-      <form method="get" className="glass mt-5 grid grid-cols-2 gap-2 rounded-3xl p-3 sm:grid-cols-5">
+      <div id="list" className="mt-5 flex flex-wrap items-center gap-1.5">
+        {[
+          { label: "List", href: query({ view: undefined }), on: view === "list" },
+          { label: "Board", href: query({ view: "board" }), on: view === "board" },
+        ].map((t) => (
+          <Link key={t.label} href={t.href} aria-current={t.on ? "page" : undefined} className={`pressable inline-flex min-h-10 items-center rounded-full border px-3.5 text-xs font-semibold ${t.on ? "border-violet/60 bg-violet/20" : "border-line bg-white/5 text-muted"}`}>
+            {t.label}
+          </Link>
+        ))}
+        <Link href={query({ due: due === "soon" ? undefined : "soon" })} className={`pressable inline-flex min-h-10 items-center rounded-full border px-3.5 text-xs font-semibold ${due === "soon" ? "border-rose/60 bg-rose/15 text-rose" : "border-line bg-white/5 text-muted"}`}>
+          Overdue + this week
+        </Link>
+      </div>
+
+      <form method="get" className="glass mt-2 grid grid-cols-2 gap-2 rounded-3xl p-3 sm:grid-cols-6">
         <label className="text-[11px] text-muted">
           Person
           <select name="who" defaultValue={who === null ? "none" : (who ?? "")} className={field}>
@@ -316,6 +357,17 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           </select>
         </label>
         <label className="text-[11px] text-muted">
+          Due
+          <select name="due" defaultValue={due} className={field}>
+            {DUE_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {view === "board" && <input type="hidden" name="view" value="board" />}
+        <label className="text-[11px] text-muted">
           Include
           <select name="show" defaultValue={show} className={field}>
             <option value="work">Work orders + issues</option>
@@ -333,8 +385,31 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
         {listed > 0 && <CopyButton text={copyText} label="Copy this list as text for GoHighLevel" />}
       </div>
-      <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} canCancel={isOwner && ops.cancel} empty="No work orders match. Add one above, or change the filter." />
+      {view === "board" ? (
+        <>
+          <WorkOrderBoard cards={boardCards} />
+          <p className="mt-1.5 px-1 text-[11px] text-faint">Work orders only (Person, Client and Due filters apply). Drag a card on a computer, or use “Move to” on a phone. Done shows the last 7 days.</p>
+        </>
+      ) : (
+        <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} canCancel={isOwner && ops.cancel} empty="No work orders match. Add one above, or change the filter." />
+      )}
       {listed > 0 && <p className="mt-2 px-1 text-[11px] text-faint">Copy gives plain text (titles, steps, due dates, links; no money) to paste into a GoHighLevel task yourself, or take a screenshot.</p>}
+
+      {isOwner && archived.length > 0 && (
+        <div className="mt-5">
+          <Fold label="Archived work orders" title="Archived" summary={`${archived.length} archived · kept for history`}>
+            <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
+              {archived.slice(0, 100).map((a) => (
+                <li key={a.id}>
+                  <Link href={`/work/orders/${a.id}`} className="pressable block px-4 py-2.5 text-sm">
+                    <span className="font-semibold">{a.title}</span> <span className="text-[11px] text-muted">· {a.client?.name ?? "No client"} · archived {a.archivedAt?.slice(0, 10)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Fold>
+        </div>
+      )}
 
       {isOwner && ops.cancel && (
         <div className="mt-5">

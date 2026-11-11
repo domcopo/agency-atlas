@@ -6,6 +6,7 @@
 
 import { useActionState } from "react";
 import { createWorkOrder } from "@/app/actions";
+import { ContactSafeTextarea } from "@/components/forms/WorkOrderDetailForms";
 import { EST_OPTIONS } from "@/lib/ops";
 
 const field = "mt-1 min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink";
@@ -66,7 +67,7 @@ export function WorkOrderForm({
       </label>
       <label className="block text-xs text-muted">
         Steps (one per line, optional)
-        <textarea
+        <ContactSafeTextarea
           name="steps"
           rows={4}
           maxLength={2000}
@@ -105,7 +106,7 @@ export function WorkOrderForm({
         <label className="block text-xs text-muted">
           Priority
           <select name="priority" defaultValue={defaults.priority ?? "normal"} className={field}>
-            <option value="critical">Critical</option>
+            <option value="critical">Urgent</option>
             <option value="high">High</option>
             <option value="normal">Normal</option>
             <option value="low">Low</option>

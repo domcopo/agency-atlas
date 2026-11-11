@@ -16,6 +16,9 @@
   --color-amber: #fbbf4a;
   --color-rose: #ff7a93;
   --color-sky: #7cc4ff;
+  /* Deadline colors (work orders): red uses rose, green uses lime. */
+  --color-due-orange: #ff9a52;
+  --color-due-yellow: #f2e35c;
 
   /* System fonts: looks native on iPhone and needs no download. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui,

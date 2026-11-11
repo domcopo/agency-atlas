@@ -142,6 +142,8 @@ create table public.work_order_comments (
   id         uuid primary key default gen_random_uuid(),
   action_id  uuid not null references public.actions (id) on delete restrict,
   author     uuid not null default auth.uid() references auth.users (id),
+  -- Filled by the database from the writer's team name (people can't read each other's logins).
+  author_name text check (char_length(author_name) <= 80),
   body       text not null check (char_length(body) between 1 and 2000)
     check (body !~ '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}')
     check (body !~ '(^|[^0-9])\(?[0-9]{3}\)?[-. ][0-9]{3}[-. ][0-9]{4}([^0-9]|$)'),
@@ -173,6 +175,22 @@ $$;
 revoke all on function private.can_see_work_order(uuid) from public, anon;
 grant execute on function private.can_see_work_order(uuid) to authenticated;
 
+create function private.work_order_comment_author()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  new.author_name := (select left(tm.display_name, 80) from public.team_members tm where tm.user_id = new.author);
+  new.created_at := now();
+  return new;
+end;
+$$;
+revoke all on function private.work_order_comment_author() from public, anon, authenticated;
+create trigger work_order_comment_author before insert on public.work_order_comments
+  for each row execute function private.work_order_comment_author();
+
 revoke all on public.work_order_comments from public, anon, authenticated;
 grant select, insert on public.work_order_comments to authenticated;
 alter table public.work_order_comments enable row level security;
@@ -191,6 +209,7 @@ create table public.work_order_history (
   action_id uuid not null references public.actions (id) on delete restrict,
   at        timestamptz not null default now(),
   actor     uuid references auth.users (id),
+  actor_name text check (char_length(actor_name) <= 80),
   field     text not null check (field in ('created', 'owner', 'status', 'due_on', 'start_on', 'priority', 'archived', 'reassign_request')),
   old_value text check (char_length(old_value) <= 200),
   new_value text check (char_length(new_value) <= 200)
@@ -294,45 +313,52 @@ set search_path = ''
 as $$
 declare
   me uuid := auth.uid();
+  who text;
   t  text := left(new.title, 160);
+  old_owner text;
+  new_owner text;
 begin
   if new.kind <> 'work_order' then
     return null;
   end if;
+  who := coalesce((select left(tm.display_name, 80) from public.team_members tm where tm.user_id = me), case when me is null then 'Setup' end);
+  new_owner := (select left(st.name, 200) from public.staff st where st.id = new.owner_staff_id);
   if tg_op = 'INSERT' then
-    insert into public.work_order_history (action_id, actor, field, new_value) values (new.id, me, 'created', new.status);
+    insert into public.work_order_history (action_id, actor, actor_name, field, new_value) values (new.id, me, who, 'created', new.status);
     if new.owner_staff_id is not null then
-      insert into public.work_order_history (action_id, actor, field, new_value) values (new.id, me, 'owner', new.owner_staff_id::text);
+      insert into public.work_order_history (action_id, actor, actor_name, field, new_value) values (new.id, me, who, 'owner', coalesce(new_owner, 'someone'));
       perform private.notify_staff(new.owner_staff_id, 'assigned', new.id, t);
     end if;
     return null;
   end if;
 
   if new.owner_staff_id is distinct from old.owner_staff_id then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'owner', old.owner_staff_id::text, new.owner_staff_id::text);
+    old_owner := (select left(st.name, 200) from public.staff st where st.id = old.owner_staff_id);
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value)
+      values (new.id, me, who, 'owner', case when old.owner_staff_id is null then null else coalesce(old_owner, 'someone') end, case when new.owner_staff_id is null then null else coalesce(new_owner, 'someone') end);
     perform private.notify_staff(new.owner_staff_id, 'assigned', new.id, t);
     perform private.notify_staff(old.owner_staff_id, 'unassigned', new.id, t);
   end if;
   if new.status is distinct from old.status then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'status', old.status, new.status);
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value) values (new.id, me, who, 'status', old.status, new.status);
   end if;
   if new.due_on is distinct from old.due_on then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'due_on', old.due_on::text, new.due_on::text);
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value) values (new.id, me, who, 'due_on', old.due_on::text, new.due_on::text);
     if new.owner_staff_id is not distinct from old.owner_staff_id then
       perform private.notify_staff(new.owner_staff_id, 'due_changed', new.id, t);
     end if;
   end if;
   if new.start_on is distinct from old.start_on then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'start_on', old.start_on::text, new.start_on::text);
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value) values (new.id, me, who, 'start_on', old.start_on::text, new.start_on::text);
   end if;
   if new.priority is distinct from old.priority then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'priority', old.priority, new.priority);
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value) values (new.id, me, who, 'priority', old.priority, new.priority);
   end if;
   if (new.archived_at is null) is distinct from (old.archived_at is null) then
-    insert into public.work_order_history (action_id, actor, field, new_value) values (new.id, me, 'archived', case when new.archived_at is null then 'restored' else 'archived' end);
+    insert into public.work_order_history (action_id, actor, actor_name, field, new_value) values (new.id, me, who, 'archived', case when new.archived_at is null then 'restored' else 'archived' end);
   end if;
   if new.reassign_reason is distinct from old.reassign_reason then
-    insert into public.work_order_history (action_id, actor, field, old_value, new_value) values (new.id, me, 'reassign_request', left(old.reassign_reason, 200), left(new.reassign_reason, 200));
+    insert into public.work_order_history (action_id, actor, actor_name, field, old_value, new_value) values (new.id, me, who, 'reassign_request', left(old.reassign_reason, 200), left(new.reassign_reason, 200));
     if new.reassign_reason is not null then
       perform private.notify_owners('reassign_request', new.id, t);
     end if;
