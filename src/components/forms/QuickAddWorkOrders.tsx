@@ -37,6 +37,15 @@ async function shrink(file: File): Promise<File> {
 // The browser's own speech-to-text (Safari on iPhone, Chrome). Not every browser has it.
 type Recognizer = { lang: string; interimResults: boolean; continuous: boolean; start(): void; stop(): void; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
 const noSubscribe = () => () => {};
+
+/** "Add without AI": first line → title (up to 120 characters), the rest → steps. */
+export function fromNote(note: string): { title?: string; steps?: string } {
+  const lines = note.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return {};
+  const first = lines[0]!;
+  if (first.length <= 120) return { title: first, steps: lines.slice(1).join("\n") || undefined };
+  return { title: `${first.slice(0, 117).trimEnd()}…`, steps: lines.join("\n") };
+}
 function makeRecognizer(): Recognizer | null {
   const w = window as unknown as { SpeechRecognition?: new () => Recognizer; webkitSpeechRecognition?: new () => Recognizer };
   const R = w.SpeechRecognition ?? w.webkitSpeechRecognition;
@@ -62,6 +71,7 @@ export function QuickAddWorkOrders({
   const [dragging, setDragging] = useState(false);
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
+  const [manual, setManual] = useState(false);
   // Known only in the browser (false while the page is drawn on the server).
   const canTalk = useSyncExternalStore(noSubscribe, () => Boolean(makeRecognizer()), () => false);
   const rec = useRef<Recognizer | null>(null);
@@ -197,13 +207,27 @@ export function QuickAddWorkOrders({
           </p>
         )}
 
-        <button type="submit" disabled={pending || disabled || (!note.trim() && !photos.length)} className="pressable inline-flex min-h-12 w-full items-center justify-center gap-1.5 rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">
-          <Sparkles aria-hidden className="size-4" />
-          {pending ? "Organizing…" : "Organize into work orders"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="submit" disabled={pending || disabled || (!note.trim() && !photos.length)} className="pressable inline-flex min-h-12 flex-[2] items-center justify-center gap-1.5 rounded-xl bg-violet-deep px-3 text-sm font-semibold disabled:opacity-60">
+            <Sparkles aria-hidden className="size-4" />
+            {pending ? "Organizing…" : "Organize with AI"}
+          </button>
+          <button type="button" onClick={() => setManual((m) => !m)} aria-expanded={manual} className="pressable inline-flex min-h-12 flex-1 items-center justify-center rounded-xl border border-line bg-white/5 px-3 text-sm font-semibold">
+            Add without AI
+          </button>
+        </div>
         {disabled && disabledNote && <p className="text-[11px] text-faint">{disabledNote}</p>}
         {state?.error && <p role="alert" className="text-xs text-rose">{state.error}</p>}
       </form>
+
+      {manual && (
+        <div className="glass rounded-3xl p-4">
+          <p className="mb-2 text-xs text-muted">
+            No AI, no cost: your first line becomes the title and the rest become steps. Pick the client and person, then add it.{photos.length ? " Screenshots aren't saved with work orders." : ""}
+          </p>
+          <WorkOrderForm key={note} clients={clients} staff={staff} today={today} fromDraft aiDraft={false} submitLabel="Add this work order" defaults={fromNote(note)} />
+        </div>
+      )}
 
       {state?.drafts && (
         <div className="space-y-2.5" aria-live="polite">
@@ -225,9 +249,11 @@ export function QuickAddWorkOrders({
 function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: number; clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string }) {
   const [state, confirm, saving] = useActionState(createWorkOrder, undefined);
   const [skipped, setSkipped] = useState(false);
+  // The AI can't always tell the client: pick it right here, then Confirm.
+  const [slug, setSlug] = useState(d.clientSlug ?? "");
   if (skipped) return null;
   const color = deadlineColor(d.dueOn ?? null, today);
-  const canConfirm = Boolean(d.clientSlug) && !d.contactWarning;
+  const canConfirm = Boolean(slug) && !d.contactWarning;
   const defaults = { slug: d.clientSlug ?? undefined, title: d.title, steps: d.steps.join("\n"), priority: d.priority, ownerId: d.assigneeId ?? undefined, est: d.estMinutes, notes: d.why.slice(0, 500), due: d.dueOn ?? undefined };
   return (
     <article className="glass animate-rise-in rounded-3xl p-3.5" style={{ animationDelay: `${i * 60}ms` }}>
@@ -260,8 +286,19 @@ function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: numb
       ) : (
         <>
           <div className="mt-2.5 flex flex-wrap gap-2">
-            <form action={confirm}>
-              {Object.entries({ ...defaults, est: nearestEst(d.estMinutes), fromDraft: "1" }).map(([k, v]) => (v === undefined || v === null || v === "" ? null : <input key={k} type="hidden" name={k} value={String(v)} />))}
+            <form action={confirm} className="flex w-full flex-wrap items-center gap-2">
+              {Object.entries({ ...defaults, slug: undefined, est: nearestEst(d.estMinutes), fromDraft: "1" }).map(([k, v]) => (v === undefined || v === null || v === "" ? null : <input key={k} type="hidden" name={k} value={String(v)} />))}
+              <label className="min-w-0 flex-1">
+                <span className="sr-only">Client for this work order</span>
+                <select name="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className={`min-h-11 w-full rounded-xl border px-3 text-sm text-ink ${slug ? "border-line bg-white/5" : "border-amber/60 bg-amber/10"}`}>
+                  <option value="">Pick the client…</option>
+                  {clients.map((c) => (
+                    <option key={c.slug} value={c.slug}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="submit" disabled={!canConfirm || saving} className="pressable inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-violet-deep px-4 text-sm font-semibold disabled:opacity-50">
                 <Check aria-hidden className="size-4" /> {saving ? "Adding…" : "Confirm"}
               </button>
@@ -270,12 +307,12 @@ function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: numb
               Skip
             </button>
           </div>
-          {!d.clientSlug && <p className="mt-1 text-[11px] text-faint">Pick the client with Edit, then add it.</p>}
+          {!slug && !d.contactWarning && <p className="mt-1 text-[11px] text-amber">Pick the client above to turn on Confirm.</p>}
           {state?.error && <p role="alert" className="mt-1 text-xs text-rose">{state.error}</p>}
           <details className="mt-2">
             <summary className="pressable inline-flex min-h-10 cursor-pointer list-none items-center rounded-xl border border-violet/40 bg-violet/10 px-3 text-xs font-semibold">Edit before adding</summary>
             <div className="mt-2">
-              <WorkOrderForm clients={clients} staff={staff} today={today} fromDraft submitLabel="Add this work order" defaults={defaults} />
+              <WorkOrderForm clients={clients} staff={staff} today={today} fromDraft submitLabel="Add this work order" defaults={{ ...defaults, slug: slug || undefined }} />
             </div>
           </details>
         </>

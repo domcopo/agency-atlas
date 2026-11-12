@@ -695,3 +695,14 @@ describe("Smart add and notices: suggestions only, in-app only", () => {
     expect(findMatches([/\bresend\b|nodemailer|twilio|sendgrid|postmark|graph\.facebook\.com|api\.whatsapp|wa\.me\//i])).toEqual([]);
   });
 });
+
+describe("Smart add drafts: Confirm works once a client is picked; manual adds aren't marked as AI", () => {
+  const form = readFileSync(join(ROOT, "src/components/forms/QuickAddWorkOrders.tsx"), "utf8");
+  it("the Confirm form carries a client picker and stays off for drafts with contact details", () => {
+    expect(form).toMatch(/<select name="slug" value=\{slug\}/);
+    expect(form).toMatch(/const canConfirm = Boolean\(slug\) && !d\.contactWarning;/);
+  });
+  it("Add without AI never sends anything to the AI and isn't flagged as an AI draft", () => {
+    expect(form).toMatch(/fromDraft aiDraft=\{false\}/);
+  });
+});

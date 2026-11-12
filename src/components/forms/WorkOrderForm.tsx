@@ -35,6 +35,7 @@ export function WorkOrderForm({
   today,
   defaults = {},
   fromDraft = false,
+  aiDraft,
   submitLabel = "Add work order",
 }: {
   clients: { slug: string; name: string }[];
@@ -42,13 +43,15 @@ export function WorkOrderForm({
   today: string;
   defaults?: WorkOrderDefaults;
   fromDraft?: boolean;
+  /** Mark the saved work order as "from AI draft" (default: same as fromDraft). */
+  aiDraft?: boolean;
   submitLabel?: string;
 }) {
   const [state, action, pending] = useActionState(createWorkOrder, undefined);
   if (state?.ok && fromDraft) return <p role="status" className="text-xs font-semibold text-lime">Added to work orders.</p>;
   return (
     <form action={action} className="space-y-2.5">
-      {fromDraft && <input type="hidden" name="fromDraft" value="1" />}
+      {(aiDraft ?? fromDraft) && <input type="hidden" name="fromDraft" value="1" />}
       <label className="block text-xs text-muted">
         Client
         <select name="slug" required defaultValue={defaults.slug ?? ""} className={field}>

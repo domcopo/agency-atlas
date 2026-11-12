@@ -1839,3 +1839,15 @@ describe("Smart add, notices and AI CEO work order numbers (approved 2026-11-11)
     expect(noHistory.alerts.find((a) => a.title.startsWith("Work orders blocked"))).toBeUndefined();
   });
 });
+
+describe("Smart add: Add without AI", () => {
+  it("first line becomes the title, the rest become steps; long first lines are cut", async () => {
+    const { fromNote } = await import("@/components/forms/QuickAddWorkOrders");
+    expect(fromNote("")).toEqual({});
+    expect(fromNote("Fix the contact form\nCheck the email setting\n\nTest it")).toEqual({ title: "Fix the contact form", steps: "Check the email setting\nTest it" });
+    expect(fromNote("Just a title")).toEqual({ title: "Just a title", steps: undefined });
+    const long = fromNote("x".repeat(200));
+    expect(long.title?.length).toBe(118);
+    expect(long.steps).toBe("x".repeat(200));
+  });
+});
