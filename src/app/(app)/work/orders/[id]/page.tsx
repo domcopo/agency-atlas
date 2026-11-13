@@ -10,6 +10,7 @@ import { archiveWorkOrder, closeReassignRequest, updateAction } from "@/app/acti
 import { Step } from "@/components/cards/DeveloperWork";
 import { ReviewButtons } from "@/components/cards/WorkOrderList";
 import { CommentForm, HoursForm, InfoForm, ReassignRequestForm } from "@/components/forms/WorkOrderDetailForms";
+import { MoveToTrashButton } from "@/components/forms/TrashForms";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getDeveloperViewer, getMember, getTeam, getToday, getWorkOrderDetail } from "@/lib/data-source";
 import { cn } from "@/lib/format";
@@ -258,6 +259,12 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
             {a.archivedAt ? "Take out of the archive" : "Archive (kept, never deleted)"}
           </button>
         </form>
+      )}
+
+      {manager && (
+        <div className="mt-2">
+          <MoveToTrashButton kind="item" id={a.id} what={`"${a.title}"`} note="For mistakes, duplicates or old junk. Finished work can be archived instead." />
+        </div>
       )}
 
       <SectionTitle aside={`${comments.length}`}>Comments</SectionTitle>

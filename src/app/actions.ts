@@ -50,6 +50,7 @@ import {
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
 import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
+import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -821,6 +822,73 @@ export async function archiveWorkOrder(form: FormData) {
   refreshWorkOrder(id);
 }
 
+// ---------------------------------------------------------------------------
+// Trash (0019, docs/TRASH_PLAN.md). Owner and managers move things to Trash and restore
+// them; only the owner deletes forever, only from Trash. The database enforces all of it
+// (it stamps who/when, refuses developers, refuses deletes outside Trash and non-owners).
+// Nothing here touches GoHighLevel.
+// ---------------------------------------------------------------------------
+
+/** Move a client or an item (work order, follow-up, issue) to Trash. */
+export async function moveToTrash(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const kind = asTrashKind(text(form, "kind", 10));
+  const id = text(form, "id", 40);
+  if (!kind || !isUuid(id)) return;
+  const db = await createDatabaseClient();
+  // The database replaces this time with its own clock and records who did it.
+  const { error } = await db.from(kind === "client" ? "clients" : "actions").update({ trashed_at: new Date().toISOString() }).eq("id", id);
+  if (error) {
+    console.warn(`Trash refused: ${error.code}`);
+    redirect(`/trash?refused=${error.code === "23514" ? "billing" : "1"}`);
+  }
+  refreshOps();
+  revalidatePath("/trash");
+  redirect("/trash?moved=1");
+}
+
+/** Take a client or an item back out of Trash, exactly as it was. */
+export async function restoreFromTrash(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return;
+  const kind = asTrashKind(text(form, "kind", 10));
+  const id = text(form, "id", 40);
+  if (!kind || !isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from(kind === "client" ? "clients" : "actions").update({ trashed_at: null }).eq("id", id);
+  if (error) console.warn(`Restore refused: ${error.code}`);
+  refreshOps();
+  revalidatePath("/trash");
+}
+
+/**
+ * Owner only: delete something in Trash FOREVER (with everything attached). The owner
+ * types DELETE to confirm. The database refuses it for anyone else, or outside Trash.
+ * The ONLY delete in Atlas (guardrail test).
+ */
+export async function deleteForever(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can delete things forever." };
+  const kind = asTrashKind(text(form, "kind", 10));
+  const id = text(form, "id", 40);
+  if (!kind || !isUuid(id)) return { error: "That item wasn't found." };
+  if (!deleteConfirmed(text(form, "confirm", 20))) return { error: `Type ${DELETE_CONFIRM} to confirm.` };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from(kind === "client" ? "clients" : "actions").delete().eq("id", id).not("trashed_at", "is", null).select("id");
+  if (error) {
+    console.warn(`Delete refused: ${error.code}`);
+    return { error: error.code === "23503" ? "It has billing records attached, so it can't be deleted." : "Couldn't delete it. Nothing was changed." };
+  }
+  if (!data?.length) return { error: "It isn't in Trash any more (or was already deleted)." };
+  refreshOps();
+  revalidatePath("/trash");
+  return { ok: true };
+}
+
 /** Mark all my notices read (the database lets each person change only their own). */
 export async function markNoticesRead() {
   await notWhilePreviewing();
@@ -1234,17 +1302,22 @@ export async function decideContactMatch(form: FormData) {
 // ---------------------------------------------------------------------------
 
 async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add", r: AiResult) {
-  if (!r.usage || r.costUsd === undefined) return; // nothing was sent, nothing was charged
-  const { error } = await db.from("ai_usage").insert({
+  if (!r.startedAt) return; // never sent (budget stop, not set up): not a run, nothing charged
+  const known = r.usage !== undefined && r.costUsd !== undefined;
+  const row = {
     feature,
     model: r.model,
-    input_tokens: r.usage.inputTokens,
-    output_tokens: r.usage.outputTokens,
-    cache_read_tokens: r.usage.cacheReadTokens,
-    cache_write_tokens: r.usage.cacheWriteTokens,
-    cost_usd: r.costUsd,
+    // 0018: a sent request that failed without a bill is logged with cost UNKNOWN (null), never 0.
+    input_tokens: known ? r.usage!.inputTokens : null,
+    output_tokens: known ? r.usage!.outputTokens : null,
+    cache_read_tokens: known ? r.usage!.cacheReadTokens : null,
+    cache_write_tokens: known ? r.usage!.cacheWriteTokens : null,
+    cost_usd: known ? r.costUsd! : null,
     outcome: r.ok ? "ok" : r.reason === "refused" ? "refused" : "error",
-  });
+  };
+  let { error } = await db.from("ai_usage").insert({ ...row, started_at: r.startedAt });
+  // Before 0018: no start time column, and unknown costs can't be stored (skip those).
+  if (error && MISSING_COLUMN.has(error.code) && known) ({ error } = await db.from("ai_usage").insert(row));
   if (error) console.warn(`AI usage log refused: ${error.code}`);
 }
 

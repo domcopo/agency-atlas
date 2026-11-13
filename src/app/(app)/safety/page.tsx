@@ -22,6 +22,7 @@ import { SyncButton } from "@/components/forms/SyncButton";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { BudgetForm } from "@/components/forms/AiButtons";
 import { cn } from "@/lib/format";
+import { AI_BOTS, isAiFeature } from "@/lib/bot-runs";
 
 export const metadata: Metadata = { title: "Data Safety" };
 
@@ -134,10 +135,10 @@ export default async function SafetyPage() {
                     <li key={i} className="flex justify-between gap-2">
                       <span>
                         {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(r.at))} ·{" "}
-                        {r.feature === "briefing" ? "Briefing" : "Client profile"}
+                        {isAiFeature(r.feature) ? AI_BOTS[r.feature].bot : "AI"}
                         {r.outcome !== "ok" ? ` (${r.outcome})` : ""}
                       </span>
-                      <span className="shrink-0">${r.costUsd.toFixed(3)}</span>
+                      <span className="shrink-0">{r.costUsd === null ? "cost unknown" : `$${r.costUsd.toFixed(3)}`}</span>
                     </li>
                   ))}
                 </ul>
@@ -259,6 +260,18 @@ export default async function SafetyPage() {
           </span>
         </p>
       </GlassCard>
+
+      {db && (member?.role === "owner" || member?.role === "manager") && (
+        <>
+          <SectionTitle>Trash</SectionTitle>
+          <GlassCard className="flex items-center justify-between gap-3 text-sm">
+            <span className="text-muted">Trashed clients and work. {member.role === "owner" ? "Only you can delete forever." : "Only the owner can delete forever."}</span>
+            <Link href="/trash" className="pressable inline-flex min-h-11 shrink-0 items-center rounded-xl border border-line bg-white/5 px-4 font-semibold">
+              Open
+            </Link>
+          </GlassCard>
+        </>
+      )}
 
       <SectionTitle>Retention plan</SectionTitle>
       <GlassCard padding="none">

@@ -1851,3 +1851,30 @@ describe("Smart add: Add without AI", () => {
     expect(long.steps).toBe("x".repeat(200));
   });
 });
+
+describe("Trash (0019): words and confirmations", () => {
+  it("delete forever needs the exact word DELETE", async () => {
+    const { deleteConfirmed, asTrashKind } = await import("@/lib/trash");
+    expect(deleteConfirmed("DELETE")).toBe(true);
+    expect(deleteConfirmed("  DELETE ")).toBe(true);
+    for (const t of ["", "delete", "DEL", "yes", "DELETE IT"]) expect(deleteConfirmed(t)).toBe(false);
+    expect(asTrashKind("client")).toBe("client");
+    expect(asTrashKind("item")).toBe("item");
+    expect(asTrashKind("billing_records")).toBeNull();
+  });
+
+  it("the deletion summary counts types only (the record holds no names)", async () => {
+    const { deletionSummary, itemWord } = await import("@/lib/trash");
+    expect(deletionSummary([])).toBe("nothing");
+    expect(
+      deletionSummary([
+        { kind: "client", withClient: false },
+        { kind: "work_order", withClient: true },
+        { kind: "work_order", withClient: false },
+        { kind: "follow_up", withClient: true },
+      ]),
+    ).toBe("1 client, 2 work orders, 1 follow-up");
+    expect(itemWord("work_order")).toBe("Work order");
+    expect(itemWord("anything")).toBe("Item");
+  });
+});

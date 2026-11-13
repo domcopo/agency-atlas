@@ -21,6 +21,7 @@ import {
   paymentAlerts,
   stateNote,
 } from "@/lib/billing";
+import { AI_BOTS, type AiFeature, type SummaryRun } from "@/lib/bot-runs";
 import { daysBetween } from "@/lib/format";
 import { dueWhen, promiseMissed } from "@/lib/ops";
 import type { ClientAction, Detection, RosterClient } from "@/lib/types";
@@ -63,6 +64,11 @@ export interface OwnerSummary {
   lists: SummaryList[];
   alerts: SummaryAlert[];
   bots: SummaryBot[];
+  /**
+   * Last 100 AI runs of the past 7 days, newest first (0018, docs/BOT_RUNS_PLAN.md).
+   * [] = no runs; null = the run log can't be read (or 0018 not run yet).
+   */
+  recent_runs: SummaryRun[] | null;
 }
 
 export interface OwnerSummaryInput {
@@ -83,8 +89,10 @@ export interface OwnerSummaryInput {
     tablesReady: boolean;
     blocked: boolean;
     spentUsd: number;
-    lastRuns: Partial<Record<"briefing" | "client_profile" | "work_orders", { at: string; outcome: string }>>;
+    lastRuns: Partial<Record<AiFeature, { at: string; outcome: string }>>;
   };
+  /** Already built by buildRecentRuns (fixed words only). null/missing = not readable. */
+  recentRuns?: SummaryRun[] | null;
   /**
    * Billing (0015), owner only: read-only copy of GoHighLevel invoices and payments.
    * null/missing = not set up or not readable. When the state isn't known (not connected,
@@ -340,9 +348,9 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
 
   // --- Bots ------------------------------------------------------------------
   const status: SummaryBot["status"] = !ai.configured || !ai.tablesReady ? "off" : ai.blocked ? "paused" : "active";
-  const bot = (name: string, feature: "briefing" | "client_profile" | "work_orders"): SummaryBot => {
+  const bot = (feature: AiFeature): SummaryBot => {
     const r = ai.lastRuns[feature];
-    return { name, status, last_run_at: r?.at ?? null, last_result: !r ? "unknown" : r.outcome === "ok" ? "ok" : "error" };
+    return { name: AI_BOTS[feature].bot, status, last_run_at: r?.at ?? null, last_result: !r ? "unknown" : r.outcome === "ok" ? "ok" : "error" };
   };
 
   return {
@@ -353,6 +361,7 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     metrics,
     lists: [atRisk, winBack, byOwner, overdueClients, workList],
     alerts,
-    bots: [bot("Ops Briefing", "briefing"), bot("Client Profile", "client_profile"), bot("Work Order Drafts", "work_orders")],
+    bots: [bot("briefing"), bot("client_profile"), bot("work_orders"), bot("quick_add"), bot("work_prompt")],
+    recent_runs: input.recentRuns ?? null,
   };
 }

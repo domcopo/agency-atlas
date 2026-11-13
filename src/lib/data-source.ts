@@ -20,6 +20,7 @@ import { safetyStatus } from "@/fixtures/safety";
 import { developerLoads, sampleDevelopers, workOrders, workRules } from "@/fixtures/work";
 import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import type { OwnerSummaryInput } from "@/lib/owner-summary";
+import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type RunLogRow } from "@/lib/bot-runs";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import {
   buildPriorities,
@@ -192,11 +193,27 @@ export async function getCheckInHistory(clientDbId: string | undefined, limit = 
     .map((r) => ({ date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind }));
 }
 
+/**
+ * Trash (0019): ids of trashed clients and trashed items. Everything in Atlas leaves these
+ * out; only the Trash screen shows them. Empty (ready=false) before 0019 is run.
+ */
+export const getTrashedIds = cache(async (): Promise<{ ready: boolean; clients: Set<string>; actions: Set<string> }> => {
+  const none = { ready: false, clients: new Set<string>(), actions: new Set<string>() };
+  if (!usesDatabase()) return none;
+  const db = await createDatabaseClient();
+  const [c, a] = await Promise.all([
+    db.from("clients").select("id").not("trashed_at", "is", null).limit(5000),
+    db.from("actions").select("id").not("trashed_at", "is", null).limit(5000),
+  ]);
+  if (c.error || a.error) return none;
+  return { ready: true, clients: new Set((c.data ?? []).map((r) => r.id as string)), actions: new Set((a.data ?? []).map((r) => r.id as string)) };
+});
+
 /** Reads clients as the signed-in person. Row-level security decides what comes back. */
 async function loadDatabaseRoster(): Promise<Roster> {
   const db = await createDatabaseClient();
   const cols = "id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date";
-  const [withOwner, checkIns, staff, ghlTimes] = await Promise.all([
+  const [withOwner, checkIns, staff, ghlTimes, trashed] = await Promise.all([
     db.from("clients").select(`${cols}, owner_staff_id`),
     readCheckIns(db),
     db.from("staff").select("id, name"),
@@ -204,6 +221,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
     db
       .from("ghl_contact_stats")
       .select("client_id, last_inbound_at, last_outbound_at, last_call_at, last_call_seconds, last_channel, last_direction, unanswered_outbound, synced_at"),
+    getTrashedIds(),
   ]);
   const timesByClient = new Map(
     (ghlTimes.error ? [] : (ghlTimes.data ?? [])).map((t) => [
@@ -238,7 +256,8 @@ async function loadDatabaseRoster(): Promise<Roster> {
   return {
     source: "database",
     skipped: 0,
-    clients: clients.data.map((r) => ({
+    // Trashed clients (0019) are left out of everything.
+    clients: clients.data.filter((r) => !trashed.clients.has(r.id)).map((r) => ({
       id: r.slug,
       dbId: r.id,
       name: r.name,
@@ -530,7 +549,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}`, promises: true, orders: false, review: false, cancel: false }, // 0009
     { cols: ACTION_COLS, promises: false, orders: false, review: false, cancel: false }, // 0006
   ];
-  const [first, team] = await Promise.all([read(levels[0]!.cols), getTeam()]);
+  const [first, team, trashed] = await Promise.all([read(levels[0]!.cols), getTeam(), getTrashedIds()]);
   let res = first;
   let level = levels[0]!;
   for (const next of levels.slice(1)) {
@@ -542,7 +561,11 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
   const { promises, orders, review, cancel } = level;
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
-  const all = ((res.data ?? []) as unknown as Record<string, string | null>[]).map((r) => {
+  // Trash (0019): trashed items, and every item of a trashed client, are left out.
+  const kept = ((res.data ?? []) as unknown as Record<string, string | null>[]).filter(
+    (r) => !trashed.actions.has(r.id!) && !(r.client_id && trashed.clients.has(r.client_id)),
+  );
+  const all = kept.map((r) => {
       const c = r.client_id ? byDbId.get(r.client_id) : undefined;
       return {
         ...orderDetails(r),
@@ -787,6 +810,72 @@ export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
  * signed-in person: developers (and a preview of one) only reach their current items;
  * the database's rules decide comments and history too. null = not found / not theirs.
  */
+export interface TrashEntry {
+  kind: "client" | "item";
+  id: string;
+  /** Client name, or the item's title. */
+  name: string;
+  /** For items: work_order / follow_up / issue. For clients: how many items go with it. */
+  itemKind: string | null;
+  attached: number;
+  clientName: string | null;
+  trashedAt: string;
+  byMe: boolean;
+}
+
+/**
+ * The Trash screen (0019): owner and managers. Newest first. Deletions (owner only) are
+ * the name-free record of what was deleted forever in the last 30 days.
+ */
+export const getTrash = cache(async (): Promise<{ ready: boolean; canDelete: boolean; entries: TrashEntry[]; deletions: { kind: string; withClient: boolean; at: string }[] }> => {
+  const none = { ready: false, canDelete: false, entries: [] as TrashEntry[], deletions: [] as { kind: string; withClient: boolean; at: string }[] };
+  const me = await getMember();
+  if (!usesDatabase() || !me || (me.role !== "owner" && me.role !== "manager")) return none;
+  const db = await createDatabaseClient();
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const [c, a, log] = await Promise.all([
+    db.from("clients").select("id, name, trashed_at, trashed_by").not("trashed_at", "is", null).order("trashed_at", { ascending: false }).limit(500),
+    db.from("actions").select("id, kind, title, client_id, trashed_at, trashed_by").order("created_at", { ascending: false }).limit(5000),
+    me.role === "owner" ? db.from("deletion_log").select("kind, with_client, deleted_at").gte("deleted_at", since).order("deleted_at", { ascending: false }).limit(500) : null,
+  ]);
+  if (c.error || a.error) return none;
+  const clientName = new Map<string, string>();
+  const allClients = await db.from("clients").select("id, name");
+  for (const r of allClients.data ?? []) clientName.set(r.id as string, r.name as string);
+  const attached = new Map<string, number>();
+  for (const r of a.data ?? []) if (r.client_id) attached.set(r.client_id as string, (attached.get(r.client_id as string) ?? 0) + 1);
+  const entries: TrashEntry[] = [
+    ...(c.data ?? []).map((r) => ({
+      kind: "client" as const,
+      id: r.id as string,
+      name: r.name as string,
+      itemKind: null,
+      attached: attached.get(r.id as string) ?? 0,
+      clientName: null,
+      trashedAt: r.trashed_at as string,
+      byMe: r.trashed_by === me.userId,
+    })),
+    ...(a.data ?? [])
+      .filter((r) => r.trashed_at)
+      .map((r) => ({
+        kind: "item" as const,
+        id: r.id as string,
+        name: r.title as string,
+        itemKind: r.kind as string,
+        attached: 0,
+        clientName: r.client_id ? (clientName.get(r.client_id as string) ?? null) : null,
+        trashedAt: r.trashed_at as string,
+        byMe: r.trashed_by === me.userId,
+      })),
+  ].sort((x, y) => y.trashedAt.localeCompare(x.trashedAt));
+  return {
+    ready: true,
+    canDelete: me.role === "owner",
+    entries,
+    deletions: log && !log.error ? (log.data ?? []).map((r) => ({ kind: r.kind as string, withClient: r.with_client === true, at: r.deleted_at as string })) : [],
+  };
+});
+
 export const getWorkOrderDetail = cache(async (id: string) => {
   if (!usesDatabase() || !/^[0-9a-f-]{36}$/.test(id)) return null;
   const viewer = await getDeveloperViewer();
@@ -921,10 +1010,11 @@ export const getCompletions = cache(async (): Promise<Completion[]> => {
     .order("at", { ascending: false })
     .limit(500);
   if (error) return [];
-  const [{ clients }, { actions }] = await Promise.all([roster(), getActions()]);
+  const [{ clients }, { actions }, trashed] = await Promise.all([roster(), getActions(), getTrashedIds()]);
   const byDbId = new Map(clients.map((c) => [c.dbId, c]));
   const actionOwner = new Map(actions.map((a) => [a.id, a.ownerId]));
-  return (data ?? []).map((r) => {
+  const inTrash = (r: { client_id: string | null; action_id: string | null }) => Boolean((r.client_id && trashed.clients.has(r.client_id)) || (r.action_id && trashed.actions.has(r.action_id)));
+  return (data ?? []).filter((r) => !inTrash(r)).map((r) => {
     const c = r.client_id ? byDbId.get(r.client_id) : undefined;
     return {
       at: r.at,
@@ -1415,9 +1505,10 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
   const s = emptyAi(configured, true);
   s.budgetUsd = Number(settings.data?.monthly_budget_usd ?? 10);
   for (const u of usage.data ?? []) {
-    s.spentUsd += Number(u.cost_usd);
-    s.inputTokens += u.input_tokens + u.cache_read_tokens + u.cache_write_tokens;
-    s.outputTokens += u.output_tokens;
+    // 0018: a failed run with no bill has blank (unknown) cost and tokens: added as nothing.
+    s.spentUsd += Number(u.cost_usd ?? 0);
+    s.inputTokens += (u.input_tokens ?? 0) + (u.cache_read_tokens ?? 0) + (u.cache_write_tokens ?? 0);
+    s.outputTokens += u.output_tokens ?? 0;
     s.requests++;
   }
   s.spentUsd = Math.round(s.spentUsd * 10_000) / 10_000;
@@ -1428,9 +1519,9 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
   s.recent = (usage.data ?? []).slice(0, 8).map((u) => ({
     at: u.created_at,
     feature: u.feature,
-    costUsd: Number(u.cost_usd),
+    costUsd: u.cost_usd === null ? null : Number(u.cost_usd),
     outcome: u.outcome,
-    tokens: u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens,
+    tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_tokens ?? 0) + (u.cache_write_tokens ?? 0),
   }));
   return s;
 });
@@ -1499,20 +1590,28 @@ export const getMyClientContacts = cache(async (): Promise<ClientContactDates[]>
 export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> {
   if (!usesDatabase()) return null;
   const db = await createDatabaseClient();
-  const [ops, team, ai, detections, opps, runs, billing] = await Promise.all([
+  const runsSince = new Date(Date.now() - RECENT_RUNS_DAYS * 86_400_000).toISOString();
+  const [ops, team, ai, detections, opps, runs, recent, billing] = await Promise.all([
     getOps(),
     getTeam(),
     getAiStatus(),
     getDetections(),
     db.from("ghl_opportunities").select("ghl_created_at").limit(5000),
     db.from("ai_usage").select("created_at, feature, outcome").order("created_at", { ascending: false }).limit(300),
+    // 0018: the run log for "recent_runs". Only these columns: no prompts or answers exist here.
+    db
+      .from("ai_usage")
+      .select("run_ref, feature, created_at, started_at, cost_usd, outcome")
+      .gte("created_at", runsSince)
+      .order("created_at", { ascending: false })
+      .limit(RECENT_RUNS_MAX),
     getBilling(), // owner only (null for anyone else, and the database returns nothing to them)
   ]);
   const lastRuns: OwnerSummaryInput["ai"]["lastRuns"] = {};
   for (const r of runs.data ?? []) {
-    const f = r.feature as "briefing" | "client_profile" | "work_orders";
-    if ((f === "briefing" || f === "client_profile" || f === "work_orders") && !lastRuns[f]) lastRuns[f] = { at: r.created_at, outcome: r.outcome };
+    if (isAiFeature(r.feature) && !lastRuns[r.feature]) lastRuns[r.feature] = { at: r.created_at, outcome: r.outcome };
   }
+  const recentRuns = recent.error ? null : buildRecentRuns((recent.data ?? []) as RunLogRow[], new Date()); // null before 0018
   const synced = !opps.error && (opps.data?.length ?? 0) > 0;
   let latestHealth: OwnerSummaryInput["latestHealth"] = null;
   if (ops.historyReady) {
@@ -1535,6 +1634,7 @@ export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> 
     detections,
     staff: team.members.map((m) => ({ id: m.id, name: m.name })),
     ai: { configured: ai.configured, tablesReady: ai.tablesReady, blocked: ai.level === "blocked", spentUsd: ai.spentUsd, lastRuns },
+    recentRuns,
     billing: billing ? { state: billing.state, records: billing.records } : null,
     workOrderStatusSince: await workOrderStatusSince(db),
   };

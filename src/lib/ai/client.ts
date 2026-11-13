@@ -44,8 +44,17 @@ Rules you always follow:
 - Draft messages: short, warm, professional, first-person from the agency. No links, no prices unless they're in the data, no promises of specific results.`;
 
 export type AiResult =
-  | { ok: true; data: unknown; model: string; usage: TokenUsage; costUsd: number }
-  | { ok: false; reason: "budget" | "not_configured" | "refused" | "error"; message: string; model: string; usage?: TokenUsage; costUsd?: number };
+  | { ok: true; data: unknown; model: string; usage: TokenUsage; costUsd: number; startedAt: string }
+  | {
+      ok: false;
+      reason: "budget" | "not_configured" | "refused" | "error";
+      message: string;
+      model: string;
+      usage?: TokenUsage;
+      costUsd?: number;
+      /** Set once the request was actually sent (missing = nothing was sent). */
+      startedAt?: string;
+    };
 
 /**
  * One AI request. `remainingUsd` is required: the caller must have checked the
@@ -81,6 +90,7 @@ export async function askAi(opts: {
 
   const client = new Anthropic({ apiKey: key, baseURL: API_BASE, maxRetries: 1, timeout: 180_000 });
   let response: Anthropic.Message;
+  const startedAt = new Date().toISOString();
   try {
     response = await client.messages.create({
       model,
@@ -110,7 +120,7 @@ export async function askAi(opts: {
           : status === 400
             ? "The AI couldn't handle this request (400). Nothing was charged for a refused request."
             : "Couldn't reach the AI. Try again in a minute.";
-    return { ok: false, reason: "error", message, model };
+    return { ok: false, reason: "error", message, model, startedAt };
   }
 
   const usage: TokenUsage = {
@@ -122,16 +132,16 @@ export async function askAi(opts: {
   const costUsd = costOf(model, usage);
 
   if (response.stop_reason === "refusal") {
-    return { ok: false, reason: "refused", message: "The AI declined this request.", model, usage, costUsd };
+    return { ok: false, reason: "refused", message: "The AI declined this request.", model, usage, costUsd, startedAt };
   }
   if (response.stop_reason === "max_tokens") {
-    return { ok: false, reason: "error", message: "The AI's answer ran too long and was cut off. Try again.", model, usage, costUsd };
+    return { ok: false, reason: "error", message: "The AI's answer ran too long and was cut off. Try again.", model, usage, costUsd, startedAt };
   }
   const answer = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
   try {
-    return { ok: true, data: JSON.parse(answer), model, usage, costUsd };
+    return { ok: true, data: JSON.parse(answer), model, usage, costUsd, startedAt };
   } catch {
-    return { ok: false, reason: "error", message: "The AI's answer wasn't in the expected format.", model, usage, costUsd };
+    return { ok: false, reason: "error", message: "The AI's answer wasn't in the expected format.", model, usage, costUsd, startedAt };
   }
 }
 

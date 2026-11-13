@@ -595,7 +595,7 @@ export interface AiStatus {
   inputTokens: number;
   outputTokens: number;
   requests: number;
-  recent: { at: string; feature: string; costUsd: number; outcome: string; tokens: number }[];
+  recent: { at: string; feature: string; costUsd: number | null; outcome: string; tokens: number }[];
 }
 
 export interface Briefing {

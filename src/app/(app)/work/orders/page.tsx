@@ -421,6 +421,12 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           </Fold>
         </div>
       )}
+
+      <p className="mt-5 px-1 text-center text-xs">
+        <Link href="/trash" className="pressable inline-flex min-h-11 items-center font-semibold text-muted underline-offset-2 hover:underline">
+          Open Trash
+        </Link>
+      </p>
     </>
   );
 }

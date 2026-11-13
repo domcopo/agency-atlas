@@ -111,7 +111,8 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
 select test.expect('select * from public.clients', 1, 'manager reads clients');
 select test.expect('select * from public.team_members', 1, 'manager sees only their own team row');
-select test.expect($$update public.clients set monthly_usd = 1$$, 0, 'manager cannot edit client amounts');
+select test.expect($$update public.clients set monthly_usd = 1$$, -1, 'manager cannot edit client amounts (0019: refused outright)');
+select test.expect($$select * from public.clients where monthly_usd = 1$$, 0, 'client amounts unchanged');
 select test.expect($$insert into public.clients (slug, name, monthly_usd, start_date, status) values ('x', 'X', 1, '2026-01-01', 'active')$$, -1, 'manager cannot add clients');
 select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01')$$, 1, 'manager logs a check-in');
 select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'worse')$$, 1, 'manager logs a check-in with how they are doing');
@@ -133,7 +134,7 @@ select test.expect($$update public.clients set services = '{SEO,Ads}' where slug
 select test.expect($$update public.clients set services = '{Hacking}' where slug = 'pat-example'$$, -2, 'unknown services are rejected');
 select test.expect($$update public.clients set monthly_usd = -5 where slug = 'pat-example'$$, -2, 'negative amounts are rejected');
 select test.expect($$insert into public.atlas_answers (question_key, status, answer) values ('svc:x', 'answered', 'SEO')$$, 1, 'owner answers Atlas asks');
-select test.expect($$delete from public.clients$$, -1, 'even the owner cannot delete clients through the app');
+select test.expect($$delete from public.clients$$, 0, 'even the owner cannot delete clients that are not in Trash (nothing deleted)');
 select test.expect($$delete from public.atlas_answers$$, -1, 'answer history cannot be deleted');
 select test.expect($$update public.check_ins set note = 'changed'$$, -1, 'check-in history cannot be rewritten');
 select test.expect($$insert into public.team_members (user_id, display_name, role) values ('00000000-0000-0000-0000-0000000000a4', 'X', 'owner')$$, -1, 'nobody can add team members through the app');
@@ -298,8 +299,9 @@ select test.expect($$insert into public.actions (client_id, title, created_by) v
 select test.expect($$update public.actions set status = 'done', done_at = now() where id = '00000000-0000-0000-0000-00000000ac01'$$, 1, 'manager marks an action done');
 select test.expect($$update public.actions set client_id = null where id = '00000000-0000-0000-0000-00000000ac01'$$, -1, 'an action cannot be moved off its client');
 select test.expect($$update public.actions set created_by = '00000000-0000-0000-0000-0000000000a1'$$, -1, 'an action creator cannot be rewritten');
-select test.expect($$delete from public.actions$$, -1, 'actions cannot be deleted');
-select test.expect($$update public.clients set owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, 0, 'manager cannot set client owners');
+select test.expect($$delete from public.actions$$, 0, 'actions cannot be deleted (nothing deleted)');
+select test.expect($$update public.clients set owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, -1, 'manager cannot set client owners (0019: refused outright)');
+select test.expect($$select * from public.clients where owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, 0, 'client owner unchanged');
 select test.expect($$insert into public.activity (client_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', 'action_done', 'Done: Review ad results')$$, 1, 'manager logs activity');
 select test.expect($$insert into public.activity (client_id, kind, summary, actor) values ('00000000-0000-0000-0000-0000000000c1', 'action_done', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'activity cannot be logged as someone else');
 select test.expect($$update public.activity set summary = 'changed'$$, -1, 'activity history cannot be edited');
@@ -313,7 +315,7 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
 select test.expect($$update public.clients set owner_staff_id = '00000000-0000-0000-0000-0000000000b2'$$, 1, 'owner sets a client owner');
 select test.expect('select * from public.actions', 2, 'owner sees all actions');
-select test.expect($$delete from public.actions$$, -1, 'even the owner cannot delete actions');
+select test.expect($$delete from public.actions$$, 0, 'even the owner cannot delete actions that are not in Trash (nothing deleted)');
 commit;
 
 begin;
@@ -350,7 +352,7 @@ select test.expect($$update public.actions set title = 'changed' where id = '000
 select test.expect($$update public.actions set due_on = '2027-01-01' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot move their due date');
 select test.expect($$update public.actions set owner_staff_id = '00000000-0000-0000-0000-0000000000b2' where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'developer cannot hand their item to someone else');
 select test.expect($$update public.actions set status = 'done' where id = '00000000-0000-0000-0000-00000000ad02'$$, 0, 'developer cannot touch someone else''s item');
-select test.expect($$delete from public.actions$$, -1, 'developer cannot delete items');
+select test.expect($$delete from public.actions$$, 0, 'developer cannot delete items (nothing deleted)');
 select test.expect($$insert into public.actions (client_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'developer cannot add items');
 select test.expect($$insert into public.activity (client_id, action_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000ad01', 'action_done', 'Done: Fix tracking (test)')$$, 1, 'developer logs history for their own item');
 select test.expect($$insert into public.activity (client_id, action_id, kind, summary) values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000ad02', 'action_done', 'x')$$, -1, 'developer cannot log history for someone else''s item');
@@ -720,7 +722,7 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
 select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'manager cannot cancel work');
 select test.expect($$insert into public.actions (client_id, kind, title, status) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', 'canceled')$$, -2, 'new items cannot start out canceled');
-select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'manager still cannot delete work');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, 0, 'manager still cannot delete work (nothing deleted)');
 select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('quick_add', 'm', 1, 1, 0.01, 'ok')$$, 1, 'quick add is cost-logged');
 commit;
 
@@ -737,7 +739,7 @@ select test.expect($$update public.actions set status = 'canceled', cancel_note 
 select test.expect($$update public.actions set status = 'canceled', cancel_note = 'Duplicate (test)' where id = '00000000-0000-0000-0000-00000000ca01'$$, 1, 'owner cancels a work order with a reason');
 select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ca01' and canceled_at > now() - interval '1 minute'$$, 1, 'the database stamps the cancel time');
 select test.expect($$update public.actions set cancel_note = repeat('x', 201) where id = '00000000-0000-0000-0000-00000000ca01'$$, -2, 'cancel reasons are length-limited');
-select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, -1, 'even the owner cannot delete work (cancel keeps it)');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000ca01'$$, 0, 'even the owner cannot delete work outside Trash (cancel keeps it)');
 commit;
 
 begin;
@@ -1066,7 +1068,7 @@ select test.expect($$update public.actions set links = '{}' where id = '00000000
 select test.expect($$update public.actions set archived_at = now() where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot archive');
 select test.expect($$update public.actions set status = 'canceled' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot cancel');
 select test.expect($$insert into public.actions (client_id, kind, title, owner_staff_id, created_by) values ('00000000-0000-0000-0000-0000000000c1', 'work_order', 'x', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3')$$, -1, 'developer cannot create work orders');
-select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'developer cannot delete work orders');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'developer cannot delete work orders (nothing deleted)');
 select test.expect($$delete from public.work_order_comments$$, -1, 'nobody can delete comments');
 select test.expect($$update public.work_order_comments set body = 'x'$$, -1, 'nobody can edit comments');
 select test.expect($$insert into public.work_order_history (action_id, field) values ('00000000-0000-0000-0000-00000000f001', 'status')$$, -1, 'nobody can write history by hand');
@@ -1143,10 +1145,151 @@ select test.expect($$update public.actions set archived_at = null where id = '00
 select test.expect($$delete from public.work_order_history$$, -1, 'even the owner cannot delete history');
 select test.expect($$update public.work_order_history set new_value = 'x'$$, -1, 'even the owner cannot edit history');
 select test.expect($$delete from public.notifications$$, -1, 'notices are never deleted');
-select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f002'$$, -1, 'even the owner cannot delete work orders');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'even the owner cannot delete work orders outside Trash (nothing deleted)');
 commit;
 
 select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f002' and field = 'archived'$$, 2, 'history records archive and un-archive');
+
+-- ---------------------------------------------------------------------------
+-- 7o. Bot runs (0018): random run codes, start times, unknown cost only on failures.
+-- ---------------------------------------------------------------------------
+select test.expect($$select * from public.ai_usage where run_ref is null or run_ref !~ '^[0-9a-f]{12}$'$$, 0, 'every logged run (old ones too) has a random 12-character code');
+select test.expect($$select run_ref from public.ai_usage group by run_ref having count(*) > 1$$, 0, 'run codes are unique');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome, started_at, run_ref) values ('briefing', 'm', 1, 1, 0.01, 'ok', now() - interval '5 seconds', 'aaaaaaaaaaaa')$$, 1, 'manager logs a run with its start time');
+select test.expect($$select * from public.ai_usage where run_ref = 'aaaaaaaaaaaa'$$, 0, 'the app cannot choose the run code (the database sets it)');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome) values ('quick_add', 'm', null, null, null, null, null, 'error')$$, 1, 'a failed run with no bill is logged with a blank cost');
+select test.expect($$select * from public.ai_usage where feature = 'quick_add' and outcome = 'error' and cost_usd is null$$, 1, 'the blank cost stays blank (not 0)');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome) values ('briefing', 'm', null, null, null, null, null, 'ok')$$, -2, 'a run that worked must have its cost');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'm', 1, 1, null, 'error')$$, -2, 'a blank cost needs blank token counts too');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome, started_at) values ('briefing', 'm', 1, 1, 0.01, 'ok', now() + interval '1 day')$$, -2, 'a start time in the future is rejected');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome, started_at) values ('briefing', 'm', 1, 1, 0.01, 'ok', now() - interval '2 days')$$, -2, 'a start time long before the run is rejected');
+select test.expect($$update public.ai_usage set run_ref = 'bbbbbbbbbbbb'$$, -1, 'run codes cannot be changed');
+select test.expect($$update public.ai_usage set started_at = now()$$, -1, 'start times cannot be changed');
+select test.expect($$delete from public.ai_usage$$, -1, 'runs cannot be deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select run_ref, started_at from public.ai_usage', 0, 'developer cannot read bot runs');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome) values ('briefing', 'm', null, null, null, null, null, 'error')$$, -1, 'developer cannot log runs, even failed ones');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7p. Trash (0019): owner + managers trash/restore; ONLY the owner deletes, ONLY from
+--     Trash; developers never see trashed work; deletions leave a name-free record.
+-- ---------------------------------------------------------------------------
+insert into public.clients (id, slug, name, monthly_usd, start_date, status, services) values
+  ('00000000-0000-0000-0000-000000007c09', 'trash-test', 'Trash Test (fictional)', 100, '2026-01-05', 'active', '{SEO}'),
+  ('00000000-0000-0000-0000-000000007c08', 'keep-test', 'Keep Test (fictional)', 100, '2026-01-05', 'active', '{SEO}'),
+  ('00000000-0000-0000-0000-000000007c07', 'billing-test', 'Billing Test (fictional)', 100, '2026-01-05', 'active', '{SEO}');
+insert into public.billing_contact_matches (provider_contact_id, client_id, matched_by)
+  values ('trashtest01', '00000000-0000-0000-0000-000000007c07', '00000000-0000-0000-0000-0000000000a1');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-000000007c09', 'work_order', 'Old page (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'trash setup: a work order for developer 1');
+select test.expect($$insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values ('00000000-0000-0000-0000-00000000e002', '00000000-0000-0000-0000-000000007c09', 'follow_up', 'Old follow-up (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'trash setup: a follow-up for developer 1');
+select test.expect($$insert into public.actions (id, client_id, kind, title, created_by) values ('00000000-0000-0000-0000-00000000e003', '00000000-0000-0000-0000-000000007c08', 'work_order', 'Duplicate (test)', '00000000-0000-0000-0000-0000000000a2')$$, 1, 'trash setup: a duplicate work order');
+select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-000000007c09', '2026-11-01')$$, 1, 'trash setup: a check-in');
+select test.expect($$insert into public.work_order_comments (action_id, body) values ('00000000-0000-0000-0000-00000000e001', 'Old note (test)')$$, 1, 'trash setup: a comment');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000e001'$$, 1, 'developer sees their work order before it is trashed');
+select test.expect($$update public.actions set trashed_at = now() where id = '00000000-0000-0000-0000-00000000e001'$$, -1, 'developer cannot move things to Trash');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'developer cannot delete their work order');
+select test.expect('select * from public.deletion_log', 0, 'developer cannot read the deletion record');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set trashed_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000e001'$$, 1, 'manager moves a work order to Trash');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000e001' and trashed_at > now() - interval '1 minute' and trashed_by = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'the database stamps when and who (not the app)');
+select test.expect($$update public.actions set trashed_by = '00000000-0000-0000-0000-0000000000a1' where id = '00000000-0000-0000-0000-00000000e001'$$, -1, 'who trashed it cannot be faked');
+select test.expect($$update public.clients set trashed_at = now() where id = '00000000-0000-0000-0000-000000007c09'$$, 1, 'manager moves a client to Trash');
+select test.expect($$update public.clients set trashed_at = now(), monthly_usd = 999 where id = '00000000-0000-0000-0000-000000007c08'$$, -1, 'manager cannot sneak other client changes in with Trash');
+select test.expect($$select * from public.clients where id = '00000000-0000-0000-0000-000000007c08' and trashed_at is null and monthly_usd = 100$$, 1, 'that client is untouched');
+select test.expect($$update public.clients set trashed_at = now() where id = '00000000-0000-0000-0000-000000007c07'$$, -2, 'a client with billing records cannot go to Trash');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'manager cannot delete forever, even from Trash');
+select test.expect($$delete from public.clients where id = '00000000-0000-0000-0000-000000007c09'$$, 0, 'manager cannot delete a client forever, even from Trash');
+select test.expect('select * from public.deletion_log', 0, 'manager cannot read the deletion record');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.actions where id in ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-00000000e002')$$, 0, 'developer never sees trashed work, or work of a trashed client');
+select test.expect($$select * from public.my_work where id in ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-00000000e002')$$, 0, 'trashed work leaves the developer''s list');
+select test.expect($$select * from public.my_client_contacts where client_slug = 'trash-test'$$, 0, 'a trashed client leaves the developer''s contacts');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'comments of trashed work are hidden from developers');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'history of trashed work is hidden from developers');
+select test.expect($$update public.actions set status = 'in_progress' where id = '00000000-0000-0000-0000-00000000e002'$$, 0, 'developer cannot change work of a trashed client');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.clients set trashed_at = null where id = '00000000-0000-0000-0000-000000007c09'$$, 1, 'manager restores a client');
+select test.expect($$select * from public.clients where id = '00000000-0000-0000-0000-000000007c09' and trashed_by is null$$, 1, 'restoring clears who trashed it');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000e002'$$, 1, 'restoring the client brings its work back');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'an item trashed on its own stays in Trash');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.clients set trashed_at = now() where id = '00000000-0000-0000-0000-000000007c09'$$, 1, 'owner moves the client to Trash again');
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000e003'$$, 0, 'owner cannot delete what is not in Trash');
+select test.expect($$update public.actions set trashed_at = now() where id = '00000000-0000-0000-0000-00000000e003'$$, 1, 'owner trashes the duplicate');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000e003'$$, 0, 'owner without two-factor cannot delete');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$delete from public.actions where id = '00000000-0000-0000-0000-00000000e003'$$, 1, 'owner deletes a trashed work order forever');
+select test.expect($$delete from public.clients where id = '00000000-0000-0000-0000-000000007c09'$$, 1, 'owner deletes a trashed client forever');
+select test.expect('select * from public.deletion_log', 4, 'owner reads the deletion record');
+commit;
+
+-- Everything attached went with it; nothing else was touched.
+select test.expect($$select * from public.clients where id = '00000000-0000-0000-0000-000000007c09'$$, 0, 'the client is gone');
+select test.expect($$select * from public.check_ins where client_id = '00000000-0000-0000-0000-000000007c09'$$, 0, 'its check-ins went with it');
+select test.expect($$select * from public.actions where client_id = '00000000-0000-0000-0000-000000007c09'$$, 0, 'its work went with it');
+select test.expect($$select * from public.work_order_comments where action_id = '00000000-0000-0000-0000-00000000e001'$$, 0, 'comments went with it');
+select test.expect($$select * from public.work_order_history where action_id in ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-00000000e003')$$, 0, 'history went with it');
+select test.expect($$select * from public.clients where id in ('00000000-0000-0000-0000-000000007c08', '00000000-0000-0000-0000-000000007c07')$$, 2, 'other clients are untouched');
+select test.expect($$select * from public.deletion_log where kind = 'client' and not with_client$$, 1, 'record: one client');
+select test.expect($$select * from public.deletion_log where kind in ('work_order', 'follow_up') and with_client$$, 2, 'record: its two items, marked as deleted with the client');
+select test.expect($$select * from public.deletion_log where kind = 'work_order' and not with_client$$, 1, 'record: the duplicate deleted on its own');
+select test.expect($$select column_name from information_schema.columns where table_schema = 'public' and table_name = 'deletion_log' and column_name not in ('id', 'deleted_at', 'deleted_by', 'kind', 'with_client')$$, 0, 'the deletion record has no room for names or contents');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.deletion_log (kind) values ('client')$$, -1, 'nobody can write the deletion record by hand');
+select test.expect($$delete from public.deletion_log$$, -1, 'nobody can erase the deletion record');
+select test.expect($$delete from public.billing_contact_matches$$, -1, 'billing matches still cannot be deleted');
+commit;
 
 -- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.

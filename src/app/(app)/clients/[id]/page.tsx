@@ -20,6 +20,7 @@ import { planLabel } from "@/lib/ops";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { ActionForm } from "@/components/forms/ActionForm";
 import { Timeline } from "@/components/cards/Timeline";
+import { MoveToTrashButton } from "@/components/forms/TrashForms";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 
 type Props = { params: Promise<{ id: string }> };
@@ -296,6 +297,16 @@ export default async function ClientPage({ params }: Props) {
           <Provenance kind={real ? "real" : "demo"} />
         </div>
       </GlassCard>
+      {real && c.dbId && (member?.role === "owner" || member?.role === "manager") && (
+        <div className="mt-4">
+          <MoveToTrashButton
+            kind="client"
+            id={c.dbId}
+            what={c.name}
+            note="Only for duplicates, test records or mistakes: its work orders and check-ins go with it. A former client should be marked Ended instead, so your numbers stay right."
+          />
+        </div>
+      )}
     </>
   );
 }

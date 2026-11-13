@@ -265,7 +265,11 @@ describe("database safety (Phase 2)", () => {
   });
 
   it("the app never deletes database rows, calls database functions, or uses admin APIs", () => {
-    expect(findMatches([/\.from\(\s*["'`][a-z_]+["'`]\s*\)\s*\.delete\(/, /auth\.admin/])).toEqual([]);
+    expect(findMatches([/auth\.admin/])).toEqual([]);
+    // Deletes: the ONE approved exception is the owner's "Delete forever" from Trash (0019),
+    // pinned by the Trash guardrail below. Nothing else deletes.
+    const deletes = contents.flatMap(({ file, text }) => [...text.matchAll(/\.delete\(\)/g)].map(() => file));
+    expect(deletes).toEqual([ACTIONS]);
     // One approved exception (owner summary, 0012): exactly one database function call,
     // in the database module, to the owner's dashboard read. Nothing else.
     const calls = contents.flatMap(({ file, text }) => [...text.matchAll(/\.rpc\(\s*([^,)]*)/g)].map((m) => `${file}: ${m[1]}`));
@@ -407,8 +411,17 @@ describe("cancel and quick add (0013)", () => {
     expect(actions).toMatch(/const STATUSES = \["open", "in_progress", "waiting", "blocked", "review", "done"\] as const;/);
   });
 
-  it("there are still no deletes anywhere in the app", () => {
-    expect(findMatches([/\.delete\(\)/])).toEqual([]);
+  it("the only delete in the app is the owner's Delete forever, and only for things in Trash (0019)", () => {
+    const deletes = contents.flatMap(({ file, text }) => [...text.matchAll(/\.delete\(\)/g)].map(() => file));
+    expect(deletes).toEqual(["src/app/actions.ts"]);
+    const start = actions.indexOf("export async function deleteForever");
+    expect(start).toBeGreaterThan(-1);
+    const body = actions.slice(start, actions.indexOf("\n}\n", start));
+    expect(body).toMatch(/\.delete\(\)/); // the one delete lives here
+    expect(body).toMatch(/if \(!me \|\| me\.role !== "owner"\) return/);
+    expect(body).toMatch(/deleteConfirmed\(/);
+    expect(body).toMatch(/\.delete\(\)\.eq\("id", id\)\.not\("trashed_at", "is", null\)/);
+    expect(body).toMatch(/kind === "client" \? "clients" : "actions"/);
   });
 });
 
@@ -704,5 +717,60 @@ describe("Smart add drafts: Confirm works once a client is picked; manual adds a
   });
   it("Add without AI never sends anything to the AI and isn't flagged as an AI draft", () => {
     expect(form).toMatch(/fromDraft aiDraft=\{false\}/);
+  });
+});
+
+describe("bot runs (0018): fixed words, random ids, read-only", () => {
+  const runsFile = readFileSync(join(ROOT, "src/lib/bot-runs.ts"), "utf8");
+  const dataSource = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+
+  it("the run list is read with exactly these columns (no prompts, answers or ids)", () => {
+    const selects = [...dataSource.matchAll(/\.select\("([^"]*run_ref[^"]*)"\)/g)].map((m) => m[1]);
+    expect(selects).toEqual(["run_ref, feature, created_at, started_at, cost_usd, outcome"]);
+  });
+
+  it("bot and action words come only from the fixed table; run_id is the random code, never the database id", () => {
+    expect(runsFile).toMatch(/bot: words\.bot,/);
+    expect(runsFile).toMatch(/action: words\.action,/);
+    expect(runsFile).toMatch(/run_id: r\.run_ref,/);
+    expect(runsFile).not.toMatch(/\br\.id\b/);
+    expect(runsFile).not.toMatch(/^import /m); // pure: no database, no network
+  });
+
+  it("nothing lets the dashboard start, stop or change a bot", () => {
+    const route = readFileSync(join(ROOT, "src/app/api/owner-summary/route.ts"), "utf8");
+    expect(route).not.toMatch(/export (async )?function (POST|PUT|PATCH|DELETE)/);
+    expect(runsFile).not.toMatch(/askAi|fetch\(|\.insert\(|\.update\(/);
+  });
+});
+
+describe("Trash (0019): trashed things leave every list", () => {
+  const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+  const act = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const section = (name: string) => {
+    const i = ds.indexOf(name);
+    return ds.slice(i, ds.indexOf("\n});\n", i) === -1 ? undefined : ds.indexOf("\n}", i + 50) + 200);
+  };
+
+  it("clients, work items and the done list all skip trashed things", () => {
+    expect(section("async function loadDatabaseRoster")).toMatch(/clients\.data\.filter\(\(r\) => !trashed\.clients\.has\(r\.id\)\)/);
+    expect(section("export const getActions")).toMatch(/!trashed\.actions\.has\(r\.id!\) && !\(r\.client_id && trashed\.clients\.has\(r\.client_id\)\)/);
+    expect(section("export const getCompletions")).toMatch(/\.filter\(\(r\) => !inTrash\(r\)\)/);
+  });
+
+  it("moving to Trash and restoring are owner/manager only; delete forever is owner only", () => {
+    for (const name of ["moveToTrash", "restoreFromTrash"]) {
+      const s = act.indexOf(`export async function ${name}`);
+      expect(act.slice(s, s + 400)).toMatch(/me\.role !== "owner" && me\.role !== "manager"\)\) return;/);
+    }
+    const d = act.indexOf("export async function deleteForever");
+    expect(act.slice(d, d + 500)).toMatch(/me\.role !== "owner"\) return/);
+  });
+
+  it("the Trash screen is not part of the developer view or the preview", async () => {
+    const page = readFileSync(join(ROOT, "src/app/(app)/trash/page.tsx"), "utf8");
+    expect(page).toMatch(/me\.role !== "owner" && me\.role !== "manager"\)\) return <RoleNotice/);
+    const { previewAllows } = await import("@/lib/preview");
+    expect(previewAllows("/trash")).toBe(false);
   });
 });

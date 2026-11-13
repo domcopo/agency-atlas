@@ -144,7 +144,7 @@ async function build(over: Partial<import("@/lib/owner-summary").OwnerSummaryInp
 describe("owner summary", () => {
   it("has the agreed shape", async () => {
     const s = await build();
-    expect(Object.keys(s)).toEqual(["schema", "source", "business", "generated_at", "metrics", "lists", "alerts", "bots"]);
+    expect(Object.keys(s)).toEqual(["schema", "source", "business", "generated_at", "metrics", "lists", "alerts", "bots", "recent_runs"]);
     expect(s).toMatchObject({ schema: "owner-summary/v1", source: "agency-atlas", business: "yo-marketing-co", generated_at: NOW.toISOString() });
     for (const m of s.metrics) {
       expect(Object.keys(m).every((k) => ["key", "period", "period_start", "value", "unit", "note"].includes(k))).toBe(true);
@@ -158,7 +158,7 @@ describe("owner summary", () => {
     expect(s.metrics.find((m) => m.key === "ai_spend")).toMatchObject({ period: "month", period_start: "2026-11-01", value: 1.23 });
     for (const l of s.lists) for (const item of l.items) expect(Object.keys(item).sort()).toEqual(["detail", "name"]);
     for (const a of s.alerts) expect(["info", "watch", "urgent"]).toContain(a.severity);
-    expect(s.bots.map((b) => b.name)).toEqual(["Ops Briefing", "Client Profile", "Work Order Drafts"]);
+    expect(s.bots.map((b) => b.name)).toEqual(["Ops Briefing", "Client Profile", "Work Order Drafts", "Smart Add", "Work Prompt Helper"]);
     expect(s.bots[0]).toEqual({ name: "Ops Briefing", status: "active", last_run_at: "2026-11-08T12:00:00Z", last_result: "ok" });
     expect(s.bots[1]?.last_result).toBe("error");
     expect(s.bots[2]).toMatchObject({ last_run_at: null, last_result: "unknown" });
@@ -350,5 +350,93 @@ describe("owner summary: billing (0015)", () => {
     });
     expect(metric(s, "failed_payments_count")?.value).toBe(1); // still counted this month
     expect(s.alerts.find((a) => a.title === "Payments need attention")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bot runs (0018) in the summary: fixed words only, random ids, unknown cost stays null.
+// ---------------------------------------------------------------------------
+
+describe("owner summary: recent bot runs (0018)", () => {
+  type Row = import("@/lib/bot-runs").RunLogRow;
+  const RUN_NOW = new Date("2026-11-12T20:00:00Z");
+  const row = (over: Partial<Row> = {}): Row => ({
+    run_ref: "0a1b2c3d4e5f",
+    feature: "briefing",
+    created_at: "2026-11-12T19:00:10Z",
+    started_at: "2026-11-12T19:00:00Z",
+    cost_usd: "0.0412",
+    outcome: "ok",
+    ...over,
+  });
+
+  it("each run has exactly the agreed fields, with fixed bot and action words", async () => {
+    const { buildRecentRuns, AI_BOTS } = await import("@/lib/bot-runs");
+    const runs = buildRecentRuns([row()], RUN_NOW);
+    expect(runs).toEqual([
+      {
+        run_id: "0a1b2c3d4e5f",
+        parent_run_id: null,
+        bot: "Ops Briefing",
+        action: "built daily plan",
+        started_at: "2026-11-12T19:00:00.000Z",
+        finished_at: "2026-11-12T19:00:10.000Z",
+        result: "ok",
+        cost_usd: 0.0412,
+      },
+    ]);
+    for (const w of Object.values(AI_BOTS)) expect(w.action.split(" ").length).toBeLessThanOrEqual(8);
+  });
+
+  it("a missing cost stays null, never 0", async () => {
+    const { buildRecentRuns } = await import("@/lib/bot-runs");
+    const [r] = buildRecentRuns([row({ cost_usd: null, outcome: "error" })], RUN_NOW);
+    expect(r?.cost_usd).toBeNull();
+    expect(r?.result).toBe("error");
+    // A real $0 stays 0 (known), and a refusal counts as an error.
+    const [z] = buildRecentRuns([row({ cost_usd: 0, outcome: "refused" })], RUN_NOW);
+    expect(z).toMatchObject({ cost_usd: 0, result: "error" });
+  });
+
+  it("newest first, at most 100, only the last 7 days; unknown features and bad ids skipped", async () => {
+    const { buildRecentRuns } = await import("@/lib/bot-runs");
+    const many = Array.from({ length: 130 }, (_, i) =>
+      row({ run_ref: i.toString(16).padStart(12, "0"), created_at: new Date(RUN_NOW.getTime() - (i + 1) * 60_000).toISOString(), started_at: null }),
+    );
+    const runs = buildRecentRuns(
+      [...many, row({ created_at: "2026-11-01T00:00:00Z", run_ref: "ffffffffffff" }), row({ feature: "send_emails", run_ref: "eeeeeeeeeeee" }), row({ run_ref: "not-a-code" })],
+      RUN_NOW,
+    );
+    expect(runs).toHaveLength(100);
+    expect(runs[0]?.run_id).toBe("000000000000");
+    expect(runs.map((r) => r.finished_at)).toEqual([...runs.map((r) => r.finished_at)].sort().reverse());
+    expect(runs.some((r) => ["ffffffffffff", "eeeeeeeeeeee", "not-a-code"].includes(r.run_id))).toBe(false);
+    // No start time saved (before 0018): the finish time stands in.
+    expect(runs[0]?.started_at).toBe(runs[0]?.finished_at);
+    expect(buildRecentRuns([], RUN_NOW)).toEqual([]);
+  });
+
+  it("no contact details or message text can get in, even from a poisoned log line", async () => {
+    const { buildRecentRuns } = await import("@/lib/bot-runs");
+    const { findLeaks } = await import("@/lib/owner-summary");
+    const dirty = "Call Pat at pat@example.com or (555) 010-1234, 12 Main Street. Message: please fix the site";
+    const poisoned = { ...row(), prompt: dirty, answer: dirty, note: dirty, client: "Pat Example (fictional)" } as unknown as Row;
+    const runs = buildRecentRuns([poisoned, row({ feature: dirty, run_ref: "abcdefabcdef" }), row({ outcome: dirty, run_ref: "123456abcdef" })], RUN_NOW);
+    const text = JSON.stringify(runs);
+    expect(findLeaks(runs)).toEqual([]);
+    for (const bad of ["@", "555", "Main Street", "please fix", "Pat", "Message"]) expect(text).not.toContain(bad);
+    for (const r of runs) {
+      expect(Object.keys(r)).toEqual(["run_id", "parent_run_id", "bot", "action", "started_at", "finished_at", "result", "cost_usd"]);
+      expect(["ok", "error", "running"]).toContain(r.result);
+    }
+  });
+
+  it("the summary carries the list as given; null when the log can't be read", async () => {
+    const { buildRecentRuns } = await import("@/lib/bot-runs");
+    const runs = buildRecentRuns([row()], RUN_NOW);
+    expect((await build({ recentRuns: runs })).recent_runs).toEqual(runs);
+    expect((await build({ recentRuns: [] })).recent_runs).toEqual([]);
+    expect((await build({ recentRuns: null })).recent_runs).toBeNull();
+    expect((await build()).recent_runs).toBeNull();
   });
 });
