@@ -57,6 +57,9 @@ export function KitDocForm({ doc, defaultKind = "sop" }: { doc?: KitDoc; default
           <label className="inline-flex min-h-10 items-center gap-2">
             <input type="checkbox" name="aud_developer" defaultChecked={aud.includes("developer")} className="size-4 accent-violet" /> Developers
           </label>
+          <label className="inline-flex min-h-10 items-center gap-2">
+            <input type="checkbox" name="aud_sales" defaultChecked={aud.includes("sales")} className="size-4 accent-violet" /> Sales
+          </label>
         </div>
       </fieldset>
       <button type="submit" disabled={pending} className="pressable min-h-11 w-full rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">

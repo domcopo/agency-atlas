@@ -9,10 +9,12 @@ Only the owner adds people, by hand, in Supabase. The app itself can't create ac
 |---|---|---|
 | **owner** | Everything | Edit clients, import, sync GoHighLevel |
 | **manager** | All clients, health, check-ins, pipeline | Log check-ins, answer Atlas asks |
-| **developer** | Nothing yet (the Work tab still uses sample data) | Nothing yet |
+| **developer** | Their own work orders, issues and follow-ups; contact dates of their clients; Kit pages for developers | Update status, tick steps, comment |
+| **sales** | Open leads in the Sales pipelines (no phones or emails), GoHighLevel user names, their own target, lead follow-ups, Kit pages for sales | Log reach-outs, add/finish lead follow-ups, Refresh leads |
 
-Rule of thumb: people who talk to clients → **manager**. SEO developers → **developer**
-for now. They'll get their own work list when work orders become real.
+Rule of thumb: people who talk to clients → **manager**. SEO developers → **developer**.
+Salespeople → **sales** (then link them to their GoHighLevel user and set a target in
+Sales → Setup).
 
 The database enforces these roles. Hiding a button is not what protects the data.
 
@@ -30,7 +32,7 @@ from auth.users
 where email = 'their@email.com';
 ```
 
-It should say **1 row**. (Role must be exactly `manager` or `developer`.)
+It should say **1 row**. (Role must be exactly `manager`, `developer` or `sales`.)
 
 4. On their first sign-in, the app makes them set up two-factor on their phone.
 

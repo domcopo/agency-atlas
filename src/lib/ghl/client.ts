@@ -28,6 +28,8 @@ const ALLOWED: { pattern: RegExp; version: string; token?: "billing" }[] = [
   { pattern: /^\/locations\/[A-Za-z0-9]+$/, version: "2021-07-28" },
   { pattern: /^\/opportunities\/pipelines$/, version: "2021-07-28" },
   { pattern: /^\/opportunities\/search$/, version: "2021-07-28" },
+  // Sales (0020): team members' ids + names only, to show who each lead is assigned to (users.readonly).
+  { pattern: /^\/users\/$/, version: "2021-07-28" },
   { pattern: /^\/calendars\/$/, version: "2021-04-15" },
   { pattern: /^\/calendars\/events$/, version: "2021-04-15" },
   // Phase 6: conversation TIMES only (scopes conversations.readonly + conversations/message.readonly).
@@ -162,6 +164,7 @@ export function cleanTime(v: unknown): string | null {
 export interface GhlOpportunity {
   ghlId: string;
   name: string | null;
+  pipelineId: string | null;
   pipelineName: string | null;
   stageName: string | null;
   status: "open" | "won" | "lost" | "abandoned";
@@ -170,6 +173,8 @@ export interface GhlOpportunity {
   createdAt: string | null;
   updatedAt: string | null;
   statusChangedAt: string | null;
+  /** The GoHighLevel user the lead is assigned to (an id; names come from readUsers). */
+  assignedUserId: string | null;
 }
 
 export interface GhlAppointment {
@@ -197,11 +202,13 @@ export function parseOpportunities(raw: unknown[], pipelines: Map<string, { name
     const ghlId = cleanId(o.id);
     const status = STATUSES.find((s) => s === o.status);
     if (!ghlId || !status) continue; // skip anything that doesn't look right
-    const pipeline = typeof o.pipelineId === "string" ? pipelines.get(o.pipelineId) : undefined;
+    const pipelineId = cleanId(o.pipelineId);
+    const pipeline = pipelineId ? pipelines.get(pipelineId) : undefined;
     const value = typeof o.monetaryValue === "number" && Number.isFinite(o.monetaryValue) && o.monetaryValue >= 0 && o.monetaryValue < 1e9 ? Math.round(o.monetaryValue * 100) / 100 : null;
     out.push({
       ghlId,
       name: cleanText(o.name, 200),
+      pipelineId,
       pipelineName: pipeline?.name ?? null,
       stageName: (typeof o.pipelineStageId === "string" ? pipeline?.stages.get(o.pipelineStageId) : null) ?? null,
       status,
@@ -210,12 +217,17 @@ export function parseOpportunities(raw: unknown[], pipelines: Map<string, { name
       createdAt: cleanTime(o.createdAt),
       updatedAt: cleanTime(o.updatedAt),
       statusChangedAt: cleanTime(o.lastStatusChangeAt),
+      assignedUserId: typeof o.assignedTo === "string" && GHL_USER_ID.test(o.assignedTo) ? o.assignedTo : null,
     });
   }
   return out;
 }
 
-export async function readOpportunities(): Promise<GhlOpportunity[]> {
+/**
+ * Opportunities, read-only. With pipelineIds (Sales "Refresh leads"), only those pipelines
+ * are asked for; without, every pipeline (the owner's full Sync).
+ */
+export async function readOpportunities(pipelineIds?: string[]): Promise<GhlOpportunity[]> {
   const s = settings();
   if (!s) return [];
 
@@ -233,20 +245,60 @@ export async function readOpportunities(): Promise<GhlOpportunity[]> {
   }
 
   const raw: unknown[] = [];
-  let cursor: { startAfter: string; startAfterId: string } | null = null;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const query: Record<string, string> = { location_id: s.locationId, status: "all", limit: "100" };
-    if (cursor) Object.assign(query, cursor);
-    const data = await get("/opportunities/search", query);
-    const batch = list(isObj(data) ? data.opportunities : null);
-    raw.push(...batch);
-    const meta = isObj(data) && isObj(data.meta) ? data.meta : null;
-    const nextAfter = meta && (typeof meta.startAfter === "number" || typeof meta.startAfter === "string") ? String(meta.startAfter) : null;
-    const nextId = meta ? cleanId(meta.startAfterId) : null;
-    if (batch.length < 100 || !nextAfter || !nextId) break;
-    cursor = { startAfter: nextAfter, startAfterId: nextId };
+  const only = pipelineIds?.map(cleanId).filter((id): id is string => Boolean(id) && pipelines.has(id!)).slice(0, 10);
+  for (const pipelineId of only ?? [null]) {
+    let cursor: { startAfter: string; startAfterId: string } | null = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const query: Record<string, string> = { location_id: s.locationId, status: "all", limit: "100" };
+      if (pipelineId) query.pipeline_id = pipelineId;
+      if (cursor) Object.assign(query, cursor);
+      const data = await get("/opportunities/search", query);
+      const batch = list(isObj(data) ? data.opportunities : null);
+      raw.push(...batch);
+      const meta = isObj(data) && isObj(data.meta) ? data.meta : null;
+      const nextAfter = meta && (typeof meta.startAfter === "number" || typeof meta.startAfter === "string") ? String(meta.startAfter) : null;
+      const nextId = meta ? cleanId(meta.startAfterId) : null;
+      if (batch.length < 100 || !nextAfter || !nextId) break;
+      cursor = { startAfter: nextAfter, startAfterId: nextId };
+    }
   }
-  return parseOpportunities(raw, pipelines);
+  const parsed = parseOpportunities(raw, pipelines);
+  // GoHighLevel should already filter by pipeline; this makes sure nothing else is kept.
+  return only ? parsed.filter((o) => o.pipelineId !== null && only.includes(o.pipelineId)) : parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Sales (0020): GoHighLevel users, ID AND NAME ONLY. GoHighLevel also sends emails,
+// phone numbers and permissions; this code never reads those fields.
+// ---------------------------------------------------------------------------
+
+const GHL_USER_ID = /^[A-Za-z0-9]{6,40}$/;
+
+export interface GhlUser {
+  ghlUserId: string;
+  name: string;
+}
+
+/** Raw user records → id + display name. Names that look like an email or phone are dropped. Exported for tests. */
+export function parseUsers(raw: unknown[]): GhlUser[] {
+  const out: GhlUser[] = [];
+  for (const u of raw.filter(isObj)) {
+    const ghlUserId = typeof u.id === "string" && GHL_USER_ID.test(u.id) ? u.id : null;
+    const joined = [cleanText(u.firstName, 40), cleanText(u.lastName, 40)].filter(Boolean).join(" ");
+    const name = cleanText(u.name, 80) ?? cleanText(joined, 80);
+    if (!ghlUserId || !name) continue;
+    if (/@/.test(name) || /\d[\d\s().-]{6,}\d/.test(name)) continue; // contact details, not a name
+    out.push({ ghlUserId, name });
+  }
+  return out.slice(0, 200);
+}
+
+/** The sub-account's users (needs the users.readonly scope). */
+export async function readUsers(): Promise<GhlUser[]> {
+  const s = settings();
+  if (!s) return [];
+  const data = await get("/users/", { locationId: s.locationId });
+  return parseUsers(list(isObj(data) ? data.users : null));
 }
 
 /** Turns raw calendar events into checked records. Exported for tests. */

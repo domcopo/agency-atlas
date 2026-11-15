@@ -9,6 +9,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { cache } from "react";
+import { asMemberRole, type MemberRole } from "@/lib/roles";
 
 let warned = false;
 /** Logs (this Mac only) why the settings were refused. Never logs the values. */
@@ -100,20 +101,27 @@ export async function getTwoFactorState(): Promise<"enabled" | "pending" | "none
 }
 
 /** The signed-in person's id and role, or null. Verified by the database, not trusted from the browser. */
-export async function getCurrentMember(): Promise<{ userId: string; name: string; role: "owner" | "manager" | "developer"; staffId: string | null } | null> {
+export async function getCurrentMember(): Promise<{ userId: string; name: string; role: MemberRole; staffId: string | null; ghlUserId: string | null } | null> {
   if (!isDatabaseConfigured()) return null;
   const db = await createDatabaseClient();
   const { data: claims } = await db.auth.getClaims();
   const userId = claims?.claims?.sub;
   if (!userId) return null;
-  // staff_id links the login to a team member (0007). Before 0007, read without it.
-  const linked = await db.from("team_members").select("display_name, role, staff_id").eq("user_id", userId).maybeSingle();
-  const data = linked.error
-    ? (await db.from("team_members").select("display_name, role").eq("user_id", userId).maybeSingle()).data
-    : linked.data;
-  if (!data) return null;
-  const staffId = (data as { staff_id?: string | null }).staff_id ?? null;
-  return { userId, name: data.display_name as string, role: data.role as "owner" | "manager" | "developer", staffId };
+  // staff_id links the login to a team member (0007); ghl_user_id to a GoHighLevel user (0020).
+  // Before those setup steps, read without them.
+  let data: Record<string, unknown> | null = null;
+  for (const cols of ["display_name, role, staff_id, ghl_user_id", "display_name, role, staff_id", "display_name, role"]) {
+    const res = await db.from("team_members").select(cols).eq("user_id", userId).maybeSingle();
+    if (!res.error) {
+      data = res.data as Record<string, unknown> | null;
+      break;
+    }
+  }
+  const role = asMemberRole(data?.role);
+  if (!data || !role) return null;
+  const staffId = typeof data.staff_id === "string" ? data.staff_id : null;
+  const ghlUserId = typeof data.ghl_user_id === "string" ? data.ghl_user_id : null;
+  return { userId, name: data.display_name as string, role, staffId, ghlUserId };
 }
 
 /**

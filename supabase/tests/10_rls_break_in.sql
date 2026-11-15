@@ -1292,6 +1292,179 @@ select test.expect($$delete from public.billing_contact_matches$$, -1, 'billing 
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7q. Sales role (0020): sees ONLY open sales-pipeline leads, GHL user names, the pipeline
+--     list, reach-outs, their own target and lead follow-ups. Nothing else, anywhere.
+-- ---------------------------------------------------------------------------
+insert into auth.users (id, email) values
+  ('00000000-0000-0000-0000-0000000000a6', 'sales1@example.com'),
+  ('00000000-0000-0000-0000-0000000000a7', 'sales2@example.com');
+insert into public.team_members (user_id, display_name, role, ghl_user_id) values
+  ('00000000-0000-0000-0000-0000000000a6', 'Sales 1 (test)', 'sales', 'ghluser01'),
+  ('00000000-0000-0000-0000-0000000000a7', 'Sales 2 (test)', 'sales', 'ghluser02');
+select test.expect($$insert into public.team_members (user_id, display_name, role) values ('00000000-0000-0000-0000-0000000000a4', 'X', 'admin')$$, -2, 'unknown roles are still rejected');
+insert into public.ghl_opportunities (ghl_id, name, status, monetary_value, pipeline_id, assigned_user_id) values
+  ('slead1', 'Sample Plumbing (fictional)', 'open', 1200, 'pipeSales', 'ghluser01'),
+  ('slead2', 'Sample Bakery (fictional)', 'open', 800, 'pipeSales', 'ghluser02'),
+  ('slead3', 'Sample Gym (fictional)', 'lost', 900, 'pipeSales', 'ghluser01'),
+  ('olead1', 'Sample Website Build (fictional)', 'open', 3000, 'pipeDev', 'ghluser01');
+insert into public.ghl_users (ghl_user_id, name) values ('ghluser01', 'Sales One (test)'), ('ghluser02', 'Sales Two (test)');
+select test.expect($$insert into public.ghl_users (ghl_user_id, name) values ('ghluser03', 'pat@example.com')$$, -2, 'GoHighLevel user names refuse email addresses');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.ghl_opportunities', 0, 'before the owner picks sales pipelines, sales sees no leads');
+select test.expect($$insert into public.sales_pipelines (pipeline_id, pipeline_name) values ('pipeSales', 'Sales (test)')$$, -1, 'sales cannot pick the sales pipelines');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.sales_pipelines (pipeline_id, pipeline_name) values ('pipeDev', 'Dev (test)')$$, -1, 'managers cannot pick the sales pipelines');
+select test.expect($$insert into public.sales_targets (user_id, daily_target) values ('00000000-0000-0000-0000-0000000000a6', 50)$$, -1, 'managers cannot set targets');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.sales_pipelines (pipeline_id, pipeline_name, hot_stages) values ('pipeSales', 'Sales (test)', '{Proposal sent}')$$, 1, 'owner picks a sales pipeline');
+select test.expect($$insert into public.sales_targets (user_id) values ('00000000-0000-0000-0000-0000000000a6')$$, 1, 'owner sets a target');
+select test.expect($$select * from public.sales_targets where daily_target = 15$$, 1, 'the default target is 15');
+select test.expect($$insert into public.sales_targets (user_id, daily_target) values ('00000000-0000-0000-0000-0000000000a7', 500)$$, -2, 'absurd targets are rejected');
+select test.expect($$insert into public.sales_targets (user_id, daily_target) values ('00000000-0000-0000-0000-0000000000a7', 20)$$, 1, 'owner sets a second target');
+select test.expect($$update public.team_members set ghl_user_id = 'ghluser09' where user_id = '00000000-0000-0000-0000-0000000000a7'$$, 1, 'owner links a login to a GoHighLevel user');
+select test.expect($$update public.team_members set role = 'owner' where user_id = '00000000-0000-0000-0000-0000000000a7'$$, -1, 'roles still cannot be changed through the app');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.ghl_opportunities', 2, 'sales sees the open leads of sales pipelines (both salespeople''s)');
+select test.expect($$select * from public.ghl_opportunities where ghl_id in ('slead3', 'olead1', 'opp1')$$, 0, 'sales never sees other pipelines or closed leads');
+select test.expect('select * from public.ghl_users', 2, 'sales sees GoHighLevel user names');
+select test.expect('select * from public.sales_pipelines', 1, 'sales sees which pipelines count');
+select test.expect('select * from public.sales_targets', 1, 'sales sees only their own target');
+select test.expect('select * from public.team_members', 1, 'sales sees only their own team row');
+select test.expect($$update public.team_members set ghl_user_id = 'ghluser02'$$, 0, 'sales cannot relink logins');
+select test.expect($$update public.sales_targets set daily_target = 1$$, 0, 'sales cannot change their target');
+-- Reach-outs
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind, note, touched_at) values ('slead1', 'call', 'Left a voicemail (test)', '2020-01-01')$$, 1, 'sales logs a reach-out');
+select test.expect($$select * from public.lead_touches where touched_at > now() - interval '1 minute' and touched_by = '00000000-0000-0000-0000-0000000000a6'$$, 1, 'the database stamps who and when');
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind) values ('slead2', 'walk_in')$$, 1, 'sales logs a walk-in on a teammate''s lead');
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind) values ('olead1', 'call')$$, -1, 'sales cannot log on leads outside sales pipelines');
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind, touched_by) values ('slead1', 'call', '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot log a reach-out as someone else');
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind, note) values ('slead1', 'text', 'Their cell is 555-010-1234')$$, -2, 'reach-out notes refuse phone numbers');
+select test.expect($$insert into public.lead_touches (lead_ghl_id, kind, note) values ('slead1', 'email', 'wrote to pat@example.com')$$, -2, 'reach-out notes refuse email addresses');
+select test.expect($$update public.lead_touches set kind = 'meeting'$$, -1, 'reach-outs cannot be edited');
+select test.expect($$delete from public.lead_touches$$, -1, 'reach-outs cannot be deleted');
+-- Lead follow-ups only
+select test.expect($$insert into public.actions (lead_ghl_id, kind, title, created_by) values ('slead1', 'follow_up', 'Call back Tuesday (test)', '00000000-0000-0000-0000-0000000000a6')$$, 1, 'sales adds a lead follow-up');
+select test.expect($$update public.actions set status = 'done', done_at = now() where lead_ghl_id = 'slead1'$$, 1, 'sales ticks their lead follow-up done');
+select test.expect($$insert into public.actions (client_id, kind, title, created_by) values ('00000000-0000-0000-0000-0000000000c1', 'follow_up', 'X', '00000000-0000-0000-0000-0000000000a6')$$, -1, 'sales cannot add client follow-ups');
+select test.expect($$insert into public.actions (lead_ghl_id, kind, title, created_by) values ('slead1', 'work_order', 'X', '00000000-0000-0000-0000-0000000000a6')$$, -1, 'sales cannot add work orders');
+select test.expect($$select * from public.actions where lead_ghl_id is null$$, 0, 'sales never sees client items or work orders');
+select test.expect($$update public.actions set title = 'x' where lead_ghl_id is null$$, 0, 'sales cannot change client items');
+select test.expect($$update public.actions set trashed_at = now() where lead_ghl_id = 'slead1'$$, -1, 'sales cannot move things to Trash');
+select test.expect($$delete from public.actions$$, 0, 'sales cannot delete anything');
+-- Refresh leads: sales-pipeline copies only, at most every 10 minutes
+select test.expect($$insert into public.lead_refreshes (leads) values (2)$$, 1, 'sales refreshes leads');
+select test.expect($$insert into public.lead_refreshes (leads) values (2)$$, -2, 'a second refresh within 10 minutes is refused');
+select test.expect($$update public.ghl_opportunities set stage_name = 'Proposal sent' where ghl_id = 'slead1'$$, 1, 'a refresh may update a sales-pipeline lead');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead4', 'Sample Cafe (fictional)', 'open', 'pipeSales')$$, 1, 'a refresh may add a sales-pipeline lead');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('olead2', 'X', 'open', 'pipeDev')$$, -1, 'a refresh cannot add leads of other pipelines');
+select test.expect($$update public.ghl_opportunities set pipeline_id = 'pipeDev' where ghl_id = 'slead4'$$, -1, 'a refresh cannot move a lead out of sales');
+-- How the app's "Refresh leads" writes for a salesperson (src/app/actions.ts runLeadRefresh):
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead4', 'Sample Cafe (fictional)', 'open', 'pipeSales') on conflict (ghl_id) do update set name = excluded.name, status = excluded.status$$, 1, 'a sales refresh may update an open lead it can see');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead4', 'Sample Cafe (fictional)', 'won', 'pipeSales') on conflict (ghl_id) do update set name = excluded.name, status = excluded.status$$, -1, 'a sales refresh cannot mark a lead won (owner/manager refresh does)');
+select test.expect($$update public.ghl_opportunities set status = 'won' where ghl_id = 'slead4'$$, -1, 'sales cannot close a lead');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead3', 'X', 'open', 'pipeSales') on conflict (ghl_id) do nothing$$, 0, 'a sales refresh skips leads hidden from sales (closed copies stay as they are)');
+select test.expect($$select * from public.ghl_opportunities where ghl_id = 'slead3'$$, 0, 'the closed copy is still hidden from sales');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead5', 'Sample Bakery (fictional)', 'open', 'pipeSales') on conflict (ghl_id) do nothing$$, 1, 'a sales refresh may add a new open lead');
+select test.expect($$insert into public.ghl_appointments (ghl_id, calendar_name) values ('apptX', 'X')$$, -1, 'sales cannot write other GoHighLevel copies');
+select test.expect($$insert into public.sales_pipelines (pipeline_id) values ('pipeDev')$$, -1, 'sales cannot add pipelines');
+-- Kit pages for sales only
+select test.expect('select * from public.kit_docs', 0, 'sales sees no Kit pages until one is meant for sales');
+commit;
+
+-- A manager's refresh records that a sales lead was won (salespeople's can't).
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('slead4', 'Sample Cafe (fictional)', 'won', 'pipeSales') on conflict (ghl_id) do update set name = excluded.name, status = excluded.status$$, 1, 'a manager refresh marks a sales lead won');
+select test.expect($$insert into public.ghl_opportunities (ghl_id, name, status, pipeline_id) values ('olead1', 'X', 'won', 'pipeDev') on conflict (ghl_id) do update set status = excluded.status$$, -1, 'a manager refresh cannot write other pipelines');
+commit;
+
+-- Kit: a page meant for sales.
+insert into public.kit_docs (kind, title, category, body, audience, updated_by)
+  values ('sop', 'Cold call script (sample)', 'Sales', 'Say hello. (sample)', '{sales}', '00000000-0000-0000-0000-0000000000a1');
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.kit_docs', 1, 'sales sees Kit pages meant for sales');
+commit;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.kit_docs where 'sales' = any (audience) and not ('developer' = any (audience))$$, 0, 'developers do not see sales-only Kit pages');
+select test.expect('select * from public.ghl_opportunities', 0, 'developers still see no leads');
+select test.expect('select * from public.lead_touches', 0, 'developers see no reach-outs');
+select test.expect('select * from public.ghl_users', 0, 'developers see no GoHighLevel users');
+select test.expect('select * from public.sales_targets', 0, 'developers see no targets');
+commit;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal1"}';
+select test.expect('select * from public.ghl_opportunities', 0, 'sales without two-factor sees no leads');
+commit;
+
+-- The whole database: a salesperson reads ZERO rows from every table and view except the
+-- ones the plan allows. Counts as the admin first, so the check proves something.
+create temp table sales_scope_check as
+  select c.relname as name, 0::bigint as admin_rows
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relkind in ('r', 'v')
+    and c.relname not in ('ghl_opportunities', 'ghl_users', 'sales_pipelines', 'lead_touches',
+                          'sales_targets', 'lead_refreshes', 'actions', 'team_members', 'kit_docs');
+do $$
+declare r record; n bigint;
+begin
+  for r in select name from sales_scope_check loop
+    execute format('select count(*) from public.%I', r.name) into n;
+    update sales_scope_check set admin_rows = n where name = r.name;
+  end loop;
+end;
+$$;
+grant select on sales_scope_check to authenticated;
+select test.expect('select * from sales_scope_check where admin_rows > 0', (select count(*) from sales_scope_check where admin_rows > 0), 'sanity: the scope check covers tables that hold data');
+do $$
+begin
+  if (select count(*) from sales_scope_check where admin_rows > 0) < 20 then
+    raise exception 'FAILED: the sales scope check should cover at least 20 tables with data';
+  end if;
+  raise notice 'ok: the sales scope check covers % tables with data', (select count(*) from sales_scope_check where admin_rows > 0);
+end;
+$$;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+do $$
+declare r record; n bigint; bad text := '';
+begin
+  for r in select name from sales_scope_check loop
+    begin
+      execute format('select count(*) from public.%I', r.name) into n;
+    exception when insufficient_privilege then n := 0;
+    end;
+    if n > 0 then bad := bad || r.name || ' (' || n || ') '; end if;
+  end loop;
+  if bad <> '' then raise exception 'FAILED: a salesperson can read: %', bad; end if;
+  raise notice 'ok: a salesperson reads nothing from every other table and view';
+end;
+$$;
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

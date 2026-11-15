@@ -7,6 +7,7 @@ import { BottomNav } from "@/components/shell/BottomNav";
 import { PreviewBanner } from "@/components/shell/PreviewBanner";
 import { WorkOrdersButton } from "@/components/shell/WorkOrdersButton";
 import { NoticePill } from "@/components/shell/NoticePill";
+import { isSales } from "@/lib/roles";
 import { getCoachHints, getDeveloperViewer, getMember, getNotices, getWorkOrderBadge, usesDatabase } from "@/lib/data-source";
 
 // AI briefings can take up to ~2 minutes; give server actions room on the host.
@@ -18,6 +19,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // A developer, or the owner/a manager previewing one: the developer screens and tabs.
   const viewer = await getDeveloperViewer();
   const developer = Boolean(viewer);
+  const sales = isSales(member?.role);
   const [badge, notices] = await Promise.all([getWorkOrderBadge(), getNotices()]);
   return (
     <>
@@ -27,7 +29,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
       {badge !== null && <WorkOrdersButton count={badge} href={developer ? "/work" : "/work/orders"} />}
-      <BottomNav hints={developer ? {} : (await getCoachHints()).tabs} developer={developer} />
+      <BottomNav hints={developer || sales ? {} : (await getCoachHints()).tabs} mode={developer ? "developer" : sales ? "sales" : "full"} />
     </>
   );
 }

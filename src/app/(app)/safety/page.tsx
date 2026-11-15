@@ -261,6 +261,18 @@ export default async function SafetyPage() {
         </p>
       </GlassCard>
 
+      {db && member?.role === "owner" && (
+        <>
+          <SectionTitle>Sales</SectionTitle>
+          <GlassCard className="flex items-center justify-between gap-3 text-sm">
+            <span className="text-muted">Sales pipelines, salespeople&apos;s GoHighLevel users and daily targets.</span>
+            <Link href="/sales/setup" className="pressable inline-flex min-h-11 shrink-0 items-center rounded-xl border border-line bg-white/5 px-4 font-semibold">
+              Setup
+            </Link>
+          </GlassCard>
+        </>
+      )}
+
       {db && (member?.role === "owner" || member?.role === "manager") && (
         <>
           <SectionTitle>Trash</SectionTitle>

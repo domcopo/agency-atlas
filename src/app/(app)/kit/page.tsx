@@ -25,7 +25,8 @@ function DocLink({ d, today }: { d: KitDoc; today: string }) {
           <span className="block text-[11px] text-faint">
             {kitKindLabel(d.kind)}
             {d.category ? ` · ${d.category}` : ""}
-            {!d.audience.includes("developer") ? " · managers only" : ""}
+            {d.audience.length === 0 ? " · only you" : d.audience.length === 1 && d.audience[0] === "manager" ? " · managers only" : ""}
+            {d.audience.includes("sales") ? " · sales" : ""}
             {stale ? <span className="text-amber"> · {stale}</span> : null}
           </span>
         </span>

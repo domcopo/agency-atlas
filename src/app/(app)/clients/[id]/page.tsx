@@ -2,6 +2,7 @@ import { BillingChip } from "@/components/cards/BillingChip";
 import Link from "next/link";
 import { AlertTriangle, BellRing, CalendarDays, Clock, Layers } from "lucide-react";
 import type { Metadata } from "next";
+import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
@@ -40,7 +41,7 @@ const sourceLabel: Record<string, string> = {
 
 export default async function ClientPage({ params }: Props) {
   const { id } = await params;
-  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Client" />;
+  if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="Client" />;
   const c = await getRosterClient(id);
   if (!c) notFound();
   const today = getToday();
@@ -51,10 +52,10 @@ export default async function ClientPage({ params }: Props) {
   const member = await getMember();
   const ai = await getAiStatus();
   const profile = await getClientProfile(c.dbId);
-  const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady && c.dbId);
+  const canUseAi = Boolean(member && isLead(member.role) && ai.configured && ai.tablesReady && c.dbId);
   const ops = await getClientOps(c.id);
   const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
-  const canWork = Boolean(usesDatabase() && member && member.role !== "developer" && c.dbId);
+  const canWork = Boolean(usesDatabase() && member && isLead(member.role) && c.dbId);
   const nextAction = [...(ops?.open ?? [])].sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))[0] ?? null;
   const isCurrent = c.status !== "canceled" && c.status !== "incomplete_expired";
   const timeline = await getClientTimeline(c.id);

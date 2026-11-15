@@ -42,15 +42,19 @@ import {
   readContactActivity,
   readLocationName,
   readOpportunities,
+  readUsers,
   searchContacts,
   type GhlAppointment,
   type GhlContactActivity,
   type GhlOpportunity,
+  type GhlUser,
 } from "@/lib/ghl/client";
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
 import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
+import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
+import { isLead } from "@/lib/roles";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -321,6 +325,7 @@ async function saveAction(
     est_minutes?: number | null;
     ai_suggested?: boolean;
   },
+  log = true,
 ): Promise<{ error?: string }> {
   const { data, error } = await db.from("actions").insert(row).select("id").single();
   if (error || !data) {
@@ -330,7 +335,8 @@ async function saveAction(
     if (row.promised_on && MISSING_COLUMN.has(error?.code ?? "")) return { error: "Promise dates need one setup step first (0009 SQL)." };
     return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
   }
-  await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : row.kind === "work_order" ? `Work order added${row.ai_suggested ? " (from AI draft)" : ""}` : "Next action added"}: ${row.title}` });
+  // The history (activity) is owner/manager only; salespeople's items skip it.
+  if (log) await logActivity(db, { client_id: row.client_id ?? null, lead_ghl_id: row.lead_ghl_id ?? null, action_id: data.id, kind: "action_created", summary: `${row.kind === "issue" ? "Issue opened" : row.kind === "work_order" ? `Work order added${row.ai_suggested ? " (from AI draft)" : ""}` : "Next action added"}: ${row.title}` });
   return {};
 }
 
@@ -446,7 +452,7 @@ export async function createAction(_prev: { error?: string; ok?: boolean } | und
 export async function createLeadAction(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add lead follow-ups." };
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can add lead follow-ups." };
   const leadId = text(form, "leadId", 40);
   const title = text(form, "title", 120);
   const priority = oneOf(PRIORITIES, text(form, "priority", 10)) ?? "normal";
@@ -460,8 +466,10 @@ export async function createLeadAction(_prev: { error?: string; ok?: boolean } |
   // The deal must exist in this app's read-only copy.
   const { data: deal } = await db.from("ghl_opportunities").select("ghl_id").eq("ghl_id", leadId).maybeSingle();
   if (!deal) return { error: "That deal isn't in the last sync." };
-  if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
-  const saved = await saveAction(db, { lead_ghl_id: leadId, kind: "follow_up", title, owner_staff_id: ownerRaw || null, priority, due_on: due });
+  // Salespeople can't read the team list: their follow-ups are theirs (the database allows lead follow-ups only).
+  const sales = me.role === "sales";
+  if (!sales && ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
+  const saved = await saveAction(db, { lead_ghl_id: leadId, kind: "follow_up", title, owner_staff_id: sales ? me.staffId : ownerRaw || null, priority, due_on: due }, !sales);
   if (saved.error) return { error: saved.error };
   revalidatePath("/", "layout");
   return { ok: true };
@@ -545,6 +553,9 @@ export async function updateAction(form: FormData) {
   if (!isUuid(id)) return;
   // Developers may only change the status of their own items, and say why it's blocked (the database enforces this too).
   if (me.role === "developer" && op !== "done" && op !== "status") return;
+  // Salespeople: their lead follow-ups' status and dates only (the database allows lead follow-ups only).
+  const SALES_OPS = ["done", "reopen", "reschedule", "status", "priority"];
+  if (me.role === "sales" && !SALES_OPS.includes(op)) return;
   const db = await createDatabaseClient();
   const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, kind, title, status").eq("id", id).maybeSingle();
   if (!current) return; // not found, or not allowed to see it
@@ -665,7 +676,7 @@ export async function updateAction(form: FormData) {
     console.warn(`Action update refused: ${error.code}`);
     return;
   }
-  await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
+  if (me.role !== "sales") await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
   refreshOps(text(form, "slug", 90));
 }
 
@@ -1134,28 +1145,10 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
 
   const db = await createDatabaseClient();
   const now = new Date().toISOString();
-  if (opportunities.length) {
-    const { error } = await db.from("ghl_opportunities").upsert(
-      opportunities.map((o) => ({
-        ghl_id: o.ghlId,
-        name: o.name,
-        pipeline_name: o.pipelineName,
-        stage_name: o.stageName,
-        status: o.status,
-        monetary_value: o.monetaryValue,
-        source: o.source,
-        ghl_created_at: o.createdAt,
-        ghl_updated_at: o.updatedAt,
-        status_changed_at: o.statusChangedAt,
-        synced_at: now,
-      })),
-      { onConflict: "ghl_id" },
-    );
-    if (error) {
-      console.warn(`GHL opportunities save refused: ${error.code} ${error.message}`);
-      return { error: `Read from GoHighLevel, but saving failed (code ${error.code ?? "?"}).` };
-    }
-  }
+  const saved = await saveOpportunities(db, opportunities, now);
+  if (saved) return { error: `Read from GoHighLevel, but saving failed (code ${saved}).` };
+  // Sales (0020): who each lead is assigned to. Needs users.readonly; a problem here never undoes the sync.
+  const usersNote = await syncGhlUsers(db);
   if (appointments.length) {
     const { error } = await db.from("ghl_appointments").upsert(
       appointments.map((a) => ({
@@ -1182,8 +1175,233 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   const billingNote = billing ? ` Billing: ${billing.error ?? billing.message}` : "";
   revalidatePath("/", "layout");
   return {
-    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times}${billingNote} Nothing in GoHighLevel was changed.`,
+    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times}${usersNote}${billingNote} Nothing in GoHighLevel was changed.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Sales (0020, docs/SALES_PLAN.md). GoHighLevel stays read-only: these read from it
+// and write copies, reach-outs, targets and settings into OUR database only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Saves opportunity copies. Returns an error code, or null. Before 0020, saves without
+ * pipeline/assignee. onlyNew: add leads that aren't in the copy yet, leave existing ones.
+ */
+async function saveOpportunities(db: Db, opportunities: GhlOpportunity[], now: string, onlyNew = false): Promise<string | null> {
+  if (!opportunities.length) return null;
+  const rows = opportunities.map((o) => ({
+    ghl_id: o.ghlId,
+    name: o.name,
+    pipeline_id: o.pipelineId,
+    pipeline_name: o.pipelineName,
+    stage_name: o.stageName,
+    status: o.status,
+    monetary_value: o.monetaryValue,
+    source: o.source,
+    ghl_created_at: o.createdAt,
+    ghl_updated_at: o.updatedAt,
+    status_changed_at: o.statusChangedAt,
+    assigned_user_id: o.assignedUserId,
+    synced_at: now,
+  }));
+  const options = { onConflict: "ghl_id", ignoreDuplicates: onlyNew };
+  let { error } = await db.from("ghl_opportunities").upsert(rows, options);
+  if (error && MISSING_COLUMN.has(error.code ?? "")) {
+    const older = rows.map((r) => {
+      const { pipeline_id: _p, assigned_user_id: _a, ...rest } = r;
+      void _p;
+      void _a;
+      return rest;
+    });
+    ({ error } = await db.from("ghl_opportunities").upsert(older, options));
+  }
+  if (error) {
+    console.warn(`GHL opportunities save refused: ${error.code} ${error.message}`);
+    return error.code ?? "?";
+  }
+  return null;
+}
+
+/** GoHighLevel users' ids + names. Returns a short note for the Sync message. */
+async function syncGhlUsers(db: Db): Promise<string> {
+  let users: GhlUser[];
+  try {
+    users = await readUsers();
+  } catch (err) {
+    const status = err instanceof GhlError ? err.status : 0;
+    return status === 403 ? " Lead owners: add the View Users (users.readonly) permission to turn them on." : " Lead owners: couldn't read GoHighLevel users this time.";
+  }
+  if (!users.length) return "";
+  const { error } = await db.from("ghl_users").upsert(
+    users.map((u) => ({ ghl_user_id: u.ghlUserId, name: u.name, synced_at: new Date().toISOString() })),
+    { onConflict: "ghl_user_id" },
+  );
+  if (error) return MISSING_TABLE.has(error.code ?? "") ? " Lead owners: run the 0020 setup step to turn them on." : "";
+  return ` Read ${users.length} GoHighLevel user name${users.length === 1 ? "" : "s"}.`;
+}
+
+/**
+ * "Refresh leads": owner, managers and salespeople. Reads ONLY the sales pipelines from
+ * GoHighLevel (GET only) and updates our copies. One refresh every 10 minutes for
+ * everyone together (the database enforces it too).
+ */
+export async function refreshLeads(): Promise<{ error?: string; message?: string }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can refresh leads." };
+  const r = await runLeadRefresh(me.role);
+  revalidatePath("/", "layout");
+  return r;
+}
+
+/** Called when someone opens Sales: refreshes in the background if the copy is over an hour old. */
+export async function autoRefreshLeads(): Promise<void> {
+  await notWhilePreviewing(); // callers catch this; a preview never refreshes anything
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return;
+  const db = await createDatabaseClient();
+  const [last, sync] = await Promise.all([
+    db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
+    db.from("ghl_syncs").select("ran_at").order("ran_at", { ascending: false }).limit(1),
+  ]);
+  if (last.error) return; // before 0020
+  const newest = [last.data?.[0]?.ran_at, sync.data?.[0]?.ran_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
+  if (!refreshDue(newest, new Date())) return;
+  await runLeadRefresh(me.role).catch(() => undefined);
+}
+
+async function runLeadRefresh(role: string): Promise<{ error?: string; message?: string }> {
+  if (!isGhlConfigured()) return { error: "GoHighLevel isn't connected yet." };
+  const db = await createDatabaseClient();
+  const [pl, last] = await Promise.all([
+    db.from("sales_pipelines").select("pipeline_id").eq("active", true),
+    db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
+  ]);
+  if (pl.error || last.error) return { error: "Sales needs one setup step first (0020 SQL)." };
+  const ids = (pl.data ?? []).map((r) => r.pipeline_id as string);
+  if (!ids.length) return { error: role === "owner" ? "Pick your sales pipelines first (Sales setup)." : "The owner hasn't picked the sales pipelines yet." };
+  if (!refreshAllowed(last.data?.[0]?.ran_at ?? null, new Date())) return { error: `Leads were refreshed in the last ${SALES_RULES.refreshLimitMinutes} minutes. Try again shortly.` };
+  let opportunities: GhlOpportunity[];
+  try {
+    opportunities = await readOpportunities(ids);
+  } catch (err) {
+    console.warn(`Lead refresh stopped: ${err instanceof GhlError ? err.status : "unknown"}`);
+    return { error: `${err instanceof GhlError ? err.message : "Couldn't read from GoHighLevel."} Nothing was changed.` };
+  }
+  // Claim the refresh first: the database refuses a second one within 10 minutes.
+  const claim = await db.from("lead_refreshes").insert({ leads: opportunities.length });
+  if (claim.error) return { error: claim.error.code === "23514" ? "Someone just refreshed the leads. Try again in a few minutes." : "Couldn't refresh right now." };
+  const now = new Date().toISOString();
+  let closedNote = "";
+  if (role === "sales") {
+    // Salespeople only ever see OPEN leads, so the database lets them save open leads only
+    // (tested in section 7q). Leads that closed in GoHighLevel are updated by the next
+    // owner or manager refresh, or the owner's Sync.
+    const { data: seen } = await db.from("ghl_opportunities").select("ghl_id").in("pipeline_id", ids).limit(5000);
+    const visible = new Set((seen ?? []).map((r) => r.ghl_id as string));
+    const open = opportunities.filter((o) => o.status === "open");
+    const saved =
+      (await saveOpportunities(db, open.filter((o) => visible.has(o.ghlId)), now)) ??
+      (await saveOpportunities(db, open.filter((o) => !visible.has(o.ghlId)), now, true));
+    if (saved) return { error: `Read the leads, but saving failed (code ${saved}).` };
+    const closed = opportunities.filter((o) => o.status !== "open" && visible.has(o.ghlId)).length;
+    if (closed) closedNote = ` ${closed} lead${closed === 1 ? "" : "s"} closed in GoHighLevel will drop off after the owner or a manager refreshes.`;
+  } else {
+    const saved = await saveOpportunities(db, opportunities, now);
+    if (saved) return { error: `Read the leads, but saving failed (code ${saved}).` };
+  }
+  const usersNote = await syncGhlUsers(db);
+  return { message: `Refreshed ${opportunities.length} lead${opportunities.length === 1 ? "" : "s"} from your sales pipelines.${closedNote}${usersNote} Nothing in GoHighLevel was changed.` };
+}
+
+/** "Called / Texted / Emailed / Met / Walk-in" on a lead. Add-only; the database stamps who and when. */
+export async function logLeadTouch(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can log reach-outs." };
+  const leadId = text(form, "leadId", 64);
+  const kind = asTouchKind(text(form, "kind", 10));
+  const raw = typeof form.get("note") === "string" ? String(form.get("note")).slice(0, 400) : "";
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(leadId)) return { error: "Unknown lead." };
+  if (!kind) return { error: "Pick what you did." };
+  const checked = checkTouchNote(raw);
+  if (checked.error) return { error: checked.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("lead_touches").insert({ lead_ghl_id: leadId, kind, note: checked.note });
+  if (error) {
+    console.warn(`Reach-out refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Sales needs one setup step first (0020 SQL)." : error.code === "42501" ? "That lead isn't in a sales pipeline." : "Couldn't save it." };
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** Owner: tick a pipeline as Sales (or turn it off) and mark its hot stages. */
+export async function saveSalesPipeline(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can pick sales pipelines." };
+  const id = text(form, "pipelineId", 64);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { error: "Unknown pipeline." };
+  const db = await createDatabaseClient();
+  // The name and stages must come from our own copy, not from the form.
+  const { data } = await db.from("ghl_opportunities").select("pipeline_name, stage_name").eq("pipeline_id", id).limit(5000);
+  if (!data?.length) return { error: "That pipeline isn't in the last sync." };
+  const stages = new Set(data.map((r) => r.stage_name as string | null).filter((x): x is string => Boolean(x)));
+  const hot = form.getAll("hot").filter((v): v is string => typeof v === "string" && stages.has(v)).slice(0, 30);
+  const row = {
+    pipeline_id: id,
+    pipeline_name: (data[0]!.pipeline_name as string | null)?.slice(0, 100) ?? null,
+    hot_stages: hot,
+    active: form.get("active") === "on",
+    updated_by: me.userId,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await db.from("sales_pipelines").upsert(row, { onConflict: "pipeline_id" });
+  if (error) {
+    console.warn(`Sales pipeline refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Sales needs one setup step first (0020 SQL)." : "Couldn't save it." };
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** Owner: which GoHighLevel user a login is (for "Mine" and lead owners). Blank unlinks. */
+export async function linkGhlUser(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const userId = text(form, "userId", 40);
+  const ghlUserId = text(form, "ghlUserId", 40);
+  if (!isUuid(userId)) return;
+  if (ghlUserId && !/^[A-Za-z0-9]{6,40}$/.test(ghlUserId)) return;
+  const db = await createDatabaseClient();
+  if (ghlUserId) {
+    const { data } = await db.from("ghl_users").select("ghl_user_id").eq("ghl_user_id", ghlUserId).maybeSingle();
+    if (!data) return;
+    // One login per GoHighLevel user: unlink it from anyone else first.
+    await db.from("team_members").update({ ghl_user_id: null }).eq("ghl_user_id", ghlUserId).neq("user_id", userId);
+  }
+  const { error } = await db.from("team_members").update({ ghl_user_id: ghlUserId || null }).eq("user_id", userId);
+  if (error) console.warn(`GoHighLevel link refused: ${error.code}`);
+  revalidatePath("/", "layout");
+}
+
+/** Owner: a salesperson's daily reach-out target (weekdays). */
+export async function saveSalesTarget(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const userId = text(form, "userId", 40);
+  const n = Number(text(form, "target", 4));
+  if (!isUuid(userId) || !Number.isInteger(n) || n < 0 || n > 200) return;
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("sales_targets")
+    .upsert({ user_id: userId, daily_target: n, updated_by: me.userId, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (error) console.warn(`Sales target refused: ${error.code}`);
+  revalidatePath("/", "layout");
 }
 
 // ---------------------------------------------------------------------------
@@ -1751,7 +1969,7 @@ export async function saveKitDoc(_prev: { error?: string; ok?: boolean; id?: str
   const category = text(form, "category", 40);
   const rawBody = form.get("body");
   const body = typeof rawBody === "string" ? rawBody.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, 20000) : "";
-  const audience = ["manager", "developer"].filter((a) => form.get(`aud_${a}`) === "on");
+  const audience = ["manager", "developer", "sales"].filter((a) => form.get(`aud_${a}`) === "on");
   if (!kind) return { error: "Pick what kind of page it is." };
   if (!title) return { error: "Give it a title." };
   const secret = findSecrets(`${title}\n${body}`);

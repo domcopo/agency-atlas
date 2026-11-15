@@ -323,6 +323,8 @@ describe("GoHighLevel read-only (Phase 3)", () => {
         "/locations/[A-Za-z0-9]+",
         "/opportunities/pipelines",
         "/opportunities/search",
+        // Sales (0020, approved 2026-11-15): GoHighLevel users, id + name only (users.readonly)
+        "/users/",
         // Phase 6 (approved): conversation times only
         "/conversations/search",
         "/conversations/[A-Za-z0-9]{6,40}/messages",
@@ -772,5 +774,64 @@ describe("Trash (0019): trashed things leave every list", () => {
     expect(page).toMatch(/me\.role !== "owner" && me\.role !== "manager"\)\) return <RoleNotice/);
     const { previewAllows } = await import("@/lib/preview");
     expect(previewAllows("/trash")).toBe(false);
+  });
+});
+
+describe("Sales (0020): the sales role sees and does only sales things", () => {
+  const ghl = readFileSync(join(ROOT, "src/lib/ghl/client.ts"), "utf8");
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const fn = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const next = actions.indexOf("\nexport async function ", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("GoHighLevel users: only the id and the name are read (never emails, phones or permissions)", () => {
+    const users = ghl.slice(ghl.indexOf("// Sales (0020): GoHighLevel users"), ghl.indexOf("/** Turns raw calendar events"));
+    expect(users.length).toBeGreaterThan(300);
+    const fields = new Set([...users.matchAll(/\bu\.([A-Za-z]+)/g)].map((m) => m[1]));
+    expect([...fields].sort()).toEqual(["firstName", "id", "lastName", "name"]);
+    expect(users).toMatch(/\/users\//);
+  });
+
+  it("the sales rules are pure (no database, no network, no AI)", () => {
+    const rules = readFileSync(join(ROOT, "src/lib/sales.ts"), "utf8");
+    const imports = [...rules.matchAll(/from "([^"]+)"/g)].map((m) => m[1]);
+    expect(imports).toEqual(["@/lib/work-orders"]);
+    expect(rules).not.toMatch(/\bfetch\s*\(|createDatabaseClient|askAi/);
+  });
+
+  it("salespeople get the Home, Sales and Kit tabs only", () => {
+    const nav = readFileSync(join(ROOT, "src/components/shell/BottomNav.tsx"), "utf8");
+    expect(nav).toMatch(/sales: \["\/", "\/sales", "\/kit"\]/);
+    for (const page of ["src/app/(app)/clients/page.tsx", "src/app/(app)/clients/[id]/page.tsx", "src/app/(app)/growth/page.tsx", "src/app/(app)/work/page.tsx"]) {
+      expect(readFileSync(join(ROOT, page), "utf8"), page).toMatch(/!isLead\(.*\)\) return <RoleNotice/);
+    }
+  });
+
+  it("only the owner picks pipelines, links logins and sets targets", () => {
+    for (const name of ["saveSalesPipeline", "linkGhlUser", "saveSalesTarget"]) expect(fn(name), name).toMatch(/me\.role !== "owner"/);
+    // Pipeline names and hot stages come from our own copy, never from the form alone.
+    expect(fn("saveSalesPipeline")).toMatch(/stages\.has\(v\)/);
+  });
+
+  it("reach-out notes are checked for contact details; reach-outs are add-only", () => {
+    expect(fn("logLeadTouch")).toMatch(/checkTouchNote\(/);
+    expect(actions).not.toMatch(/from\("lead_touches"\)\.(update|upsert|delete)/);
+  });
+
+  it("a salesperson's refresh saves open leads only, and the 10-minute limit is checked first", () => {
+    const refresh = actions.slice(actions.indexOf("async function runLeadRefresh"), actions.indexOf("export async function logLeadTouch"));
+    expect(refresh).toMatch(/refreshAllowed\(/);
+    expect(refresh).toMatch(/role === "sales"/);
+    expect(refresh).toMatch(/o\.status === "open"/);
+    expect(refresh).toMatch(/readOpportunities\(ids\)/); // sales pipelines only
+  });
+
+  it("salespeople change only the status and dates of lead follow-ups, and can't assign", () => {
+    const update = fn("updateAction");
+    expect(update).toMatch(/const SALES_OPS = \["done", "reopen", "reschedule", "status", "priority"\];/);
+    expect(update).toMatch(/me\.role === "sales" && !SALES_OPS\.includes\(op\)\) return;/);
+    expect(fn("createLeadAction")).toMatch(/owner_staff_id: sales \? me\.staffId/);
   });
 });

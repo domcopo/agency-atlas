@@ -17,6 +17,8 @@ import { ClipboardList } from "lucide-react";
 import Link from "next/link";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
+import { isLead } from "@/lib/roles";
+import { RoleNotice } from "@/components/shell/RoleNotice";
 import type { TeamRole, WorkPriority } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Work" };
@@ -59,6 +61,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       </>
     );
   }
+  // Salespeople don't use Work (the database returns them no client work either).
+  if (usesDatabase() && !isLead(member?.role)) return <RoleNotice title="Work" />;
   const ops = await getOps();
   const teamMembers = (await getTeam()).members;
   const staffList = teamMembers.map((m) => ({ id: m.id, name: m.name }));

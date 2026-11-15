@@ -14,7 +14,10 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { autoPublishOwnerSummary, recordHealthSnapshot } from "@/app/actions";
+import { autoPublishOwnerSummary, autoRefreshLeads, recordHealthSnapshot } from "@/app/actions";
+import { TodayPlan } from "@/components/sales/TodayPlan";
+import { isLead } from "@/lib/roles";
+import { lastTouchByLead, nyDay, targetProgress, todaysPlan, touchesOn } from "@/lib/sales";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { BriefingCard } from "@/components/cards/BriefingCard";
@@ -42,6 +45,7 @@ import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
   getAiStatus,
   getAtlasQuestions,
+  getSales,
   getBilling,
   getLatestBriefing,
   getDeveloperViewer,
@@ -141,12 +145,47 @@ export default async function MissionControlPage() {
       </>
     );
   }
+  // Salespeople: "Today's plan" (the sales coach). The database gives them only open
+  // sales-pipeline leads, their own target and lead follow-ups.
+  if (me?.role === "sales") {
+    // Refreshes the leads at most hourly, alongside this page (the next visit shows the result).
+    const refresh = autoRefreshLeads().catch(() => undefined);
+    const sales = await getSales();
+    const day = nyDay(new Date().toISOString());
+    const plan = todaysPlan({ leads: sales.leads, touches: sales.touches, followUps: sales.followUps, pipelines: sales.pipelines, today: day, mine: me.ghlUserId, myStaffId: me.staffId });
+    const progress = targetProgress(touchesOn(sales.touches, me.userId, day), sales.myTarget, day);
+    const configured = sales.pipelines.some((p) => p.active);
+    await refresh;
+    return (
+      <>
+        <PageHeader title={`Hi, ${me.name}`} subtitle="Today's plan" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        {!sales.ready ? (
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Sales isn&apos;t set up yet. Ask the owner.</p>
+        ) : !configured ? (
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+        ) : (
+          <TodayPlan items={plan} progress={progress} lastByLead={lastTouchByLead(sales.touches)} users={sales.users} today={day} />
+        )}
+        {sales.ready && !me.ghlUserId && (
+          <p className="mt-3 px-1 text-[11px] text-faint">Your login isn&apos;t linked to your GoHighLevel user yet, so this plan covers everyone&apos;s leads. Ask the owner to link it.</p>
+        )}
+        <Link href="/sales" className="pressable glass mt-3 flex min-h-12 items-center justify-center gap-1 rounded-2xl text-sm font-semibold text-violet">
+          All leads and follow-ups <ArrowRight aria-hidden className="size-4" />
+        </Link>
+        <p className="mt-2 px-1 text-[11px] text-faint">Call and text in GoHighLevel, then tap what you did here. Atlas never contacts anyone.</p>
+      </>
+    );
+  }
   // Saves today's health scores once a day (owner/manager only; checked on the server).
   // Then (owner only, at most hourly) refreshes the summary your personal dashboard reads.
-  const snapshot = recordHealthSnapshot()
-    .catch(() => undefined)
-    .then(() => autoPublishOwnerSummary())
-    .catch(() => undefined);
+  // Alongside: keeps the sales leads fresh (at most hourly; owner and managers).
+  const snapshot = Promise.all([
+    recordHealthSnapshot()
+      .catch(() => undefined)
+      .then(() => autoPublishOwnerSummary())
+      .catch(() => undefined),
+    me && isLead(me.role) ? autoRefreshLeads().catch(() => undefined) : undefined,
+  ]);
   // Independent reads run at the same time (each is also shared within this request).
   const [data, summary, coach, ai, briefing, ghl, ops, contacts, team, detections, atlasQuestions] = await Promise.all([
     getMissionControl(),
@@ -207,10 +246,10 @@ export default async function MissionControlPage() {
   const trends = getTrends();
   const real = summary.source !== "demo";
   const member = me;
-  const canUseAi = Boolean(member && member.role !== "developer" && ai.configured && ai.tablesReady);
+  const canUseAi = Boolean(member && isLead(member.role) && ai.configured && ai.tablesReady);
   const samples = showsSamples();
   const staff = team.members.map((m) => ({ id: m.id, name: m.name }));
-  const canWork = Boolean(member && member.role !== "developer");
+  const canWork = Boolean(member && isLead(member.role));
   const openIssues = ops.actions
     .filter((a) => a.kind === "issue" && a.status !== "done")
     .sort((x, y) => (x.priority === y.priority ? (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999") : ["critical", "high", "normal", "low"].indexOf(x.priority) - ["critical", "high", "normal", "low"].indexOf(y.priority)));

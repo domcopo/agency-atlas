@@ -22,6 +22,8 @@ import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type RunLogRow } from "@/lib/bot-runs";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
+import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPerson, type SalesPipeline } from "@/lib/sales";
+import { isLead } from "@/lib/roles";
 import {
   buildPriorities,
   developerClientScope,
@@ -1436,6 +1438,146 @@ export const getGhlSummary = cache(async (now: Date = new Date()): Promise<GhlSu
 });
 
 // ---------------------------------------------------------------------------
+// Sales (0020): leads in the sales pipelines, reach-outs, targets. Read as the signed-in
+// person: salespeople get only open sales-pipeline leads and their own target (the
+// database decides); the owner and managers see everything in the sales pipelines.
+// ---------------------------------------------------------------------------
+
+const LEAD_STATUSES = ["open", "won", "lost", "abandoned"] as const;
+
+export interface SalesData {
+  /** false before 0020, or for roles that don't use Sales. */
+  ready: boolean;
+  pipelines: SalesPipeline[];
+  leads: SalesLead[];
+  touches: LeadTouch[];
+  followUps: LeadFollowUp[];
+  /** GoHighLevel user id → name. */
+  users: Map<string, string>;
+  /** Newest lead refresh or owner Sync this person can see. */
+  lastRefresh: string | null;
+  myTarget: number;
+  /** Owner only: salespeople with their targets (others can't read the team list). */
+  people: SalesPerson[];
+}
+
+export const getSales = cache(async (): Promise<SalesData> => {
+  const none: SalesData = { ready: false, pipelines: [], leads: [], touches: [], followUps: [], users: new Map(), lastRefresh: null, myTarget: SALES_RULES.defaultTarget, people: [] };
+  if (!usesDatabase()) return none;
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return none;
+  const db = await createDatabaseClient();
+  const pl = await db.from("sales_pipelines").select("pipeline_id, pipeline_name, hot_stages, active").order("pipeline_name");
+  if (pl.error) return none; // before 0020
+  const pipelines: SalesPipeline[] = (pl.data ?? []).map((r) => ({
+    id: r.pipeline_id,
+    name: r.pipeline_name,
+    hotStages: Array.isArray(r.hot_stages) ? (r.hot_stages as string[]) : [],
+    active: r.active === true,
+  }));
+  const activeIds = pipelines.filter((p) => p.active).map((p) => p.id);
+  const since = new Date(Date.now() - SALES_RULES.touchDays * 86_400_000).toISOString();
+  const [opps, touches, users, refreshes, syncs, target, actions] = await Promise.all([
+    activeIds.length
+      ? db
+          .from("ghl_opportunities")
+          .select("ghl_id, name, pipeline_id, pipeline_name, stage_name, status, monetary_value, source, ghl_created_at, ghl_updated_at, status_changed_at, assigned_user_id")
+          .in("pipeline_id", activeIds)
+          .order("ghl_created_at", { ascending: false, nullsFirst: false })
+          .limit(3000)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+    db.from("lead_touches").select("lead_ghl_id, kind, touched_at, touched_by").gte("touched_at", since).order("touched_at", { ascending: false }).limit(5000),
+    db.from("ghl_users").select("ghl_user_id, name").limit(500),
+    db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
+    // Salespeople can't read the owner's Sync log (the database returns nothing); that's fine.
+    db.from("ghl_syncs").select("ran_at").order("ran_at", { ascending: false }).limit(1),
+    db.from("sales_targets").select("daily_target").eq("user_id", me.userId).maybeSingle(),
+    getActions(),
+  ]);
+  const leads: SalesLead[] = ((opps.data ?? []) as Record<string, unknown>[]).map((r) => ({
+    ghlId: String(r.ghl_id),
+    name: (r.name as string | null) || "Unnamed lead",
+    pipelineId: (r.pipeline_id as string | null) ?? null,
+    pipelineName: (r.pipeline_name as string | null) ?? null,
+    stage: (r.stage_name as string | null) ?? null,
+    status: LEAD_STATUSES.find((x) => x === r.status) ?? "open",
+    value: r.monetary_value === null || r.monetary_value === undefined ? null : Number(r.monetary_value),
+    source: (r.source as string | null) ?? null,
+    createdAt: (r.ghl_created_at as string | null) ?? null,
+    updatedAt: (r.ghl_updated_at as string | null) ?? null,
+    statusChangedAt: (r.status_changed_at as string | null) ?? null,
+    assignedUserId: (r.assigned_user_id as string | null) ?? null,
+  }));
+  const leadIds = new Set(leads.map((l) => l.ghlId));
+  const latest = [refreshes.data?.[0]?.ran_at, syncs.data?.[0]?.ran_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
+  let people: SalesPerson[] = [];
+  if (me.role === "owner") {
+    const [tm, targets] = await Promise.all([
+      db.from("team_members").select("user_id, display_name, role, staff_id, ghl_user_id").eq("role", "sales"),
+      db.from("sales_targets").select("user_id, daily_target"),
+    ]);
+    const byUser = new Map((targets.data ?? []).map((t) => [t.user_id as string, Number(t.daily_target)]));
+    people = (tm.data ?? []).map((r) => ({
+      userId: r.user_id as string,
+      name: r.display_name as string,
+      ghlUserId: (r.ghl_user_id as string | null) ?? null,
+      staffId: (r.staff_id as string | null) ?? null,
+      target: byUser.get(r.user_id as string) ?? SALES_RULES.defaultTarget,
+    }));
+  }
+  return {
+    ready: true,
+    pipelines,
+    leads,
+    touches: (touches.data ?? []).map((t) => ({ leadId: t.lead_ghl_id, kind: t.kind, at: t.touched_at, by: t.touched_by })),
+    followUps: actions.actions
+      .filter((a) => a.leadGhlId && a.kind === "follow_up" && leadIds.has(a.leadGhlId))
+      .map((a) => ({ id: a.id, leadId: a.leadGhlId!, title: a.title, dueOn: a.dueOn, status: a.status, ownerStaffId: a.ownerId })),
+    users: new Map((users.data ?? []).map((u) => [u.ghl_user_id as string, u.name as string])),
+    lastRefresh: latest,
+    myTarget: target.data ? Number(target.data.daily_target) : SALES_RULES.defaultTarget,
+    people,
+  };
+});
+
+export interface SalesSetup {
+  ready: boolean;
+  /** Every pipeline in the synced copy, with its stages, for ticking. */
+  available: { id: string; name: string; stages: string[]; leads: number }[];
+  /** Logins (owner reads all), for linking to GoHighLevel users. */
+  logins: { userId: string; name: string; role: string; ghlUserId: string | null }[];
+  ghlUsers: { id: string; name: string }[];
+}
+
+/** The owner's Sales setup screen. null for everyone else. */
+export async function getSalesSetup(): Promise<SalesSetup | null> {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (me?.role !== "owner") return null;
+  const db = await createDatabaseClient();
+  const [opps, tm, users] = await Promise.all([
+    db.from("ghl_opportunities").select("pipeline_id, pipeline_name, stage_name").not("pipeline_id", "is", null).limit(10000),
+    db.from("team_members").select("user_id, display_name, role, ghl_user_id").order("display_name"),
+    db.from("ghl_users").select("ghl_user_id, name").order("name").limit(500),
+  ]);
+  if (opps.error || tm.error) return { ready: false, available: [], logins: [], ghlUsers: [] };
+  const byId = new Map<string, { id: string; name: string; stages: Map<string, number>; leads: number }>();
+  for (const r of opps.data ?? []) {
+    const id = r.pipeline_id as string;
+    const p = byId.get(id) ?? { id, name: (r.pipeline_name as string | null) || "Unnamed pipeline", stages: new Map(), leads: 0 };
+    p.leads++;
+    if (r.stage_name) p.stages.set(r.stage_name as string, (p.stages.get(r.stage_name as string) ?? 0) + 1);
+    byId.set(id, p);
+  }
+  return {
+    ready: true,
+    available: [...byId.values()].map((p) => ({ id: p.id, name: p.name, leads: p.leads, stages: [...p.stages.keys()].sort() })).sort((a, b) => a.name.localeCompare(b.name)),
+    logins: (tm.data ?? []).map((r) => ({ userId: r.user_id as string, name: r.display_name as string, role: r.role as string, ghlUserId: (r.ghl_user_id as string | null) ?? null })),
+    ghlUsers: (users.data ?? []).map((u) => ({ id: u.ghl_user_id as string, name: u.name as string })),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Service groups (Clients tab: SEO · Ads · Website)
 // ---------------------------------------------------------------------------
 
@@ -1711,7 +1853,7 @@ function kitDocFrom(r: Record<string, unknown>): KitDoc {
     title: String(r.title ?? ""),
     category: typeof r.category === "string" && r.category ? r.category : null,
     body: String(r.body ?? ""),
-    audience: (Array.isArray(r.audience) ? r.audience : []).filter((a): a is KitDoc["audience"][number] => a === "manager" || a === "developer"),
+    audience: (Array.isArray(r.audience) ? r.audience : []).filter((a): a is KitDoc["audience"][number] => a === "manager" || a === "developer" || a === "sales"),
     reviewedOn: typeof r.reviewed_on === "string" ? r.reviewed_on : null,
     archived: r.archived === true,
     updatedAt: String(r.updated_at ?? ""),

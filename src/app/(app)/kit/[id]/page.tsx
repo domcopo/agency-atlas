@@ -36,7 +36,8 @@ export default async function KitDocPage({ params }: { params: Promise<{ id: str
       {editor && (
         <p className="mb-3 px-1 text-[11px] text-faint">
           Readable by you{doc.audience.includes("manager") ? ", managers" : ""}
-          {doc.audience.includes("developer") ? ", developers" : ""}. Last changed {doc.updatedAt.slice(0, 10)}
+          {doc.audience.includes("developer") ? ", developers" : ""}
+          {doc.audience.includes("sales") ? ", salespeople" : ""}. Last changed {doc.updatedAt.slice(0, 10)}
           {doc.reviewedOn ? ` · reviewed ${doc.reviewedOn}` : ""}
           {stale ? <span className="font-semibold text-amber"> · {stale}</span> : null}
         </p>

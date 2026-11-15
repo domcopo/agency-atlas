@@ -1,5 +1,6 @@
 import { Bot, ChevronRight, ClipboardList, Layers, Link2, TrendingUp } from "lucide-react";
 import type { Metadata } from "next";
+import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import Link from "next/link";
 import { GlassCard } from "@/components/cards/GlassCard";
@@ -13,7 +14,7 @@ import { opportunities } from "@/lib/ops";
 export const metadata: Metadata = { title: "Growth Lab" };
 
 export default async function GrowthPage() {
-  if (usesDatabase() && (await getMember())?.role === "developer") return <RoleNotice title="Growth Lab" />;
+  if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="Growth Lab" />;
   const samples = showsSamples();
   const ops = await getOps();
   const member = usesDatabase() ? await getMember() : null;
@@ -41,7 +42,7 @@ export default async function GrowthPage() {
       {!samples && (
         <section id="opportunities" className="mb-5 scroll-mt-16">
           <SectionTitle aside={`${opps.length} clients`}>Opportunities</SectionTitle>
-          <OpportunityList items={opps} canAdd={Boolean(member && member.role !== "developer" && ops.ready)} />
+          <OpportunityList items={opps} canAdd={Boolean(member && isLead(member.role) && ops.ready)} />
           <p className="mt-1.5 px-1 text-[11px] text-faint">Simple rules from your client list (services, months together, mood). You decide what to pitch.</p>
         </section>
       )}
