@@ -13,10 +13,10 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getActions, getAiStatus, getBilling, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getActions, getAiStatus, getBilling, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRemovedCheckIns, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
 import { ScoreTrend } from "@/components/cards/RiskAlerts";
-import { setClientServices } from "@/app/actions";
+import { setCheckInRemoved, setClientServices } from "@/app/actions";
 import { planLabel } from "@/lib/ops";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { ActionForm } from "@/components/forms/ActionForm";
@@ -59,6 +59,8 @@ export default async function ClientPage({ params }: Props) {
   const nextAction = [...(ops?.open ?? [])].sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))[0] ?? null;
   const isCurrent = c.status !== "canceled" && c.status !== "incomplete_expired";
   const timeline = await getClientTimeline(c.id);
+  // Owner only (empty for everyone else): removed check-ins, to restore (0021).
+  const removed = await getRemovedCheckIns(c.dbId);
   // Owner only: null for everyone else (and the database returns them nothing).
   const pay = (await getBilling())?.byClient.get(c.id) ?? null;
 
@@ -165,7 +167,32 @@ export default async function ClientPage({ params }: Props) {
       {usesDatabase() && (
         <>
           <SectionTitle>Recent history</SectionTitle>
-          <Timeline entries={timeline} />
+          <Timeline entries={timeline} edit={canWork ? { slug: c.id, today } : undefined} />
+          {removed.length > 0 && (
+            <details className="glass mt-2.5 rounded-3xl px-4 py-1">
+              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-muted">
+                Removed check-ins ({removed.length})
+              </summary>
+              <ul className="divide-y divide-line pb-2">
+                {removed.map((r) => (
+                  <li key={r.id} className="flex items-center gap-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] text-faint">{r.date}</p>
+                      <p className="break-words text-sm text-muted">{r.note ?? "No note"}</p>
+                    </div>
+                    <form action={setCheckInRemoved}>
+                      <input type="hidden" name="checkInId" value={r.id} />
+                      <input type="hidden" name="slug" value={c.id} />
+                      <input type="hidden" name="op" value="restore" />
+                      <button type="submit" className="pressable min-h-10 rounded-xl border border-line bg-white/5 px-3 text-xs font-semibold">
+                        Restore
+                      </button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </>
       )}
 

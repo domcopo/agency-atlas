@@ -681,6 +681,87 @@ export async function updateAction(form: FormData) {
 }
 
 /**
+ * Fix an item's title and notes (owner and managers; docs/EDIT_FIX_PLAN.md). The database
+ * already refuses developers (guard), and records work order title changes in history (0021).
+ */
+export async function editActionText(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can change this." };
+  const id = text(form, "actionId", 40);
+  const title = text(form, "title", 120);
+  const notes = text(form, "notes", 500);
+  if (!isUuid(id)) return { error: "Something went wrong. Reload and try again." };
+  if (!title) return { error: "The title can't be empty." };
+  const db = await createDatabaseClient();
+  const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, kind, title, notes").eq("id", id).maybeSingle();
+  if (!current) return { error: "That item isn't there any more." };
+  const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; kind: string; title: string; notes: string | null };
+  if (a.kind === "work_order") {
+    const contact = contactDetailsIn(`${title}\n${notes}`);
+    if (contact.length) return { error: `That looks like ${contact.join(" and ")}. Keep contact details in the client record, not in work orders.` };
+  }
+  if (title === a.title && (notes || null) === a.notes) return { ok: true };
+  const { error } = await db.from("actions").update({ title, notes: notes || null }).eq("id", id);
+  if (error) {
+    console.warn(`Title edit refused: ${error.code}`);
+    return { error: "Couldn't save." };
+  }
+  const summary = title !== a.title ? `Renamed: ${a.title} → ${title}` : `Notes updated: ${title}`;
+  await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind: "action_edited", summary });
+  revalidatePath(`/work/orders/${id}`);
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** 0021 isn't run yet: no permission to change check-ins, or the new columns are missing. */
+const CHECK_IN_SETUP = new Set(["42501", ...MISSING_COLUMN]);
+
+/** Fix a logged check-in's date, type, mood or note (owner and managers; the database keeps the old values). */
+export async function editCheckIn(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can fix check-ins." };
+  const id = text(form, "checkInId", 40);
+  const day = pastDate(text(form, "date", 10));
+  const note = text(form, "note", 500);
+  const moodRaw = text(form, "mood", 10);
+  const kind = oneOf(CONTACT_KINDS, text(form, "kind", 12));
+  if (!isUuid(id)) return { error: "Something went wrong. Reload and try again." };
+  if (!day) return { error: "Pick a date that isn't in the future." };
+  if (!kind) return { error: "Pick a type." };
+  const mood = moodRaw ? oneOf(["better", "same", "worse"] as const, moodRaw) : null;
+  if (moodRaw && !mood) return { error: "Pick better, same or worse." };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("check_ins").update({ happened_on: day, note: note || null, mood, kind }).eq("id", id).select("id");
+  if (error) {
+    console.warn(`Check-in edit refused: ${error.code}`);
+    if (CHECK_IN_SETUP.has(error.code ?? "")) return { error: "Fixing check-ins needs one setup step first (0021 SQL)." };
+    if (error.code === "23514") return { error: "That check-in is removed. Restore it first, and keep the date in the past." };
+    return { error: "Couldn't save." };
+  }
+  if (!data?.length) return { error: "That check-in isn't there any more." };
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Remove (hide) or restore a check-in. Removing: owner and managers. Restoring: owner only (the database checks both). */
+export async function setCheckInRemoved(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const id = text(form, "checkInId", 40);
+  const op = text(form, "op", 10);
+  if (!isUuid(id) || (op !== "remove" && op !== "restore")) return;
+  if (op === "restore" && me.role !== "owner") return;
+  const db = await createDatabaseClient();
+  // The database replaces this time with its own clock and records who did it.
+  const { error } = await db.from("check_ins").update({ removed_at: op === "remove" ? new Date().toISOString() : null }).eq("id", id);
+  if (error) console.warn(`Check-in ${op} refused: ${error.code}`);
+  refreshOps(text(form, "slug", 90));
+}
+
+/**
  * Tick or untick one step of a work order (0016). Developers on their own items (the
  * database checks it: RLS + the developer guard allow only status and steps_done);
  * owner and managers on any. Step numbers start at 1 and must exist (the database

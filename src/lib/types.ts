@@ -274,6 +274,15 @@ export type CheckInMood = "better" | "same" | "worse";
 
 export type ContactKind = "check_in" | "call" | "message" | "email" | "meeting" | "note";
 
+/** A logged check-in that the owner/managers can fix or remove (0021). */
+export interface EditableCheckIn {
+  id: string;
+  date: ISODate;
+  note: string | null;
+  mood: CheckInMood | null;
+  kind: ContactKind;
+}
+
 export interface CheckInEntry {
   date: ISODate;
   note: string | null;

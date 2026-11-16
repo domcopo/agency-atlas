@@ -117,7 +117,10 @@ select test.expect($$insert into public.clients (slug, name, monthly_usd, start_
 select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01')$$, 1, 'manager logs a check-in');
 select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'worse')$$, 1, 'manager logs a check-in with how they are doing');
 select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'furious')$$, -2, 'unknown moods are rejected');
-select test.expect($$update public.check_ins set mood = 'better'$$, -1, 'a mood cannot be changed afterwards');
+-- 0021 (approved 2026-11-15) replaced "a mood cannot be changed afterwards": managers may now
+-- fix a check-in, but every change is kept by the database (more in 7r).
+select test.expect($$update public.check_ins set mood = 'better'$$, 2, 'a manager can fix a mood afterwards (0021)');
+select test.expect($$select * from public.check_in_edits where change = 'edited' and new_mood = 'better' and actor = '00000000-0000-0000-0000-0000000000a2'$$, 2, 'and every mood change is kept in the change record');
 select test.expect($$insert into public.check_ins (client_id, happened_on, logged_by) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'manager cannot log a check-in as someone else');
 select test.expect($$delete from public.check_ins$$, -1, 'manager cannot delete check-ins');
 select test.expect($$update public.team_members set role = 'owner'$$, -1, 'manager cannot promote themselves');
@@ -136,7 +139,9 @@ select test.expect($$update public.clients set monthly_usd = -5 where slug = 'pa
 select test.expect($$insert into public.atlas_answers (question_key, status, answer) values ('svc:x', 'answered', 'SEO')$$, 1, 'owner answers Atlas asks');
 select test.expect($$delete from public.clients$$, 0, 'even the owner cannot delete clients that are not in Trash (nothing deleted)');
 select test.expect($$delete from public.atlas_answers$$, -1, 'answer history cannot be deleted');
-select test.expect($$update public.check_ins set note = 'changed'$$, -1, 'check-in history cannot be rewritten');
+-- 0021 replaced "check-in history cannot be rewritten": a fix is allowed, the old text is kept.
+select test.expect($$update public.check_ins set note = 'changed'$$, 2, 'owner can fix a check-in note (0021)');
+select test.expect($$select * from public.check_in_edits where new_note = 'changed' and old_note is distinct from 'changed' and actor = '00000000-0000-0000-0000-0000000000a1'$$, 2, 'and the earlier note is kept in the change record');
 select test.expect($$insert into public.team_members (user_id, display_name, role) values ('00000000-0000-0000-0000-0000000000a4', 'X', 'owner')$$, -1, 'nobody can add team members through the app');
 commit;
 
@@ -1462,6 +1467,84 @@ begin
   raise notice 'ok: a salesperson reads nothing from every other table and view';
 end;
 $$;
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7r. Fix titles and check-ins (0021): owner + managers edit or remove check-ins (never
+--     delete); only the owner restores; every change is kept by the database only;
+--     developers and salespeople can't touch any of it; work orders record title changes.
+-- ---------------------------------------------------------------------------
+insert into public.clients (id, slug, name, monthly_usd, start_date, status, services, owner_staff_id) values
+  ('00000000-0000-0000-0000-000000007c0a', 'edit-test', 'Edit Test (fictional)', 100, '2026-01-05', 'active', '{SEO}', '00000000-0000-0000-0000-0000000000b3');
+insert into public.check_ins (id, client_id, happened_on, note, logged_by) values
+  ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-000000007c0a', '2026-11-03', 'Wrong date (test)', '00000000-0000-0000-0000-0000000000a2'),
+  ('00000000-0000-0000-0000-00000000f002', '00000000-0000-0000-0000-000000007c0a', '2026-11-10', 'Logged on the wrong client (test)', '00000000-0000-0000-0000-0000000000a2');
+insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values
+  ('00000000-0000-0000-0000-00000000f101', '00000000-0000-0000-0000-000000007c0a', 'work_order', 'Fix teh header (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a1');
+
+-- Developer: no edits, no removal, no change record; title stays locked.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_client_contacts where client_slug = 'edit-test' and last_logged_on = '2026-11-10'$$, 1, 'developer sees the latest contact date before removal');
+select test.expect($$update public.check_ins set note = 'x' where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'developer cannot edit a check-in');
+select test.expect($$update public.check_ins set removed_at = now() where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'developer cannot remove a check-in');
+select test.expect('select * from public.check_in_edits', 0, 'developer cannot read the check-in change record');
+select test.expect($$update public.actions set title = 'Renamed (test)' where id = '00000000-0000-0000-0000-00000000f101'$$, -1, 'developer still cannot rename their work order');
+commit;
+
+-- Salesperson: same.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$update public.check_ins set note = 'x' where id = '00000000-0000-0000-0000-00000000f001'$$, 0, 'salesperson cannot edit a check-in');
+select test.expect('select * from public.check_in_edits', 0, 'salesperson cannot read the check-in change record');
+commit;
+
+-- Manager: fixes the date and note; can't move it to another client or fake who logged it.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.check_ins set happened_on = '2026-11-04', note = 'Right date (test)', mood = 'better', kind = 'call' where id = '00000000-0000-0000-0000-00000000f001'$$, 1, 'manager fixes a check-in''s date, note, mood and type');
+select test.expect($$select * from public.check_ins where id = '00000000-0000-0000-0000-00000000f001' and edited_by = '00000000-0000-0000-0000-0000000000a2' and edited_at > now() - interval '1 minute'$$, 1, 'the database stamps who edited it and when');
+select test.expect($$select * from public.check_in_edits where check_in_id = '00000000-0000-0000-0000-00000000f001' and change = 'edited' and old_happened_on = '2026-11-03' and new_happened_on = '2026-11-04' and old_note = 'Wrong date (test)' and old_kind = 'check_in' and new_kind = 'call' and actor = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'the old and new values are kept');
+select test.expect($$update public.check_ins set client_id = '00000000-0000-0000-0000-000000007c08' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'a check-in cannot be moved to another client');
+select test.expect($$update public.check_ins set logged_by = '00000000-0000-0000-0000-0000000000a1' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'who logged it cannot be changed');
+select test.expect($$update public.check_ins set edited_by = '00000000-0000-0000-0000-0000000000a1' where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'who edited it cannot be faked');
+select test.expect($$update public.check_ins set happened_on = current_date + 30 where id = '00000000-0000-0000-0000-00000000f001'$$, -2, 'a check-in date cannot be in the future');
+select test.expect($$delete from public.check_ins where id = '00000000-0000-0000-0000-00000000f001'$$, -1, 'check-ins can never be deleted from the app');
+select test.expect($$insert into public.check_in_edits (check_in_id, change) values ('00000000-0000-0000-0000-00000000f001', 'edited')$$, -1, 'nobody can write the change record by hand');
+select test.expect($$update public.check_in_edits set old_note = 'x'$$, -1, 'nobody can rewrite the change record');
+select test.expect($$delete from public.check_in_edits$$, -1, 'nobody can erase the change record');
+select test.expect($$update public.check_ins set removed_at = '2020-01-01' where id = '00000000-0000-0000-0000-00000000f002'$$, 1, 'manager removes a check-in (hidden, not deleted)');
+select test.expect($$select * from public.check_ins where id = '00000000-0000-0000-0000-00000000f002' and removed_at > now() - interval '1 minute' and removed_by = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'the database stamps who removed it and when');
+select test.expect($$update public.check_ins set note = 'sneaky (test)' where id = '00000000-0000-0000-0000-00000000f002'$$, -2, 'a removed check-in cannot be changed until restored');
+select test.expect($$update public.check_ins set removed_at = null where id = '00000000-0000-0000-0000-00000000f002'$$, -1, 'only the owner restores a removed check-in');
+select test.expect($$update public.actions set title = 'Fix the header (test)' where id = '00000000-0000-0000-0000-00000000f101'$$, 1, 'manager fixes a work order title');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f101' and field = 'title' and old_value = 'Fix teh header (test)' and new_value = 'Fix the header (test)' and actor_name = 'Manager (test)'$$, 1, 'the title change is in the work order history');
+select test.expect($$insert into public.activity (client_id, action_id, kind, summary) values ('00000000-0000-0000-0000-000000007c0a', '00000000-0000-0000-0000-00000000f101', 'action_edited', 'Renamed: Fix teh header (test) → Fix the header (test)')$$, 1, 'the rename goes on the client timeline');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_client_contacts where client_slug = 'edit-test' and last_logged_on = '2026-11-04'$$, 1, 'a removed check-in leaves the developer''s contact dates');
+select test.expect($$select * from public.work_order_history where action_id = '00000000-0000-0000-0000-00000000f101' and field = 'title'$$, 1, 'the developer sees the title change on their work order');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$update public.check_ins set removed_at = null where id = '00000000-0000-0000-0000-00000000f002'$$, 0, 'owner without two-factor cannot restore');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.check_ins set removed_at = null where id = '00000000-0000-0000-0000-00000000f002'$$, 1, 'owner restores a removed check-in');
+select test.expect($$select * from public.check_ins where id = '00000000-0000-0000-0000-00000000f002' and removed_at is null and removed_by is null$$, 1, 'restoring clears the removal');
+select test.expect($$select * from public.check_in_edits where check_in_id = '00000000-0000-0000-0000-00000000f002' order by at$$, 2, 'removal and restore are both kept');
+select test.expect($$update public.check_ins set removed_at = now(), note = 'both (test)' where id = '00000000-0000-0000-0000-00000000f002'$$, -2, 'remove is a change on its own');
 commit;
 
 -- ---------------------------------------------------------------------------

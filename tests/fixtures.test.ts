@@ -1755,6 +1755,7 @@ describe("Work Orders phase 1 (0017)", () => {
     expect(h("priority", "normal", "critical")).toBe("Priority: Normal → Urgent");
     expect(h("archived", null, "archived")).toBe("Archived");
     expect(h("reassign_request", null, "Needs a designer (test)")).toBe("Asked to be reassigned: Needs a designer (test)");
+    expect(h("title", "Fix teh header (test)", "Fix the header (test)")).toBe("Title: Fix teh header (test) → Fix the header (test)");
   });
 
   it("preview: the developer's work order pages open, nothing else new", async () => {

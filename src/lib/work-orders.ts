@@ -141,7 +141,7 @@ export function hoursLabel(minutes: number | null | undefined): string {
 export interface HistoryEntry {
   at: string;
   actorName: string | null;
-  field: "created" | "owner" | "status" | "due_on" | "start_on" | "priority" | "archived" | "reassign_request";
+  field: "created" | "owner" | "status" | "due_on" | "start_on" | "priority" | "archived" | "reassign_request" | "title";
   oldValue: string | null;
   newValue: string | null;
 }
@@ -176,6 +176,8 @@ export function historyText(h: HistoryEntry): string {
       return h.newValue === "restored" ? "Taken out of the archive" : "Archived";
     case "reassign_request":
       return h.newValue ? `Asked to be reassigned: ${h.newValue}` : "Reassignment request closed";
+    case "title":
+      return `Title: ${v(h.oldValue)} → ${v(h.newValue)}`;
   }
 }
 

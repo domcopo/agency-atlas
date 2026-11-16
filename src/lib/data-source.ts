@@ -65,6 +65,7 @@ import type {
   CheckIn,
   CheckInEntry,
   CheckInMood,
+  EditableCheckIn,
   ClientAction,
   ClientHealth,
   ContactKind,
@@ -172,18 +173,26 @@ type DbClient = Awaited<ReturnType<typeof createDatabaseClient>>;
 const KINDS: ContactKind[] = ["check_in", "call", "message", "email", "meeting", "note"];
 const asKind = (v: unknown): ContactKind => (KINDS.includes(v as ContactKind) ? (v as ContactKind) : "check_in");
 
-type CheckInRow = { client_id: string; happened_on: string; note: string | null; mood: CheckInMood | null; kind: ContactKind };
+type CheckInRow = { id: string; client_id: string; happened_on: string; note: string | null; mood: CheckInMood | null; kind: ContactKind; removed: boolean };
 
-/** All check-ins, newest first. Works before and after the 0004 "mood" and 0006 "kind" columns exist. */
-const readCheckIns = cache(async (db: DbClient): Promise<CheckInRow[]> => {
+/**
+ * All check-ins, newest first, INCLUDING removed ones (0021). Works before and after the
+ * 0004 "mood", 0006 "kind" and 0021 "removed_at" columns exist.
+ */
+const readAllCheckIns = cache(async (db: DbClient): Promise<CheckInRow[]> => {
   const order = { ascending: false } as const;
-  const full = await db.from("check_ins").select("client_id, happened_on, note, mood, kind").order("happened_on", order).order("created_at", order);
-  if (!full.error) return (full.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood), kind: asKind(r.kind) }));
-  const withMood = await db.from("check_ins").select("client_id, happened_on, note, mood").order("happened_on", order).order("created_at", order);
-  if (!withMood.error) return (withMood.data ?? []).map((r) => ({ ...r, mood: asMood(r.mood), kind: "check_in" as const }));
-  const plain = await db.from("check_ins").select("client_id, happened_on, note").order("happened_on", order).order("created_at", order);
-  return (plain.data ?? []).map((r) => ({ ...r, mood: null, kind: "check_in" as const }));
+  const read = (cols: string) => db.from("check_ins").select(cols).order("happened_on", order).order("created_at", order);
+  type Raw = { id: string; client_id: string; happened_on: string; note: string | null; mood?: unknown; kind?: unknown; removed_at?: string | null };
+  const map = (rows: unknown) => ((rows ?? []) as Raw[]).map((r) => ({ id: r.id, client_id: r.client_id, happened_on: r.happened_on, note: r.note, mood: asMood(r.mood), kind: asKind(r.kind), removed: Boolean(r.removed_at) }));
+  for (const cols of ["id, client_id, happened_on, note, mood, kind, removed_at", "id, client_id, happened_on, note, mood, kind", "id, client_id, happened_on, note, mood", "id, client_id, happened_on, note"]) {
+    const res = await read(cols);
+    if (!res.error) return map(res.data);
+  }
+  return [];
 });
+
+/** Check-ins that count: removed ones (0021) are left out of health, last contact, AI and history. */
+const readCheckIns = cache(async (db: DbClient): Promise<CheckInRow[]> => (await readAllCheckIns(db)).filter((r) => !r.removed));
 
 /** The latest check-ins for one client (database mode only). */
 export async function getCheckInHistory(clientDbId: string | undefined, limit = 6): Promise<CheckInEntry[]> {
@@ -193,6 +202,16 @@ export async function getCheckInHistory(clientDbId: string | undefined, limit = 
     .filter((r) => r.client_id === clientDbId)
     .slice(0, limit)
     .map((r) => ({ date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind }));
+}
+
+/** Owner only: one client's removed check-ins (0021), newest first, so they can be restored. */
+export async function getRemovedCheckIns(clientDbId: string | undefined): Promise<EditableCheckIn[]> {
+  if (!usesDatabase() || !clientDbId || !/^[0-9a-f-]{36}$/.test(clientDbId)) return [];
+  if ((await getCurrentMember())?.role !== "owner") return [];
+  const db = await createDatabaseClient();
+  return (await readAllCheckIns(db))
+    .filter((r) => r.removed && r.client_id === clientDbId)
+    .map((r) => ({ id: r.id, date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind }));
 }
 
 /**
@@ -704,6 +723,8 @@ export interface TimelineEntry {
   title: string;
   detail: string | null;
   tone: "neutral" | "good" | "bad" | "info";
+  /** A logged check-in (owner/managers can fix or remove it, 0021). */
+  checkIn?: EditableCheckIn;
 }
 
 /**
@@ -719,7 +740,14 @@ export async function getClientTimeline(slug: string, limit = 15): Promise<Timel
   const out: TimelineEntry[] = [];
   for (const r of (await readCheckIns(db)).filter((x) => x.client_id === c.dbId)) {
     const mood = r.mood === "better" ? " · doing better" : r.mood === "worse" ? " · got worse" : r.mood === "same" ? " · holding steady" : "";
-    out.push({ at: r.happened_on, kind: "contact", title: `${words[r.kind]} logged${mood}`, detail: r.note, tone: r.mood === "worse" ? "bad" : r.mood === "better" ? "good" : "neutral" });
+    out.push({
+      at: r.happened_on,
+      kind: "contact",
+      title: `${words[r.kind]} logged${mood}`,
+      detail: r.note,
+      tone: r.mood === "worse" ? "bad" : r.mood === "better" ? "good" : "neutral",
+      checkIn: { id: r.id, date: r.happened_on, note: r.note, mood: r.mood, kind: r.kind },
+    });
   }
   const act = await db.from("activity").select("at, kind, summary").eq("client_id", c.dbId).order("at", { ascending: false }).limit(50);
   for (const r of act.data ?? []) {

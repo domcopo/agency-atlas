@@ -2,9 +2,10 @@
 // or a rule-based flag (with Open client · Add next action).
 // Plain HTML forms posting to server actions, so it works without extra JavaScript.
 
-import { ArrowRight, Check, CalendarClock, UserRound } from "lucide-react";
+import { ArrowRight, Check, CalendarClock, Pencil, UserRound } from "lucide-react";
 import Link from "next/link";
 import { completeReminder, updateAction } from "@/app/actions";
+import { EditItemForm } from "@/components/forms/EditItemForm";
 import { cn } from "@/lib/format";
 import { needsReview } from "@/lib/ops";
 import type { ActionPriority, PriorityItem } from "@/lib/types";
@@ -132,6 +133,14 @@ export function ActionRow({
                 Save
               </button>
             </form>
+          </details>
+          <details className="group w-full">
+            <summary className={cn(btn, "w-fit list-none")}>
+              <Pencil aria-hidden className="size-3.5" /> Edit
+            </summary>
+            <div className="mt-1.5">
+              <EditItemForm key={`${a.title}-${a.notes ?? ""}`} actionId={a.id} title={a.title} notes={a.notes} slug={slug} />
+            </div>
           </details>
           </>
           )}

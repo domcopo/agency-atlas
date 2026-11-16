@@ -835,3 +835,35 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
     expect(fn("createLeadAction")).toMatch(/owner_staff_id: sales \? me\.staffId/);
   });
 });
+
+describe("Fix titles and check-ins (0021): owner and managers only, nothing deleted", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const fn = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const next = actions.indexOf("\nexport async function ", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("only the owner or a manager can fix titles and check-ins; only the owner restores", () => {
+    for (const name of ["editActionText", "editCheckIn", "setCheckInRemoved"]) expect(fn(name), name).toMatch(/!isLead\(me\.role\)/);
+    expect(fn("setCheckInRemoved")).toMatch(/op === "restore" && me\.role !== "owner"\) return;/);
+  });
+
+  it("check-ins are never deleted by the app, only hidden (removed_at)", () => {
+    expect(actions).not.toMatch(/from\("check_ins"\)\.delete/);
+    expect(fn("setCheckInRemoved")).toMatch(/removed_at:/);
+    // The change record is written only by the database.
+    expect(actions).not.toMatch(/check_in_edits/);
+  });
+
+  it("work order titles are still checked for contact details", () => {
+    expect(fn("editActionText")).toMatch(/contactDetailsIn\(/);
+  });
+
+  it("removed check-ins stop counting everywhere (one reader filters them)", () => {
+    const ds = readFileSync(join(ROOT, "src/lib/data-source.ts"), "utf8");
+    expect(ds).toMatch(/const readCheckIns = cache\(async \(db: DbClient\): Promise<CheckInRow\[\]> => \(await readAllCheckIns\(db\)\)\.filter\(\(r\) => !r\.removed\)\);/);
+    // Only getRemovedCheckIns and readCheckIns use the unfiltered list.
+    expect(ds.match(/readAllCheckIns\(db\)/g)?.length).toBe(2);
+  });
+});

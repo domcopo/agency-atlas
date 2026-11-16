@@ -10,6 +10,7 @@ import { archiveWorkOrder, closeReassignRequest, updateAction } from "@/app/acti
 import { Step } from "@/components/cards/DeveloperWork";
 import { ReviewButtons } from "@/components/cards/WorkOrderList";
 import { CommentForm, HoursForm, InfoForm, ReassignRequestForm } from "@/components/forms/WorkOrderDetailForms";
+import { EditItemForm } from "@/components/forms/EditItemForm";
 import { MoveToTrashButton } from "@/components/forms/TrashForms";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getDeveloperViewer, getMember, getTeam, getToday, getWorkOrderDetail } from "@/lib/data-source";
@@ -237,6 +238,12 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
                   </button>
                 </form>
                 <InfoForm actionId={a.id} start={a.startOn ?? null} links={a.links ?? []} due={a.dueOn} />
+                <details className="rounded-xl border border-line bg-white/[0.03] px-3 py-1">
+                  <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit title and notes</summary>
+                  <div className="pb-2">
+                    <EditItemForm key={`${a.title}-${a.notes ?? ""}`} actionId={a.id} title={a.title} notes={a.notes} />
+                  </div>
+                </details>
               </>
             )}
 
