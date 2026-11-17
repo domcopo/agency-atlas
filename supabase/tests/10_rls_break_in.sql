@@ -1548,6 +1548,38 @@ select test.expect($$update public.check_ins set removed_at = now(), note = 'bot
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7s. Internal work orders (0022): "our agency" work has no client and no lead. Only work
+--     orders can be internal; the flag can't be changed later; developers see only their
+--     own; salespeople see none.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.actions (id, internal, kind, title, owner_staff_id) values ('00000000-0000-0000-0000-00000000f201', true, 'work_order', 'Update our own website (test)', '00000000-0000-0000-0000-0000000000b3')$$, 1, 'manager adds an internal work order for a developer');
+select test.expect($$insert into public.actions (id, internal, kind, title) values ('00000000-0000-0000-0000-00000000f202', true, 'work_order', 'Plan our newsletter (test)')$$, 1, 'manager adds an unassigned internal work order');
+select test.expect($$insert into public.actions (internal, kind, title) values (true, 'follow_up', 'Internal follow-up (test)')$$, -2, 'only work orders can be internal');
+select test.expect($$insert into public.actions (internal, client_id, kind, title) values (true, '00000000-0000-0000-0000-0000000000c1', 'work_order', 'Both (test)')$$, -2, 'an internal item cannot also have a client');
+select test.expect($$insert into public.actions (kind, title) values ('work_order', 'Nothing (test)')$$, -2, 'an item still needs a client, a lead or internal');
+select test.expect($$update public.actions set internal = false where id = '00000000-0000-0000-0000-00000000f201'$$, -1, 'internal cannot be changed afterwards');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000f201' and internal and client_name is null$$, 1, 'developer sees their internal work order in my_work');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000f202'$$, 0, 'developer does not see unassigned internal work');
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000f202'$$, 0, 'developer cannot read unassigned internal work directly');
+select test.expect($$insert into public.actions (internal, kind, title) values (true, 'work_order', 'Dev adds (test)')$$, -1, 'developer cannot add internal work');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.actions where internal$$, 0, 'salesperson sees no internal work');
+select test.expect($$insert into public.actions (internal, kind, title) values (true, 'work_order', 'Sales adds (test)')$$, -1, 'salesperson cannot add internal work');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

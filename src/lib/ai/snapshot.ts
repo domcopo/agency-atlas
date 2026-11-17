@@ -2,6 +2,7 @@
 // ("C1", "C2"...) so names never leave this Mac. The app swaps them back on screen.
 // Pure functions: no network, no database. Tested in tests/fixtures.test.ts.
 
+import { AGENCY_AI_CODE, AGENCY_LABEL, AGENCY_SLUG } from "@/lib/agency";
 import type { Briefing, CheckIn, CheckInEntry, ClientAction, ClientHealth, ClientProfile, GhlSummary, HealthSummary, OpsBriefing, RosterClient, WorkOrderDraft, WorkOrderDrafts } from "@/lib/types";
 
 export interface Codebook {
@@ -306,6 +307,11 @@ export function restoreQuickAdd(raw: unknown, book: Codebook, staff: StaffBook):
     if (!title) continue; // restoreWorkOrderDrafts dropped it too
     const d = drafts.orders[i++];
     if (d) d.aiDueDays = Number.isInteger(o.due_in_days) && (o.due_in_days as number) >= 0 && (o.due_in_days as number) <= 90 ? (o.due_in_days as number) : null;
+    // "Our agency" (0022): internal work, no client.
+    if (d && !d.clientSlug && typeof o.client === "string" && o.client.trim().toUpperCase() === AGENCY_AI_CODE) {
+      d.clientSlug = AGENCY_SLUG;
+      d.clientName = AGENCY_LABEL;
+    }
     if (d && !d.clientSlug && typeof o.client_name_seen === "string") {
       const hit = matchClientName(o.client_name_seen.slice(0, 120), book);
       if (hit) {

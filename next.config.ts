@@ -40,8 +40,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  // Quick add photos are shrunk on the phone first (to ~1600px); 2 MB leaves room.
-  experimental: { serverActions: { bodySizeLimit: "2mb" } },
+  // Smart add: photos are shrunk on the phone; one PDF up to 3.5 MB (Vercel caps requests at 4.5 MB).
+  experimental: { serverActions: { bodySizeLimit: "4mb" } },
   reactStrictMode: true,
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

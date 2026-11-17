@@ -14,6 +14,7 @@ import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getAiStatus, getMember, getOps, getTeam, getWorkOrderDrafts, usesDatabase } from "@/lib/data-source";
 import { asDueFilter, deadlineColor, deadlineText, DUE_FILTERS, matchesDue } from "@/lib/work-orders";
 import { draftAdded, minutesLabel, reviewQueue, suggestWorkOrders, workloadRows, workOrderGroups, workOrdersAsText, type WorkOrderShow, type WorkOrderStatusFilter } from "@/lib/ops";
+import { clientLabel } from "@/lib/agency";
 
 export const metadata: Metadata = { title: "Work orders" };
 
@@ -47,7 +48,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
     .map((a) => ({
       id: a.id,
       title: a.title,
-      client: a.client?.name ?? null,
+      client: a.client?.name ?? (a.internal ? clientLabel(a) : null),
       owner: a.ownerName,
       status: a.status === "canceled" ? "done" : a.status,
       color: deadlineColor(a.dueOn, ops.today, a.status),
@@ -117,7 +118,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
       {ops.orders && (
         <Fold
           label="Smart add"
-          title="Smart add: type, talk or screenshots"
+          title="Smart add: type, talk, screenshots or a PDF"
           defaultOpen
           summary="AI organizes it, suggests who's free and a deadline; you confirm or edit"
           badge={<Sparkles aria-hidden className="size-4 text-violet" />}
@@ -126,10 +127,11 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
             clients={clients}
             staff={staff}
             today={ops.today}
+            myStaffId={member?.staffId ?? null}
             disabled={!aiReady || !ops.cancel}
             disabledNote={!ops.cancel ? "Turns on after one setup step (0013 SQL)." : !aiReady ? "The AI isn't available right now (not set up, or this month's budget is used up)." : undefined}
           />
-          <p className="mt-1.5 px-1 text-[11px] text-faint">About 2–5 cents per request (5–10 with screenshots); budget {ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up"}.</p>
+          <p className="mt-1.5 px-1 text-[11px] text-faint">About 2–5 cents per request (5–10 with screenshots, 1–3 cents a page for a PDF); budget {ai.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up"}.</p>
         </Fold>
       )}
 
@@ -404,7 +406,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
               {archived.slice(0, 100).map((a) => (
                 <li key={a.id}>
                   <Link href={`/work/orders/${a.id}`} className="pressable block px-4 py-2.5 text-sm">
-                    <span className="font-semibold">{a.title}</span> <span className="text-[11px] text-muted">· {a.client?.name ?? "No client"} · archived {a.archivedAt?.slice(0, 10)}</span>
+                    <span className="font-semibold">{a.title}</span> <span className="text-[11px] text-muted">· {clientLabel(a)} · archived {a.archivedAt?.slice(0, 10)}</span>
                   </Link>
                 </li>
               ))}

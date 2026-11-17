@@ -17,6 +17,7 @@ import { getDeveloperViewer, getMember, getTeam, getToday, getWorkOrderDetail } 
 import { cn } from "@/lib/format";
 import { minutesLabel, needsReview, parseSteps, stepProgress } from "@/lib/ops";
 import { DEADLINE_STYLE, deadlineColor, deadlineText, historyText, hoursLabel, linkLabel, PRIORITY_WORD, STATUS_WORD } from "@/lib/work-orders";
+import { clientLabel } from "@/lib/agency";
 
 export const metadata: Metadata = { title: "Work order" };
 
@@ -45,7 +46,7 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
     <>
       <PageHeader
         title={a.title}
-        subtitle={`${a.client?.name ?? "No client"} · Work order`}
+        subtitle={`${clientLabel(a)} · Work order`}
         action={
           <Link href={developer ? "/work" : "/work/orders"} className="pressable glass flex min-h-11 items-center gap-1 rounded-2xl px-3 text-xs font-semibold">
             <ArrowLeft aria-hidden className="size-3.5" /> {developer ? "Work" : "All"}
@@ -97,7 +98,7 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
         </div>
         <div>
           <dt className="text-[11px] text-muted">Client</dt>
-          <dd className="font-semibold">{a.client ? manager ? <Link href={`/clients/${a.client.slug}`} className="hover:underline">{a.client.name}</Link> : a.client.name : "None"}</dd>
+          <dd className="font-semibold">{a.client ? manager ? <Link href={`/clients/${a.client.slug}`} className="hover:underline">{a.client.name}</Link> : a.client.name : clientLabel(a, "None")}</dd>
         </div>
         <div>
           <dt className="text-[11px] text-muted">Start</dt>

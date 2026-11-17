@@ -51,6 +51,8 @@ import {
 } from "@/lib/ghl/client";
 import { canPreview, PREVIEW_COOKIE, PREVIEW_MINUTES, previewTarget } from "@/lib/preview";
 import { asHomeLayout, HOME_LAYOUT_COOKIE } from "@/lib/home-layouts";
+import { AGENCY_SLUG } from "@/lib/agency";
+import { isPdf, MAX_PDF_BYTES, MAX_UPLOAD_TOTAL_BYTES } from "@/lib/uploads";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
@@ -324,6 +326,7 @@ async function saveAction(
     source_note?: string | null;
     est_minutes?: number | null;
     ai_suggested?: boolean;
+    internal?: boolean;
   },
   log = true,
 ): Promise<{ error?: string }> {
@@ -331,6 +334,8 @@ async function saveAction(
   if (error || !data) {
     console.warn(`Action refused: ${error?.code}`);
     // 23514 = a check rule refused it: before 0010 that's the new "work_order" kind.
+    // Internal work (0022): before it's run the column is missing, or the old "client or lead" rule refuses it.
+    if (row.internal && (error?.code === "23514" || MISSING_COLUMN.has(error?.code ?? ""))) return { error: "Our agency work orders need one setup step first (0022 SQL)." };
     if (row.kind === "work_order" && (error?.code === "23514" || MISSING_COLUMN.has(error?.code ?? ""))) return { error: "Work orders need one setup step first (0010 SQL)." };
     if (row.promised_on && MISSING_COLUMN.has(error?.code ?? "")) return { error: "Promise dates need one setup step first (0009 SQL)." };
     return { error: MISSING_TABLE.has(error?.code ?? "") ? "Next actions need one setup step first (0006 SQL)." : "Couldn't save it." };
@@ -388,9 +393,11 @@ export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | 
   if (!title) return { error: "Say what needs to be done." };
   const contact = contactDetailsIn([title, steps ?? "", notes].join("\n"));
   if (contact.length) return { error: `That looks like ${contact.join(" and ")}. Keep contact details in the client record, not in work orders.` };
-  // Look the client up on the server; never trust ids from the page.
-  const client = (await getRoster()).find((c) => c.id === slug);
-  if (!client?.dbId) return { error: "Pick a client." };
+  // "Our agency" (0022) = internal work with no client. Otherwise look the client up on
+  // the server; never trust ids from the page.
+  const internal = slug === AGENCY_SLUG;
+  const client = internal ? null : (await getRoster()).find((c) => c.id === slug);
+  if (!internal && !client?.dbId) return { error: "Pick a client (or Our agency)." };
   const due = dueRaw ? anyDate(dueRaw) : null;
   if (dueRaw && !due) return { error: "Pick a real due date." };
   const promised = promisedRaw ? anyDate(promisedRaw) : null;
@@ -401,7 +408,7 @@ export async function createWorkOrder(_prev: { error?: string; ok?: boolean } | 
   const db = await createDatabaseClient();
   if (ownerRaw && !(await staffExists(db, ownerRaw))) return { error: "Pick someone from the team." };
   const saved = await saveAction(db, {
-    client_id: client.dbId,
+    ...(internal ? { internal: true } : { client_id: client!.dbId! }),
     kind: "work_order",
     title,
     notes: notes || null,
@@ -1784,13 +1791,11 @@ function imageType(b: Uint8Array): "image/jpeg" | "image/png" | "image/webp" | n
 
 const MAX_PHOTO_BYTES = 1_500_000;
 const MAX_PHOTOS = 3;
-/** The server's request limit is 2 MB (next.config); leave room for the text. */
-const MAX_PHOTOS_TOTAL_BYTES = 1_850_000;
 
-export type QuickAddState = { error?: string; drafts?: WorkOrderDrafts; costUsd?: number; hadPhoto?: boolean };
+export type QuickAddState = { error?: string; drafts?: WorkOrderDrafts; costUsd?: number; hadPhoto?: boolean; hadPdf?: boolean };
 
 /**
- * Quick add (0013): the owner or a manager types or dictates a note and/or adds a photo;
+ * Quick add (0013): the owner or a manager types or dictates a note and/or adds photos or one PDF;
  * the AI outlines draft work orders. Names in the note are swapped for codes first; a
  * photo can't be, so the screen warns about it. Nothing is saved: the drafts come back
  * once for review, and a person taps Add on each. The photo is never stored. Cost logged.
@@ -1803,7 +1808,18 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
   // Up to 3 pictures (Smart add), each shrunk on the phone first, checked by its real file type, never saved.
   const files = form.getAll("image").filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length > MAX_PHOTOS) return { error: `Up to ${MAX_PHOTOS} pictures at a time.` };
-  if (files.reduce((n, f) => n + f.size, 0) > MAX_PHOTOS_TOTAL_BYTES) return { error: "Those pictures are too big together. Try fewer, or screenshots." };
+  // One PDF (a brief, proposal or audit), checked by its first bytes, sent once, never saved.
+  const pdfs = form.getAll("pdf").filter((f): f is File => f instanceof File && f.size > 0);
+  if (pdfs.length > 1) return { error: "One PDF at a time." };
+  const pdfFile = pdfs[0] ?? null;
+  if (pdfFile && pdfFile.size > MAX_PDF_BYTES) return { error: "That PDF is too big (3.5 MB at most). Split it, or screenshot the key pages." };
+  if ([...files, ...pdfs].reduce((n, f) => n + f.size, 0) > MAX_UPLOAD_TOTAL_BYTES) return { error: "Those files are too big together. Try fewer pictures, or a smaller PDF." };
+  let pdf: { base64: string } | undefined;
+  if (pdfFile) {
+    const bytes = new Uint8Array(await pdfFile.arrayBuffer());
+    if (!isPdf(bytes)) return { error: "That file isn't a PDF." };
+    pdf = { base64: Buffer.from(bytes).toString("base64") };
+  }
   const images: { mediaType: "image/jpeg" | "image/png" | "image/webp"; base64: string }[] = [];
   for (const file of files) {
     if (file.size > MAX_PHOTO_BYTES) return { error: "That photo is too big. Try a screenshot or a smaller photo." };
@@ -1813,7 +1829,7 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
     images.push({ mediaType, base64: Buffer.from(bytes).toString("base64") });
   }
   const image = images.length > 0;
-  if (!note && !image) return { error: "Type or say what needs doing, or add a photo." };
+  if (!note && !image && !pdf) return { error: "Type or say what needs doing, or add a photo or a PDF." };
   const me = await getCurrentMember();
   if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can add work orders." };
   const ops = await getOps();
@@ -1829,13 +1845,14 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
     today: ops.today,
     note: note ? redactStaff(redact(note, book), staff) : null,
     pictures_attached: images.length,
+    pdf_attached: Boolean(pdf),
     clients: current.map((c) => ({ code: book.codeOf.get(c.id), status: c.status, services: c.services.length ? c.services : ["not recorded"], owner: c.ownerId ? (staff.codeOf.get(c.ownerId) ?? "unknown") : "none" })),
     team: team.map((m) => {
       const l = loads.get(m.id)!;
       return { code: staff.codeOf.get(m.id), role: m.role, open_items: l.openItems, open_hours: Math.round(l.openMinutes / 6) / 10, items_without_estimate: l.withoutEstimate, overdue: l.overdue, due_next_7_days: l.dueNext7 };
     }),
   };
-  const result = await askAi({ task: QUICK_ADD_TASK, data, schema: QUICK_ADD_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining, images });
+  const result = await askAi({ task: QUICK_ADD_TASK, data, schema: QUICK_ADD_SCHEMA, maxOutputTokens: 4000, remainingUsd: pre.remaining, images, pdf });
   const db = await createDatabaseClient();
   await logAiUsage(db, "quick_add", result);
   revalidatePath("/", "layout");
@@ -1849,7 +1866,7 @@ export async function quickAddWorkOrders(_prev: QuickAddState | undefined, form:
     // A draft that still carries contact details can't be confirmed in one tap.
     d.contactWarning = contactDetailsIn([d.title, ...d.steps, d.why].join("\n")).length > 0;
   }
-  return { drafts, costUsd: result.costUsd, hadPhoto: image };
+  return { drafts, costUsd: result.costUsd, hadPhoto: image, hadPdf: Boolean(pdf) };
 }
 
 /**

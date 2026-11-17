@@ -14,6 +14,7 @@ import { cn } from "@/lib/format";
 import { developerSections, dueLabel, dueWhen, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
 import { DEADLINE_STYLE, deadlineColor } from "@/lib/work-orders";
+import { clientLabel } from "@/lib/agency";
 
 const bigBtn = "pressable inline-flex min-h-11 flex-1 items-center justify-center rounded-xl px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50";
 const input = "min-h-11 min-w-0 flex-1 rounded-xl border border-line bg-white/5 px-3 text-sm text-ink disabled:opacity-50";
@@ -93,7 +94,7 @@ function Card({ a, today, readOnly, stepsReady, open }: { a: ClientAction; today
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold leading-snug">{a.title}</span>
             <span className="mt-0.5 block text-[11px] text-muted">
-              {a.client ? a.client.name : "No client"} · {kindLabel(a.kind)}
+              {clientLabel(a)} · {kindLabel(a.kind)}
               {" · "}
               <span className={cn(DEADLINE_STYLE[deadlineColor(a.dueOn, today, a.status)].text, when === "overdue" || when === "today" ? "font-semibold" : "")}>{dueLabel(a.dueOn, today)}</span>
               {progress && (

@@ -1,16 +1,19 @@
 "use client";
 
-// Smart add (docs/SMART_ADD_PLAN.md; was Quick add): type, talk, or drop up to 3
-// screenshots. The AI outlines draft work orders with a suggested person (from real
+// Smart add (docs/SMART_ADD_PLAN.md; was Quick add): type, talk, drop up to 3
+// screenshots, and/or add one PDF (docs/PDF_AND_AGENCY_PLAN.md). The AI outlines draft work orders with a suggested person (from real
 // workload numbers) and a due date (checked by plain rules). NOTHING is saved until a
 // person taps Confirm, or edits a draft and adds it. Pictures are shrunk here on the
-// device first (which also drops location data), sent once, and never stored.
+// device first (which also drops location data), sent once, and never stored. A PDF is
+// sent as it is (checked on the server), once, and never stored either.
 
-import { Check, ImagePlus, Mic, MicOff, Sparkles, X } from "lucide-react";
+import { Check, FileText, ImagePlus, Mic, MicOff, Sparkles, UserCheck, X } from "lucide-react";
 import { startTransition, useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createWorkOrder, quickAddWorkOrders, type QuickAddState } from "@/app/actions";
 import { nearestEst, WorkOrderForm } from "@/components/forms/WorkOrderForm";
+import { AGENCY_LABEL, AGENCY_SLUG } from "@/lib/agency";
 import { minutesLabel } from "@/lib/ops";
+import { MAX_PDF_BYTES } from "@/lib/uploads";
 import type { WorkOrderDraft } from "@/lib/types";
 import { DEADLINE_STYLE, deadlineColor, deadlineText } from "@/lib/work-orders";
 
@@ -56,18 +59,23 @@ export function QuickAddWorkOrders({
   clients,
   staff,
   today,
+  myStaffId,
   disabled,
   disabledNote,
 }: {
   clients: { slug: string; name: string }[];
   staff: { id: string; name: string }[];
   today: string;
+  /** The signed-in person's team entry, for "Assign to me" (null if their login isn't linked). */
+  myStaffId?: string | null;
   disabled?: boolean;
   disabledNote?: string;
 }) {
   const [state, run, pending] = useActionState<QuickAddState | undefined, FormData>(quickAddWorkOrders, undefined);
   const [photos, setPhotos] = useState<{ file: File; url: string }[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [pdf, setPdf] = useState<File | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
@@ -100,6 +108,14 @@ export function QuickAddWorkOrders({
     setPhotos((p) => [...p, ...added]);
   }
 
+  function addPdf(f: File | undefined) {
+    setPdfError(null);
+    if (!f) return;
+    if (f.type && f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) return setPdfError("Only PDF files work here.");
+    if (f.size > MAX_PDF_BYTES) return setPdfError("That PDF is too big (3.5 MB at most). Split it, or screenshot the key pages.");
+    setPdf(f);
+  }
+
   function talk() {
     if (listening) {
       rec.current?.stop();
@@ -128,6 +144,7 @@ export function QuickAddWorkOrders({
     const fd = new FormData();
     fd.set("note", note);
     for (const p of photos) fd.append("image", p.file);
+    if (pdf) fd.append("pdf", pdf);
     startTransition(() => run(fd));
   }
 
@@ -143,7 +160,12 @@ export function QuickAddWorkOrders({
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          if (!disabled) void addFiles(e.dataTransfer.files);
+          if (disabled) return;
+          const dropped = [...e.dataTransfer.files];
+          const droppedPdf = dropped.find((f) => f.type === "application/pdf");
+          if (droppedPdf) addPdf(droppedPdf);
+          const pics = dropped.filter((f) => f.type.startsWith("image/"));
+          if (pics.length) void addFiles(pics);
         }}
         className={`glass space-y-2.5 rounded-3xl p-4 ${dragging ? "outline-2 outline-violet outline-dashed" : ""}`}
       >
@@ -178,10 +200,14 @@ export function QuickAddWorkOrders({
           <label htmlFor="smart-add-photos" className="pressable inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-xl border border-line bg-white/5 px-3 text-xs font-semibold">
             <ImagePlus aria-hidden className="size-4" /> Screenshots ({photos.length}/{MAX_PICTURES})
           </label>
+          <input type="file" accept="application/pdf,.pdf" onChange={(e) => { addPdf(e.target.files?.[0]); e.target.value = ""; }} disabled={disabled || Boolean(pdf)} className="sr-only" id="smart-add-pdf" />
+          <label htmlFor="smart-add-pdf" className="pressable inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-xl border border-line bg-white/5 px-3 text-xs font-semibold">
+            <FileText aria-hidden className="size-4" /> PDF ({pdf ? 1 : 0}/1)
+          </label>
         </div>
         <p className="text-[11px] text-faint">
           {canTalk ? "Talk uses your phone's built-in speech recognition. " : "To talk, tap the microphone on your phone's keyboard. "}
-          On a computer you can drag screenshots onto this box.
+          On a computer you can drag screenshots or a PDF onto this box.
         </p>
 
         {photos.length > 0 && (
@@ -200,15 +226,27 @@ export function QuickAddWorkOrders({
             ))}
           </ul>
         )}
+        {pdf && (
+          <p className="flex items-center gap-1.5 text-xs">
+            <FileText aria-hidden className="size-4 shrink-0 text-violet" />
+            <span className="min-w-0 truncate">{pdf.name}</span>
+            <span className="shrink-0 text-faint">{(pdf.size / 1_000_000).toFixed(1)} MB</span>
+            <button type="button" onClick={() => setPdf(null)} className="pressable inline-flex min-h-11 items-center rounded-xl px-1.5 text-muted" aria-label="Remove the PDF">
+              <X aria-hidden className="size-4" />
+            </button>
+          </p>
+        )}
         {photoError && <p role="alert" className="text-xs text-rose">{photoError}</p>}
-        {photos.length > 0 && (
+        {pdfError && <p role="alert" className="text-xs text-rose">{pdfError}</p>}
+        {(photos.length > 0 || pdf) && (
           <p className="rounded-xl border border-amber/30 bg-amber/5 px-3 py-2 text-[11px] text-muted">
-            <span className="font-semibold text-amber">About pictures:</span> typed names are swapped for codes before anything is sent, but pictures go to the AI (Anthropic) as they are. Crop out phone numbers, emails and addresses first. Pictures aren&apos;t saved anywhere.
+            <span className="font-semibold text-amber">About {pdf && photos.length ? "pictures and PDFs" : pdf ? "PDFs" : "pictures"}:</span> typed names are swapped for codes before anything is sent, but {pdf && !photos.length ? "a PDF goes" : "pictures and PDFs go"} to the AI (Anthropic) as they are: names, emails, phone numbers and prices included. Only add what you&apos;re fine sharing. Nothing is saved anywhere.
+            {pdf ? " A PDF costs more to read: about 1–3 cents a page." : ""}
           </p>
         )}
 
         <div className="flex flex-wrap gap-2">
-          <button type="submit" disabled={pending || disabled || (!note.trim() && !photos.length)} className="pressable inline-flex min-h-12 flex-[2] items-center justify-center gap-1.5 rounded-xl bg-violet-deep px-3 text-sm font-semibold disabled:opacity-60">
+          <button type="submit" disabled={pending || disabled || (!note.trim() && !photos.length && !pdf)} className="pressable inline-flex min-h-12 flex-[2] items-center justify-center gap-1.5 rounded-xl bg-violet-deep px-3 text-sm font-semibold disabled:opacity-60">
             <Sparkles aria-hidden className="size-4" />
             {pending ? "Organizing…" : "Organize with AI"}
           </button>
@@ -223,7 +261,7 @@ export function QuickAddWorkOrders({
       {manual && (
         <div className="glass rounded-3xl p-4">
           <p className="mb-2 text-xs text-muted">
-            No AI, no cost: your first line becomes the title and the rest become steps. Pick the client and person, then add it.{photos.length ? " Screenshots aren't saved with work orders." : ""}
+            No AI, no cost: your first line becomes the title and the rest become steps. Pick the client and person, then add it.{photos.length || pdf ? " Screenshots and PDFs aren't saved with work orders." : ""}
           </p>
           <WorkOrderForm key={note} clients={clients} staff={staff} today={today} fromDraft aiDraft={false} submitLabel="Add this work order" defaults={fromNote(note)} />
         </div>
@@ -234,7 +272,7 @@ export function QuickAddWorkOrders({
           <p className="px-1 text-sm">{state.drafts.headline || "Here's the outline."}</p>
           {state.drafts.orders.length === 0 && <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">No work found in that. Try adding a bit more detail.</p>}
           {state.drafts.orders.map((d, i) => (
-            <DraftCard key={`${i}-${d.title}`} d={d} i={i} clients={clients} staff={staff} today={today} />
+            <DraftCard key={`${i}-${d.title}`} d={d} i={i} clients={clients} staff={staff} today={today} myStaffId={myStaffId && staff.some((m) => m.id === myStaffId) ? myStaffId : null} />
           ))}
           <p className="px-1 text-[11px] text-faint">
             AI outline: check each one; it can be wrong. Nothing is saved until you Confirm or Add. Leaving this page clears it.
@@ -246,11 +284,13 @@ export function QuickAddWorkOrders({
   );
 }
 
-function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: number; clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string }) {
+function DraftCard({ d, i, clients, staff, today, myStaffId }: { d: WorkOrderDraft; i: number; clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string; myStaffId: string | null }) {
   const [state, confirm, saving] = useActionState(createWorkOrder, undefined);
   const [skipped, setSkipped] = useState(false);
   // The AI can't always tell the client: pick it right here, then Confirm.
   const [slug, setSlug] = useState(d.clientSlug ?? "");
+  // The AI's pick is a suggestion: change the person (or take it yourself) before Confirm.
+  const [owner, setOwner] = useState(d.assigneeId ?? "");
   if (skipped) return null;
   const color = deadlineColor(d.dueOn ?? null, today);
   const canConfirm = Boolean(slug) && !d.contactWarning;
@@ -287,11 +327,12 @@ function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: numb
         <>
           <div className="mt-2.5 flex flex-wrap gap-2">
             <form action={confirm} className="flex w-full flex-wrap items-center gap-2">
-              {Object.entries({ ...defaults, slug: undefined, est: nearestEst(d.estMinutes), fromDraft: "1" }).map(([k, v]) => (v === undefined || v === null || v === "" ? null : <input key={k} type="hidden" name={k} value={String(v)} />))}
+              {Object.entries({ ...defaults, slug: undefined, ownerId: undefined, est: nearestEst(d.estMinutes), fromDraft: "1" }).map(([k, v]) => (v === undefined || v === null || v === "" ? null : <input key={k} type="hidden" name={k} value={String(v)} />))}
               <label className="min-w-0 flex-1">
                 <span className="sr-only">Client for this work order</span>
                 <select name="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className={`min-h-11 w-full rounded-xl border px-3 text-sm text-ink ${slug ? "border-line bg-white/5" : "border-amber/60 bg-amber/10"}`}>
                   <option value="">Pick the client…</option>
+                  <option value={AGENCY_SLUG}>{AGENCY_LABEL}</option>
                   {clients.map((c) => (
                     <option key={c.slug} value={c.slug}>
                       {c.name}
@@ -299,6 +340,25 @@ function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: numb
                   ))}
                 </select>
               </label>
+              <div className="flex w-full items-center gap-2">
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">Who does this work order</span>
+                  <select name="ownerId" value={owner} onChange={(e) => setOwner(e.target.value)} className="min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink">
+                    <option value="">No one yet</option>
+                    {staff.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                        {m.id === d.assigneeId ? " (suggested)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {myStaffId && owner !== myStaffId && (
+                  <button type="button" onClick={() => setOwner(myStaffId)} className="pressable inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-line bg-white/5 px-3 text-xs font-semibold">
+                    <UserCheck aria-hidden className="size-4" /> Assign to me
+                  </button>
+                )}
+              </div>
               <button type="submit" disabled={!canConfirm || saving} className="pressable inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-violet-deep px-4 text-sm font-semibold disabled:opacity-50">
                 <Check aria-hidden className="size-4" /> {saving ? "Adding…" : "Confirm"}
               </button>
@@ -312,7 +372,7 @@ function DraftCard({ d, i, clients, staff, today }: { d: WorkOrderDraft; i: numb
           <details className="mt-2">
             <summary className="pressable inline-flex min-h-10 cursor-pointer list-none items-center rounded-xl border border-violet/40 bg-violet/10 px-3 text-xs font-semibold">Edit before adding</summary>
             <div className="mt-2">
-              <WorkOrderForm clients={clients} staff={staff} today={today} fromDraft submitLabel="Add this work order" defaults={{ ...defaults, slug: slug || undefined }} />
+              <WorkOrderForm clients={clients} staff={staff} today={today} fromDraft submitLabel="Add this work order" defaults={{ ...defaults, slug: slug || undefined, ownerId: owner || undefined }} />
             </div>
           </details>
         </>

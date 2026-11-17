@@ -650,6 +650,8 @@ export interface ClientAction {
   /** Client slug + name (when tied to a client). */
   client: { slug: string; dbId: string; name: string } | null;
   leadGhlId: string | null;
+  /** Work for our own agency: no client, no lead (0022, work orders only). */
+  internal?: boolean;
   /** Why it's stuck (status "blocked"). Needs 0009. */
   blockedReason?: string | null;
   /** The date we promised the client. Empty = not a promise. Needs 0009. */

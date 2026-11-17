@@ -562,6 +562,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
   // Newest setup level first; step down if a later setup step hasn't been run yet.
   const levels = [
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at, internal`, promises: true, orders: true, review: true, cancel: true }, // 0022
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at`, promises: true, orders: true, review: true, cancel: true }, // 0017
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}`, promises: true, orders: true, review: true, cancel: true }, // 0016
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}`, promises: true, orders: true, review: true, cancel: true }, // 0013
@@ -603,6 +604,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
         ownerName: r.owner_staff_id ? (staffName.get(r.owner_staff_id) ?? null) : null,
         client: c?.dbId ? { slug: c.id, dbId: c.dbId, name: c.name } : null,
         leadGhlId: r.lead_ghl_id,
+        internal: (r as Record<string, unknown>).internal === true,
         blockedReason: r.blocked_reason ?? null,
         promisedOn: r.promised_on ?? null,
         canceledAt: r.canceled_at ?? null,
@@ -804,7 +806,8 @@ export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
     const db = await createDatabaseClient();
     const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
     const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}`);
+    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, internal`);
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}`)); // before 0022
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}`)); // before 0017
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`)); // before 0016
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes`)); // before 0011
@@ -828,6 +831,7 @@ export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
       // Name only (from the my_work view); developers can't open client pages.
       client: r.client_slug && r.client_name ? { slug: String(r.client_slug), dbId: "", name: String(r.client_name) } : null,
       leadGhlId: null,
+      internal: r.internal === true,
       blockedReason: (r.blocked_reason as string | null) ?? null,
       promisedOn: (r.promised_on as string | null) ?? null,
     }));

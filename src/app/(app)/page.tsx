@@ -73,6 +73,7 @@ import {
 import { formatShortDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { stateNote } from "@/lib/billing";
 import type { ActivityKind } from "@/lib/types";
+import { clientLabel } from "@/lib/agency";
 
 const activityIcon: Record<ActivityKind, { icon: typeof CalendarCheck; color: string }> = {
   client_signed: { icon: UserPlus, color: "text-lime bg-lime/12" },
@@ -132,7 +133,7 @@ export default async function MissionControlPage() {
               <Link href="/work" className="pressable glass mt-3 block rounded-2xl p-4">
                 <span className="block text-[11px] uppercase tracking-[0.08em] text-muted">{s.now[0] ? "Working on" : "Up next"}</span>
                 <span className="mt-0.5 block text-sm font-semibold">{top.title}</span>
-                <span className="block text-xs text-muted">{top.client?.name ?? "No client"}</span>
+                <span className="block text-xs text-muted">{clientLabel(top)}</span>
                 <span className="mt-2 block text-xs font-semibold text-violet">Open Work →</span>
               </Link>
             ) : (

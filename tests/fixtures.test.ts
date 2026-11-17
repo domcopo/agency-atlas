@@ -1278,6 +1278,42 @@ describe("cancel, workload chips, suggestions and quick add (0013)", () => {
       ["New photos for Sunrise Dental (fictional)", "sun", null],
     ]);
   });
+
+  it("Smart add: \"AGENCY\" becomes Our agency (internal), never a client (0022)", async () => {
+    const { buildCodebook, buildStaffBook, restoreQuickAdd } = await import("@/lib/ai/snapshot");
+    const { AGENCY_LABEL, AGENCY_SLUG, clientLabel } = await import("@/lib/agency");
+    const book = buildCodebook([client({ id: "sam-sample", name: "Sam Sample Plumbing (fictional)" })]);
+    const drafts = restoreQuickAdd(
+      {
+        headline: "Our own website",
+        orders: [
+          { client: "AGENCY", client_name_seen: "", title: "Refresh our homepage", why: "From the brief", steps: ["Draft copy"], priority: "normal", est_minutes: 120, assignee: "T2", assignee_why: "" },
+          { client: "agency", client_name_seen: "Sam Sample Plumbing (fictional)", title: "Case study page", why: "", steps: [], priority: "low", est_minutes: 60, assignee: "", assignee_why: "" },
+        ],
+      },
+      book,
+      buildStaffBook(staff),
+    );
+    expect(drafts.orders.map((o) => [o.clientSlug, o.clientName])).toEqual([
+      [AGENCY_SLUG, AGENCY_LABEL],
+      [AGENCY_SLUG, AGENCY_LABEL],
+    ]);
+    // Not a real slug, so it can never collide with a client or open a client page.
+    expect(AGENCY_SLUG).not.toMatch(/^[a-z0-9-]{1,90}$/);
+    expect(clientLabel({ client: null, internal: true })).toBe(AGENCY_LABEL);
+    expect(clientLabel({ client: null })).toBe("No client");
+    expect(clientLabel({ client: { name: "Sam Sample (fictional)" }, internal: false })).toBe("Sam Sample (fictional)");
+  });
+
+  it("internal work counts toward a person's load but never toward a client", async () => {
+    const { personLoads } = await import("@/lib/work-orders");
+    const { openActions } = await import("@/lib/ops");
+    const internal = wo({ id: "i1", client: null, internal: true, estMinutes: 90 });
+    const loads = personLoads([internal], ["d1"], "2026-11-09");
+    expect(loads.get("d1")!.openItems).toBe(1);
+    expect(loads.get("d1")!.openMinutes).toBe(90);
+    expect(openActions([internal], "db1")).toEqual([]);
+  });
 });
 
 describe("Kit (0014)", () => {

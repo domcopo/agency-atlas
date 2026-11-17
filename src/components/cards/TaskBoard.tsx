@@ -8,6 +8,7 @@ import { priorityTone } from "@/components/cards/ActionRow";
 import { cn } from "@/lib/format";
 import { dueLabel, dueWhen, kindLabel, type BoardColumn } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
+import { clientLabel } from "@/lib/agency";
 
 const COLUMNS: { id: BoardColumn; label: string; tone: string }[] = [
   { id: "open", label: "Open", tone: "text-ink" },
@@ -47,7 +48,7 @@ export function TaskBoard({
                 <ul className="max-h-[60vh] space-y-2 overflow-y-auto p-2.5">
                   {items.map((a) => {
                     const when = dueWhen(a.dueOn, today);
-                    const who = a.client?.name ?? (a.leadGhlId ? (leadNames.get(a.leadGhlId) ?? "Lead") : null);
+                    const who = a.client?.name ?? (a.internal ? clientLabel(a) : null) ?? (a.leadGhlId ? (leadNames.get(a.leadGhlId) ?? "Lead") : null);
                     return (
                       <li key={a.id} className="rounded-2xl border border-line bg-white/[0.03] p-2.5">
                         <div className="flex items-start gap-2">

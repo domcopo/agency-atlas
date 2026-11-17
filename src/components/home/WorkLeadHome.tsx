@@ -9,6 +9,7 @@ import { SectionTitle } from "@/components/shell/PageHeader";
 import { lateBy, type WorkLeadView } from "@/lib/home-layouts";
 import { minutesLabel, type WorkloadRow } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
+import { clientLabel } from "@/lib/agency";
 
 function Line({ a, today, children }: { a: ClientAction; today: string; children?: React.ReactNode }) {
   const late = lateBy(a.dueOn, today);
@@ -16,7 +17,7 @@ function Line({ a, today, children }: { a: ClientAction; today: string; children
     <li className="px-4 py-2.5">
       <p className="text-sm font-semibold">{a.title}</p>
       <p className="text-[11px] text-muted">
-        {a.client?.name ?? "No client"} · {a.ownerName ?? "No owner"}
+        {clientLabel(a)} · {a.ownerName ?? "No owner"}
         {late && <span className="font-semibold text-rose"> · {late}</span>}
         {a.status === "blocked" && <span className="text-rose"> · stuck: {a.blockedReason || "no reason given"}</span>}
         {a.status === "review" && a.submittedAt && <span className="text-violet"> · sent {a.submittedAt.slice(0, 10)}</span>}

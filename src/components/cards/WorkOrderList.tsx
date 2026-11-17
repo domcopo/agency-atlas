@@ -10,6 +10,7 @@ import { priorityTone } from "@/components/cards/ActionRow";
 import { WorkPromptButton } from "@/components/forms/WorkPromptButton";
 import { cn } from "@/lib/format";
 import { dueLabel, dueWhen, EST_OPTIONS, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress, type WorkOrderGroup, type WorkOrderStats } from "@/lib/ops";
+import { clientLabel } from "@/lib/agency";
 import type { ClientAction } from "@/lib/types";
 import { DEADLINE_STYLE, deadlineColor } from "@/lib/work-orders";
 
@@ -134,7 +135,7 @@ function ItemCard({
                 a.client.name
               )
             ) : (
-              "No client"
+              clientLabel(a)
             )}
             {" · "}
             {kindLabel(a.kind)} · <span className={priorityTone[a.priority].text}>{priorityTone[a.priority].label}</span>

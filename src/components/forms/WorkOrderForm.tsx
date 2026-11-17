@@ -4,6 +4,7 @@
 // GoHighLevel conversation it came from. Also used to add an AI draft after a person
 // reviews and edits it. Saves to YOUR database only; GoHighLevel is never changed.
 
+import { AGENCY_LABEL, AGENCY_SLUG } from "@/lib/agency";
 import { useActionState } from "react";
 import { createWorkOrder } from "@/app/actions";
 import { ContactSafeTextarea } from "@/components/forms/WorkOrderDetailForms";
@@ -58,6 +59,7 @@ export function WorkOrderForm({
           <option value="" disabled>
             Pick a client
           </option>
+          <option value={AGENCY_SLUG}>{AGENCY_LABEL}</option>
           {clients.map((c) => (
             <option key={c.slug} value={c.slug}>
               {c.name}
