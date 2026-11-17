@@ -33,6 +33,18 @@ html {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Dropdown lists (Windows Chrome/Edge, Firefox): the open list takes the box's see-through
+   background, which shows as white, while the text stays light, so names were invisible.
+   iPhone and Mac draw their own menus and ignore this. Solid colors work everywhere. */
+select option,
+select optgroup {
+  background-color: var(--color-bg-raised);
+  color: var(--color-ink);
+}
+select option:disabled {
+  color: var(--color-faint);
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-ink);
