@@ -1,0 +1,165 @@
+/* SEO audit template: shared styles. Every rule is scoped under .audit so nothing leaks
+   into the rest of the app. Pages are fixed 1280×720 "slides" (for screen and PDF). */
+
+.audit {
+  --a-ink: #0b2340;
+  --a-body: #33445c;
+  --a-muted: #66758a;
+  --a-line: #e1e7ee;
+  --a-panel: #f3f6f9;
+  --a-card: #ffffff;
+  --a-teal: #00a9cc;
+  --a-pink: #e8426a;
+  --a-green: #12c48b;
+  --a-amber: #f5b82e;
+  --a-red: #e8426a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  color: var(--a-ink);
+  color-scheme: light;
+}
+
+.audit *,
+.audit *::before,
+.audit *::after {
+  box-sizing: border-box;
+}
+
+.audit-viewer {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: center;
+}
+
+.audit-scale {
+  width: 100%;
+  max-width: 1280px;
+  overflow: hidden;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+
+.audit-slide {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  background: #fff;
+  padding: 34px 48px 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform-origin: top left;
+}
+
+.audit-kicker { font-size: 13px; font-weight: 700; letter-spacing: 0.22em; color: var(--a-pink); text-transform: uppercase; }
+.audit-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; margin: 4px 0 0; }
+.audit-title small { font-size: 18px; font-weight: 700; color: var(--a-teal); margin-left: 8px; letter-spacing: 0; }
+.audit-sub { font-size: 14px; color: var(--a-muted); margin-top: 6px; }
+.audit-body { flex: 1; min-height: 0; margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+.audit-row { display: flex; gap: 16px; min-height: 0; }
+.audit-row > * { min-width: 0; }
+
+.audit-footer {
+  height: 36px;
+  margin-top: 10px;
+  border-top: 1px solid var(--a-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--a-muted);
+  gap: 12px;
+}
+.audit-footer b { color: var(--a-ink); letter-spacing: 0.08em; }
+
+.audit-sample-chip {
+  position: absolute;
+  top: 16px;
+  right: 48px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #8a5a00;
+  background: #fff3cf;
+  border: 1px solid #f2d27a;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.audit-card { background: var(--a-card); border: 1px solid var(--a-line); border-radius: 12px; padding: 16px 18px; min-height: 0; }
+.audit-card h3 { font-size: 13.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; margin: 0 0 10px; }
+.audit-note { font-size: 10.5px; line-height: 1.5; color: var(--a-muted); margin-top: 8px; }
+.audit-callout { background: var(--a-panel); border-left: 4px solid var(--a-teal); border-radius: 10px; padding: 12px 16px; font-size: 13px; line-height: 1.5; color: var(--a-body); }
+
+.audit-tag { display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+.audit-tag.gap { background: #fde7ec; color: var(--a-pink); }
+.audit-tag.partial { background: #fff3d6; color: #b07800; }
+.audit-tag.good { background: #dcf8ee; color: #0a8a61; }
+.audit-tag.info { background: #dff5fb; color: #007c98; }
+.audit-tag.model { background: #ede7ff; color: #5b3fc4; }
+.audit-tag.assumption { background: #fff3d6; color: #8a5a00; }
+
+.audit-nf { color: var(--a-muted); font-style: italic; font-weight: 400; }
+.audit-unverified { display: block; width: fit-content; margin-left: auto; margin-top: 2px; white-space: nowrap; font-size: 9.5px; font-weight: 700; color: #8a5a00; background: #fff3d6; border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
+
+.audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.audit-table th { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--a-muted); text-align: left; padding: 0 6px 6px; border-bottom: 2px solid var(--a-ink); }
+.audit-table td { padding: 7px 6px; border-bottom: 1px solid var(--a-line); vertical-align: middle; }
+.audit-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.audit-table.compact td { padding: 5px 6px; }
+.audit-table tr.you td { background: #fdeef2; font-weight: 700; }
+.audit-table .sub { display: block; font-size: 10.5px; color: var(--a-muted); font-weight: 400; }
+
+.audit-bar { height: 10px; background: #e9eef3; border-radius: 99px; overflow: hidden; }
+.audit-bar > span { display: block; height: 100%; background: var(--a-teal); border-radius: 99px; }
+.audit-bar.you > span { background: var(--a-pink); }
+
+.audit-pos { display: inline-block; min-width: 26px; text-align: center; font-size: 11px; font-weight: 800; color: #fff; border-radius: 5px; padding: 1px 6px; }
+.audit-pos.top { background: var(--a-green); }
+.audit-pos.mid { background: var(--a-amber); }
+.audit-pos.low { background: var(--a-red); }
+.audit-dash { color: #b6c0cc; }
+
+.audit-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.audit-kpi { background: var(--a-panel); border-radius: 12px; border-top: 5px solid var(--a-teal); padding: 14px 16px; }
+.audit-kpi .v { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+.audit-kpi .l { font-size: 13px; font-weight: 700; margin-top: 2px; }
+.audit-kpi .s { font-size: 10.5px; color: var(--a-muted); margin-top: 3px; line-height: 1.4; }
+
+.audit-grid { display: grid; gap: 3px; }
+.audit-grid span { display: flex; align-items: center; justify-content: center; height: 33px; border-radius: 5px; font-size: 11px; font-weight: 800; color: #fff; }
+.audit-grid .top { background: var(--a-green); }
+.audit-grid .mid { background: var(--a-amber); }
+.audit-grid .low { background: var(--a-red); }
+.audit-grid .none { background: #cfd8e2; color: #66758a; }
+
+.audit-price { border: 1px solid var(--a-line); border-radius: 12px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; position: relative; }
+.audit-price.rec { border: 2px solid var(--a-teal); background: #f0fbfe; }
+.audit-price .p { font-size: 24px; font-weight: 800; white-space: nowrap; }
+.audit-price .p small { font-size: 12px; color: var(--a-muted); font-weight: 600; }
+.audit-price .badge { position: absolute; top: -9px; right: 14px; background: var(--a-pink); color: #fff; font-size: 9.5px; font-weight: 800; letter-spacing: 0.08em; padding: 2px 8px; border-radius: 99px; }
+
+.audit-dark { background: var(--a-ink); color: #fff; border-radius: 12px; padding: 16px 18px; font-size: 14px; line-height: 1.55; }
+.audit-dark em { color: #3ee0c0; font-style: normal; font-weight: 800; }
+
+.audit-prize { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.audit-prize > div { background: var(--a-ink); color: #fff; border-radius: 10px; padding: 10px 12px; }
+.audit-prize .v { font-size: 21px; font-weight: 800; white-space: nowrap; }
+.audit-prize .l { font-size: 10px; opacity: 0.8; letter-spacing: 0.06em; text-transform: uppercase; }
+.audit-prize .s { font-size: 10px; opacity: 0.85; margin-top: 3px; line-height: 1.45; }
+
+.audit-fixes { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.5; color: var(--a-body); }
+.audit-fixes li { margin-bottom: 10px; }
+.audit-fixes b { color: var(--a-ink); }
+
+@media print {
+  @page { size: 1280px 720px; margin: 0; }
+  html, body { background: #fff !important; }
+  body > *:not(.audit-print-root) { display: none !important; }
+  .audit-viewer { padding: 0; gap: 0; }
+  .audit-toolbar { display: none !important; }
+  .audit-scale { box-shadow: none; border-radius: 0; max-width: none; width: 1280px; height: 720px !important; }
+  .audit-scale > div { transform: none !important; }
+  .audit-slide { break-after: page; }
+}

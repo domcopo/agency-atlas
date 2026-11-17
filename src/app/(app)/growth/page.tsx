@@ -1,4 +1,4 @@
-import { Bot, ChevronRight, ClipboardList, Layers, Link2, TrendingUp } from "lucide-react";
+import { Bot, ChevronRight, ClipboardList, FileSearch, Layers, Link2, TrendingUp } from "lucide-react";
 import type { Metadata } from "next";
 import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -63,6 +63,14 @@ export default async function GrowthPage() {
           <p className="text-[11px] text-faint">{samples ? `${answers.length} sample answers` : "Ready to copy and ask"}</p>
         </GlassCard>
       </div>
+
+      <GlassCard href="/growth/audits" label="Open SEO audits" padding="tight" className="mt-3 space-y-1">
+        <p className="flex items-center justify-between text-[11px] text-muted">
+          SEO audits <FileSearch aria-hidden className="size-3.5 text-sky" />
+        </p>
+        <p className="text-sm font-semibold">Eight-page audit for a client or prospect</p>
+        <p className="text-[11px] text-faint">Template preview ready; live data comes next</p>
+      </GlassCard>
 
       {trends.length > 0 && (
         <>

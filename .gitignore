@@ -27,3 +27,6 @@ secrets/
 
 # Real client data: stays on this Mac only, never in Git or GitHub
 private-data/
+
+# SEO audit reference PDFs (real client audits): this Mac only, never in Git
+docs/seo-audit-reference/

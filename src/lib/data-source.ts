@@ -11,6 +11,8 @@
 // This module reads files with node:fs, so it only runs on the server.
 
 import { businesses } from "@/fixtures/businesses";
+import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
+import type { AuditBundle } from "@/lib/audit/data";
 import { demoRosterRaw, demoTeam } from "@/fixtures/demo-roster";
 import { caseStudyHistory, surveyQuestions, surveyResponses, trends } from "@/fixtures/growth";
 import { insights } from "@/fixtures/insights";
@@ -2040,3 +2042,15 @@ export const getBilling = cache(async (): Promise<BillingView | null> => {
     records,
   };
 });
+
+// ---------------------------------------------------------------------------
+// SEO audits. Phase 1: only the template preview exists, a fictional business shown
+// with "SAMPLE" on every page (a dry run at $0). It is a template preview, not client
+// data, so it shows even with the database connected. Real audits come in a later phase.
+
+export const SAMPLE_AUDIT_ID = "sample";
+
+export function getAuditPreview(id: string): AuditBundle | null {
+  if (id !== SAMPLE_AUDIT_ID) return null;
+  return { id: SAMPLE_AUDIT_ID, sample: true, config: sampleAuditConfig, data: sampleAuditData };
+}
