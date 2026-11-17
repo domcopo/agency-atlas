@@ -26,13 +26,16 @@ The database enforces these roles. Hiding a button is not what protects the data
 3. **SQL Editor** → **New query**, fill in the three values, **Run**:
 
 ```sql
-insert into public.team_members (user_id, display_name, role)
-select id, 'First name', 'manager'
-from auth.users
-where email = 'their@email.com';
+insert into public.team_members (user_id, display_name, role, staff_id)
+select u.id, 'First name', 'manager',
+       (select s.id from public.staff s where s.name = 'Their name as on the team list')
+from auth.users u
+where lower(u.email) = 'their@email.com';
 ```
 
 It should say **1 row**. (Role must be exactly `manager`, `developer` or `sales`.)
+`staff_id` links the login to their team-list entry: developers need it to see their
+own work, and managers need it for "My Work".
 
 4. On their first sign-in, the app makes them set up two-factor on their phone.
 
@@ -49,8 +52,8 @@ That alone blocks all data immediately: the database only shows data to people o
 team list. Their check-in history stays (it records who logged what), which is also why
 Supabase may refuse to fully delete a user who logged check-ins. That's expected.
 
-## Important for now
+## Where they sign in
 
-The app runs **only on this Mac** (http://localhost:3200). Until hosting (Phase 5),
-team members can only use it here, on this computer. Their accounts will work
-unchanged once it's hosted.
+Atlas is hosted (Phase 5): send them the app address privately. It works on any phone or
+computer. On first sign-in they set up two-factor, then change the temporary password
+under **Account**.
