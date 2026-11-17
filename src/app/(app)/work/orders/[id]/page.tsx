@@ -7,6 +7,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { archiveWorkOrder, closeReassignRequest, updateAction } from "@/app/actions";
+import { DeveloperButtons } from "@/components/cards/DeveloperButtons";
 import { Step } from "@/components/cards/DeveloperWork";
 import { ReviewButtons } from "@/components/cards/WorkOrderList";
 import { CommentForm, HoursForm, InfoForm, ReassignRequestForm } from "@/components/forms/WorkOrderDetailForms";
@@ -16,7 +17,7 @@ import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getDeveloperViewer, getMember, getTeam, getToday, getWorkOrderDetail } from "@/lib/data-source";
 import { cn } from "@/lib/format";
 import { minutesLabel, needsReview, parseSteps, stepProgress } from "@/lib/ops";
-import { DEADLINE_STYLE, deadlineColor, deadlineText, historyText, hoursLabel, linkLabel, PRIORITY_WORD, STATUS_WORD } from "@/lib/work-orders";
+import { DEADLINE_STYLE, deadlineColor, deadlineText, historyText, hoursLabel, linkLabel, PRIORITY_WORD, STATUS_WORD, type HistoryEntry } from "@/lib/work-orders";
 import { clientLabel } from "@/lib/agency";
 
 export const metadata: Metadata = { title: "Work order" };
@@ -164,6 +165,9 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
               <ReviewButtons a={a} />
             ) : a.status === "review" ? (
               <p className="text-sm text-violet">Sent for review. A manager will approve it or send it back.</p>
+            ) : developer ? (
+              // Developers: the same big buttons as their Work card, no dropdown (DEVELOPER_SIMPLIFY_PLAN).
+              <DeveloperButtons a={a} disabled={preview} showWaiting />
             ) : (
               <form key={`status-${a.status}`} action={updateAction} className="space-y-2">
                 <input type="hidden" name="actionId" value={a.id} />
@@ -176,7 +180,7 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
                     <option value="waiting">Waiting on client</option>
                     <option value="blocked">Blocked</option>
                     <option value="review">{needsReview(a) ? "Ready for review" : "In review"}</option>
-                    {!developer && <option value="done">Done</option>}
+                    <option value="done">Done</option>
                   </select>
                 </label>
                 <div className="flex gap-2">
@@ -295,7 +299,25 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
         <p className="text-[11px] text-faint">Visible to the owner, managers and whoever this is assigned to. No client contact details here.</p>
       </div>
 
-      <SectionTitle>History</SectionTitle>
+      {developer ? (
+        // Developers: history folds away behind a tap, to keep the page short.
+        <details className="mt-5">
+          <summary className="pressable flex min-h-11 cursor-pointer list-none items-center px-1 text-sm font-semibold text-violet">Show history ({history.length})</summary>
+          <History history={history} ready={ready} />
+        </details>
+      ) : (
+        <>
+          <SectionTitle>History</SectionTitle>
+          <History history={history} ready={ready} />
+        </>
+      )}
+    </>
+  );
+}
+
+function History({ history, ready }: { history: HistoryEntry[]; ready: boolean }) {
+  return (
+    <>
       {history.length ? (
         <ol className="glass divide-y divide-line overflow-hidden rounded-3xl text-sm">
           {[...history].reverse().map((h, i) => (

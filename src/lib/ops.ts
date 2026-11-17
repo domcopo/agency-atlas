@@ -934,6 +934,36 @@ export function developerSections(items: ClientAction[], today: string): Develop
   };
 }
 
+/** One line in the developer's "Needs attention" list on Home. */
+export interface FocusAlert {
+  item: ClientAction;
+  why: "sent_back" | "promise_missed" | "overdue";
+}
+
+/**
+ * The developer's Home (DEVELOPER_SIMPLIFY_PLAN, 2026-11-17): the one item to do next
+ * (what they're on, else the most urgent new one, in the Work tab's own order) and a short
+ * "needs attention" list: sent back by a manager first, then missed client promises, then
+ * overdue. Each item appears at most once. Finished, canceled and in-review items are left out.
+ */
+export function developerFocus(items: ClientAction[], today: string): { next: ClientAction | null; alerts: FocusAlert[]; openCount: number } {
+  const s = developerSections(items, today);
+  const active = [...s.now, ...s.next, ...s.waiting];
+  const alerts: FocusAlert[] = [];
+  const seen = new Set<string>();
+  const add = (why: FocusAlert["why"], pick: (a: ClientAction) => boolean) => {
+    for (const a of active) {
+      if (seen.has(a.id) || !pick(a)) continue;
+      seen.add(a.id);
+      alerts.push({ item: a, why });
+    }
+  };
+  add("sent_back", (a) => Boolean(a.reviewNote));
+  add("promise_missed", (a) => promiseMissed(a, today));
+  add("overdue", (a) => dueWhen(a.dueOn, today) === "overdue");
+  return { next: s.now[0] ?? s.next[0] ?? null, alerts, openCount: active.length + s.review.length };
+}
+
 /** Ticked steps (0016), counted only for steps that exist: "3 of 5". null = no steps. */
 export function stepProgress(a: Pick<ClientAction, "steps" | "stepsDone">): { done: number; total: number; ticked: Set<number> } | null {
   const total = parseSteps(a.steps).length;

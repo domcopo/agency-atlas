@@ -34,7 +34,8 @@ import { ProspectCard } from "@/components/cards/ProspectCard";
 import { PriorityList, priorityTone } from "@/components/cards/ActionRow";
 import { PulseStrip, type PulseTile } from "@/components/cards/PulseStrip";
 import { Fold } from "@/components/shell/Fold";
-import { developerSections, workloadRows } from "@/lib/ops";
+import { workloadRows } from "@/lib/ops";
+import { DeveloperHome } from "@/components/cards/DeveloperHome";
 import { clientCareView, HOME_LAYOUT_LABEL, salesView, workLeadView } from "@/lib/home-layouts";
 import { HomeSwitcher } from "@/components/home/HomeSwitcher";
 import { ClientCareHome } from "@/components/home/ClientCareHome";
@@ -73,7 +74,6 @@ import {
 import { formatShortDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { stateNote } from "@/lib/billing";
 import type { ActivityKind } from "@/lib/types";
-import { clientLabel } from "@/lib/agency";
 
 const activityIcon: Record<ActivityKind, { icon: typeof CalendarCheck; color: string }> = {
   client_signed: { icon: UserPlus, color: "text-lime bg-lime/12" },
@@ -103,43 +103,11 @@ export default async function MissionControlPage() {
   const me = dev ? null : usesDatabase() ? await getMember() : null;
   if (dev) {
     const items = (await getDeveloperWork()).map((i) => i.action!).filter(Boolean);
-    const s = developerSections(items, getToday());
-    const top = s.now[0] ?? s.next[0];
-    const sentBack = [...s.next, ...s.now, ...s.waiting].filter((a) => a.reviewNote).length;
     return (
       <>
         <PageHeader title={`Hi, ${dev.name}`} subtitle="Today" action={dev.preview ? undefined : <a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
         {dev.staffId ? (
-          <>
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: "Now", n: s.now.length, tone: "text-violet" },
-                { label: "Next", n: s.next.length, tone: "" },
-                { label: "Waiting", n: s.waiting.length, tone: s.waiting.length ? "text-rose" : "" },
-                { label: "In review", n: s.review.length, tone: "text-teal" },
-              ].map((t) => (
-                <Link key={t.label} href="/work" className="pressable glass rounded-2xl px-2 py-2.5 text-center">
-                  <span className={`block font-display text-xl font-bold ${t.tone}`}>{t.n}</span>
-                  <span className="block text-[11px] text-muted">{t.label}</span>
-                </Link>
-              ))}
-            </div>
-            {sentBack > 0 && (
-              <Link href="/work" className="mt-3 block rounded-2xl border border-amber/50 bg-amber/10 p-3 text-sm">
-                <span className="font-semibold text-amber">{sentBack} sent back by a manager.</span> <span className="text-muted">See the notes on Work.</span>
-              </Link>
-            )}
-            {top ? (
-              <Link href="/work" className="pressable glass mt-3 block rounded-2xl p-4">
-                <span className="block text-[11px] uppercase tracking-[0.08em] text-muted">{s.now[0] ? "Working on" : "Up next"}</span>
-                <span className="mt-0.5 block text-sm font-semibold">{top.title}</span>
-                <span className="block text-xs text-muted">{clientLabel(top)}</span>
-                <span className="mt-2 block text-xs font-semibold text-violet">Open Work →</span>
-              </Link>
-            ) : (
-              <p className="glass mt-3 rounded-3xl px-4 py-3 text-sm text-muted">Nothing assigned right now.</p>
-            )}
-          </>
+          <DeveloperHome items={items} today={getToday()} readOnly={dev.preview} />
         ) : (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
         )}

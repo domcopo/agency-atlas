@@ -52,7 +52,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Health scores, priorities, risk alerts, Mission Control | `docs/ATLAS_OS_PLAN.md`, `src/lib/ops.ts` |
 | Work orders (board, details, comments, notices) | `docs/WORK_ORDERS_V2_PLAN.md` |
 | Smart add (type, talk, screenshots, PDF; Our agency) | `docs/SMART_ADD_PLAN.md`, `docs/PDF_AND_AGENCY_PLAN.md` |
-| Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md` |
+| Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md`, `docs/DEVELOPER_SIMPLIFY_PLAN.md` |
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
 | Sales role and screens | `docs/SALES_PLAN.md` |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |

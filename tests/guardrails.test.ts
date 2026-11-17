@@ -598,6 +598,24 @@ describe("preview as developer: look only, narrows, never grants", () => {
     expect(scope).not.toMatch(/monthlyUsd|leadGhlId: a\.|cancelNote|canceledAt/);
   });
 
+  it("simplified developer screens (2026-11-17): plain buttons only, same save path, no extra reads", () => {
+    const buttons = readFileSync(join(ROOT, "src/components/cards/DeveloperButtons.tsx"), "utf8");
+    expect(buttons).not.toMatch(/<select|data-source|getBilling|monthlyUsd/);
+    expect([...buttons.matchAll(/action=\{(\w+)\}/g)].map((m) => m[1])).toEqual(["updateAction", "updateAction", "updateAction"]);
+    const home = readFileSync(join(ROOT, "src/components/cards/DeveloperHome.tsx"), "utf8");
+    expect(home).not.toMatch(/<select|data-source|getBilling|monthlyUsd|@\/lib\/ai/);
+    // The work order page: developers get the shared buttons before the manager-only status dropdown.
+    const page = readFileSync(join(ROOT, "src/app/(app)/work/orders/[id]/page.tsx"), "utf8");
+    const devBranch = page.indexOf(") : developer ? (");
+    expect(devBranch).toBeGreaterThan(-1);
+    expect(page.slice(devBranch, devBranch + 300)).toMatch(/<DeveloperButtons a=\{a\} disabled=\{preview\}/);
+    expect(page.indexOf('<select name="status"')).toBeGreaterThan(devBranch);
+    // Developer Home reads only the developer's own work.
+    const homePage = readFileSync(join(ROOT, "src/app/(app)/page.tsx"), "utf8");
+    const devHome = homePage.slice(homePage.indexOf("if (dev) {"), homePage.indexOf("// Salespeople"));
+    expect([...devHome.matchAll(/await (get\w+)/g)].map((m) => m[1])).toEqual(["getDeveloperWork"]);
+  });
+
   it("step ticks are saved only by toggleStep (checked by the database too)", () => {
     const writers = contents.filter(({ text }) => /steps_done/.test(text) && /\.update\(/.test(text)).map(({ file }) => file);
     expect(writers).toEqual(["src/app/actions.ts"]);

@@ -7,17 +7,14 @@
 
 import { BookOpen, Check, ExternalLink } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { toggleStep, updateAction } from "@/app/actions";
+import { toggleStep } from "@/app/actions";
 import { priorityTone } from "@/components/cards/ActionRow";
+import { DeveloperButtons } from "@/components/cards/DeveloperButtons";
 import { cn } from "@/lib/format";
-import { developerSections, dueLabel, dueWhen, kindLabel, minutesLabel, needsReview, parseSteps, promiseMissed, stepProgress } from "@/lib/ops";
+import { developerSections, dueLabel, dueWhen, kindLabel, minutesLabel, parseSteps, promiseMissed, stepProgress } from "@/lib/ops";
 import type { ClientAction } from "@/lib/types";
 import { DEADLINE_STYLE, deadlineColor } from "@/lib/work-orders";
 import { clientLabel } from "@/lib/agency";
-
-const bigBtn = "pressable inline-flex min-h-11 flex-1 items-center justify-center rounded-xl px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50";
-const input = "min-h-11 min-w-0 flex-1 rounded-xl border border-line bg-white/5 px-3 text-sm text-ink disabled:opacity-50";
 
 export function DeveloperWork({ items, today, readOnly = false, stepsReady = true }: { items: ClientAction[]; today: string; readOnly?: boolean; stepsReady?: boolean }) {
   const s = developerSections(items, today);
@@ -150,51 +147,12 @@ function Card({ a, today, readOnly, stepsReady, open }: { a: ClientAction; today
               Waiting for a manager{a.submittedAt ? ` since ${a.submittedAt.slice(0, 10)}` : ""}. Nothing to do unless it comes back.
             </p>
           ) : (
-            <fieldset disabled={readOnly} className="space-y-2">
-              <div className="flex gap-2">
-                {a.status !== "in_progress" && (
-                  <StatusButton a={a} status="in_progress" className="bg-violet-deep">
-                    {a.status === "blocked" || a.status === "waiting" ? "Back to it" : "Start"}
-                  </StatusButton>
-                )}
-                <form action={updateAction} className="flex flex-1">
-                  <input type="hidden" name="actionId" value={a.id} />
-                  <input type="hidden" name="op" value="done" />
-                  <button type="submit" className={cn(bigBtn, "border border-lime/40 bg-lime/10 text-lime")}>
-                    {needsReview(a) ? "Ready for review" : "Done"}
-                  </button>
-                </form>
-              </div>
-              {a.status !== "blocked" && (
-                <form action={updateAction} className="flex gap-2">
-                  <input type="hidden" name="actionId" value={a.id} />
-                  <input type="hidden" name="op" value="status" />
-                  <input type="hidden" name="status" value="blocked" />
-                  <input name="reason" required maxLength={200} placeholder="I'm stuck on…" aria-label={`What you're stuck on for "${a.title}"`} className={input} />
-                  <button type="submit" className={cn(bigBtn, "flex-none border border-rose/40 bg-rose/10 text-rose")}>
-                    I&apos;m stuck
-                  </button>
-                </form>
-              )}
-            </fieldset>
+            <DeveloperButtons a={a} disabled={readOnly} />
           )}
           {readOnly && <p className="text-[11px] text-faint">Preview: buttons are off.</p>}
         </div>
       </details>
     </li>
-  );
-}
-
-function StatusButton({ a, status, className, children }: { a: ClientAction; status: ClientAction["status"]; className?: string; children: ReactNode }) {
-  return (
-    <form action={updateAction} className="flex flex-1">
-      <input type="hidden" name="actionId" value={a.id} />
-      <input type="hidden" name="op" value="status" />
-      <input type="hidden" name="status" value={status} />
-      <button type="submit" className={cn(bigBtn, className)}>
-        {children}
-      </button>
-    </form>
   );
 }
 

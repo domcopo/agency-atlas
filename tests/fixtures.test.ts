@@ -1569,6 +1569,33 @@ describe("preview as developer + developer work screen (approved 2026-11-10)", (
     expect(s.review.map((a) => a.id)).toEqual(["review1", "review2"]);
   });
 
+  it("Home focus: what they're on beats a new item; sent back, missed promise, overdue; each once", async () => {
+    const { developerFocus } = await import("@/lib/ops");
+    const f = developerFocus(
+      [
+        act({ id: "new-urgent", dueOn: "2026-11-01" }),
+        act({ id: "doing", status: "in_progress" }),
+        act({ id: "sent-back", reviewNote: "Fix the title (test)", dueOn: "2026-11-01" }),
+        act({ id: "promise", promisedOn: "2026-11-02" }),
+        act({ id: "stuck-late", status: "blocked", dueOn: "2026-11-03" }),
+        act({ id: "in-review", status: "review", dueOn: "2026-11-01" }),
+        act({ id: "done-late", status: "done", dueOn: "2026-11-01", doneAt: "2026-11-09T10:00:00Z" }),
+        act({ id: "canceled-late", status: "canceled", dueOn: "2026-11-01" }),
+      ],
+      T,
+    );
+    expect(f.next?.id).toBe("doing");
+    expect(f.alerts.map((x) => `${x.why}:${x.item.id}`)).toEqual(["sent_back:sent-back", "promise_missed:promise", "overdue:new-urgent", "overdue:stuck-late"]);
+    expect(f.openCount).toBe(6);
+  });
+
+  it("Home focus: nothing started → the most urgent new item; nothing assigned → empty", async () => {
+    const { developerFocus } = await import("@/lib/ops");
+    expect(developerFocus([act({ id: "later", dueOn: "2026-12-01" }), act({ id: "today", dueOn: T })], T).next?.id).toBe("today");
+    expect(developerFocus([act({ id: "stuck", status: "blocked" })], T).next).toBeNull();
+    expect(developerFocus([], T)).toEqual({ next: null, alerts: [], openCount: 0 });
+  });
+
   it("step progress counts only steps that exist", async () => {
     const { stepProgress } = await import("@/lib/ops");
     expect(stepProgress({ steps: null, stepsDone: [1] })).toBeNull();
