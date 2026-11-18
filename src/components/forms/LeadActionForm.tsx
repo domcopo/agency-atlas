@@ -12,8 +12,11 @@ export function LeadActionForm({
   staff,
   today,
   defaultLeadId,
+  fixedLeadId,
 }: {
   deals: { ghlId: string; label: string }[];
+  /** The lead page: this lead only, no dropdown. */
+  fixedLeadId?: string;
   staff: { id: string; name: string }[];
   today: string;
   defaultLeadId?: string;
@@ -21,19 +24,23 @@ export function LeadActionForm({
   const [state, action, pending] = useActionState(createLeadAction, undefined);
   return (
     <form action={action} className="space-y-2.5">
-      <label className="block text-xs text-muted">
-        Lead
-        <select name="leadId" required defaultValue={defaultLeadId ?? ""} className={field}>
-          <option value="" disabled>
-            Pick a lead…
-          </option>
-          {deals.map((d) => (
-            <option key={d.ghlId} value={d.ghlId}>
-              {d.label}
+      {fixedLeadId ? (
+        <input type="hidden" name="leadId" value={fixedLeadId} />
+      ) : (
+        <label className="block text-xs text-muted">
+          Lead
+          <select name="leadId" required defaultValue={defaultLeadId ?? ""} className={field}>
+            <option value="" disabled>
+              Pick a lead…
             </option>
-          ))}
-        </select>
-      </label>
+            {deals.map((d) => (
+              <option key={d.ghlId} value={d.ghlId}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="block text-xs text-muted">
         Next step
         <input name="title" required maxLength={120} placeholder="e.g. Call back about the proposal" className={field} />

@@ -40,7 +40,7 @@ services, markets or competitors are copied into code.
 
 1. **Settings format, data shape, sample data, template (DONE 2026-11-17).** No database, no network, $0.
 2. Polish the components from feedback (map, chart, spacing); add CSV export of the computed tables. Done so far (2026-11-17): real Ohio outline map, cut-off fixes, cleaner growth chart, sample moved to Ohio cities.
-3. Intake form (website, location, Google profile, average ticket, niche, competitors) + saving audits: migration `0023`, owner/manager RLS, break-in tests.
+3. Intake form (website, location, Google profile, average ticket, niche, competitors) + saving audits: migration `0023`, RLS (owner/managers all; salespeople own only), spend caps, break-in tests. Detailed in `docs/SALES_SIMPLIFY_PLAN.md` Part B.
 4. DataForSEO adapter, cost ledger, pre-run estimate, per-run budget cap (default $5), dry-run switch. Needs approved exceptions: one network module, and POST only to allowlisted DataForSEO read endpoints (DataForSEO sends reads as POST). GoHighLevel stays GET-only.
 5. LeadSnap adapter (API docs needed), then Semrush (optional, off by default).
 6. AI narrative via `src/lib/ai/client.ts` (new `AI_BOTS` entry), company name swapped for a code.
@@ -49,7 +49,7 @@ services, markets or competitors are copied into code.
 
 ## Open questions
 
-- Who may run audits: owner/managers only (current), or salespeople too?
+- ~~Who may run audits~~ Answered 2026-11-17: owner, managers **and salespeople** (salespeople see only audits they ran). Saved audits + spending caps ($5/audit, $10/week per salesperson, $50/month in all, owner-adjustable, enforced in the database) are Phase 3 with migration `0023`; plan in `docs/SALES_SIMPLIFY_PLAN.md` Part B. A "Run an SEO audit" button goes on the lead page `/sales/lead/[id]`.
 - "How much they sell it for": average job price (used now as average ticket), or profit per job?
 - LeadSnap: API access and docs.
 - Default budget cap per run: $5 (current default).

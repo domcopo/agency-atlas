@@ -54,7 +54,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Smart add (type, talk, screenshots, PDF; Our agency) | `docs/SMART_ADD_PLAN.md`, `docs/PDF_AND_AGENCY_PLAN.md` |
 | Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md`, `docs/DEVELOPER_SIMPLIFY_PLAN.md` |
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
-| Sales role and screens | `docs/SALES_PLAN.md` |
+| Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page, saved audits + caps = `0023`) |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |

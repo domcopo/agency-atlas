@@ -17,7 +17,7 @@ import Link from "next/link";
 import { autoPublishOwnerSummary, autoRefreshLeads, recordHealthSnapshot } from "@/app/actions";
 import { TodayPlan } from "@/components/sales/TodayPlan";
 import { isLead } from "@/lib/roles";
-import { lastTouchByLead, nyDay, targetProgress, todaysPlan, touchesOn } from "@/lib/sales";
+import { lastTouchByLead, nyDay, splitLeadFollowUps, targetProgress, todaysPlan, touchesOn } from "@/lib/sales";
 import { AiMeter } from "@/components/cards/AiMeter";
 import { AtlasAsks } from "@/components/cards/AtlasAsks";
 import { BriefingCard } from "@/components/cards/BriefingCard";
@@ -133,7 +133,7 @@ export default async function MissionControlPage() {
         ) : !configured ? (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
         ) : (
-          <TodayPlan items={plan} progress={progress} lastByLead={lastTouchByLead(sales.touches)} users={sales.users} today={day} />
+          <TodayPlan items={plan} progress={progress} lastByLead={lastTouchByLead(sales.touches)} today={day} />
         )}
         {sales.ready && !me.ghlUserId && (
           <p className="mt-3 px-1 text-[11px] text-faint">Your login isn&apos;t linked to your GoHighLevel user yet, so this plan covers everyone&apos;s leads. Ask the owner to link it.</p>
@@ -190,11 +190,11 @@ export default async function MissionControlPage() {
     } else if (homeLayout.layout === "work_lead") {
       body = <WorkLeadHome view={workLeadView(ops.actions, ops.today)} workload={workloadRows({ actions: ops.actions, staff: staffList, today: ops.today })} staff={staffList} today={ops.today} />;
     } else {
-      const appointments = await getUpcomingAppointments();
-      const nyDay = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
-      // Open pipeline uses the same total as Everything and the Sales tab.
-      const view = { ...salesView({ actions: ops.actions, deals: ops.deals, appointments, today: ops.today, now: new Date(), tzDay: nyDay }), openValue: ghl.open.value };
-      body = <SalesHome view={view} leadItems={ops.priorities.filter((p) => p.action?.leadGhlId)} staff={staffList} canEdit={Boolean(me)} synced={Boolean(ghl.lastSync)} />;
+      const [appointments, sales] = await Promise.all([getUpcomingAppointments(), getSales()]);
+      const view = salesView({ actions: ops.actions, leads: sales.leads, touches: sales.touches, appointments, today: ops.today, now: new Date(), tzDay: nyDay });
+      const leadItems = splitLeadFollowUps(ops.priorities, (p) => p.action?.leadGhlId, new Set(sales.leads.map((l) => l.ghlId))).sales;
+      const setup = !sales.ready ? "needs_sql" : sales.pipelines.some((p) => p.active) ? "ready" : "no_pipelines";
+      body = <SalesHome view={view} leadItems={leadItems} staff={staffList} canEdit={Boolean(me)} setup={setup} owner={me?.role === "owner"} pipelines={sales.pipelines} lastByLead={lastTouchByLead(sales.touches)} today={ops.today} />;
     }
     return (
       <>

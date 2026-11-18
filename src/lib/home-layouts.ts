@@ -4,7 +4,8 @@
 // in tests/fixtures.test.ts.
 
 import { daysBetween } from "@/lib/format";
-import { isSalesStage, promiseMissed, reviewQueue, waitingDays } from "@/lib/ops";
+import { promiseMissed, reviewQueue, waitingDays } from "@/lib/ops";
+import type { LeadTouch, SalesLead } from "@/lib/sales";
 import type { CheckIn, ClientAction, HealthSummary, PriorityItem, RosterClient, TeamRole } from "@/lib/types";
 
 export const HOME_LAYOUTS = ["everything", "client_care", "work_lead", "sales"] as const;
@@ -119,16 +120,11 @@ export function workLeadView(actions: ClientAction[], today: string): WorkLeadVi
 }
 
 // ---------------------------------------------------------------------------
-// Sales: lead follow-ups (app-only), newest leads, appointments. GoHighLevel stays read-only.
+// Sales: built from the sales pipelines only, the same numbers as the Sales tab
+// (SALES_SIMPLIFY_PLAN, 2026-11-17). Lead follow-ups (app-only), reach-outs,
+// appointments. GoHighLevel stays read-only.
 // ---------------------------------------------------------------------------
 
-export interface SalesDeal {
-  ghlId: string;
-  name: string;
-  stage: string;
-  value: number;
-  createdAt: string | null;
-}
 export interface SalesAppointment {
   startsAt: string;
   calendar: string | null;
@@ -136,20 +132,27 @@ export interface SalesAppointment {
 }
 
 export interface SalesView {
-  /** Open lead follow-ups, overdue first, then by due date. */
+  /** Open follow-ups on leads in the sales pipelines, by due date (no date last). */
   followUps: ClientAction[];
   followUpsDue: number;
-  newLeads: SalesDeal[];
+  /** Open sales leads added in the last 7 days, newest first. */
+  newLeads: SalesLead[];
+  /** Open sales leads with no reach-out logged (same rule as Pipeline health). */
+  notContacted: number;
+  /** Reach-outs logged today on sales leads, everyone together. */
+  touchesToday: number;
   appointmentsToday: SalesAppointment[];
   appointmentsWeek: SalesAppointment[];
-  openValue: number;
 }
 
-export function salesView(input: { actions: ClientAction[]; deals: SalesDeal[]; appointments: SalesAppointment[]; today: string; now: Date; tzDay: (iso: string) => string }): SalesView {
-  const { actions, deals, appointments, today, now, tzDay } = input;
+export function salesView(input: { actions: ClientAction[]; leads: SalesLead[]; touches: LeadTouch[]; appointments: SalesAppointment[]; today: string; now: Date; tzDay: (iso: string) => string }): SalesView {
+  const { actions, leads, touches, appointments, today, now, tzDay } = input;
+  const salesIds = new Set(leads.map((l) => l.ghlId));
   const followUps = actions
-    .filter((a) => open(a) && a.leadGhlId)
+    .filter((a) => open(a) && a.leadGhlId && salesIds.has(a.leadGhlId))
     .sort((a, b) => (a.dueOn ?? "9999").localeCompare(b.dueOn ?? "9999"));
+  const openLeads = leads.filter((l) => l.status === "open");
+  const touched = new Set(touches.map((t) => t.leadId));
   const weekAgo = addDays(today, -7);
   const live = appointments
     .filter((a) => {
@@ -161,12 +164,11 @@ export function salesView(input: { actions: ClientAction[]; deals: SalesDeal[]; 
   return {
     followUps,
     followUpsDue: followUps.filter((a) => a.dueOn !== null && a.dueOn <= today).length,
-    newLeads: deals
-      .filter((d) => isSalesStage(d.stage) && (d.createdAt ?? "").slice(0, 10) >= weekAgo)
-      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    newLeads: openLeads.filter((l) => l.createdAt && tzDay(l.createdAt) > weekAgo).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+    notContacted: openLeads.filter((l) => !touched.has(l.ghlId)).length,
+    touchesToday: touches.filter((t) => salesIds.has(t.leadId) && tzDay(t.at) === today).length,
     appointmentsToday: live.filter((a) => tzDay(a.startsAt) === today),
     appointmentsWeek: live.filter((a) => tzDay(a.startsAt) > today && tzDay(a.startsAt) <= weekEnd),
-    openValue: deals.reduce((n, d) => n + d.value, 0),
   };
 }
 

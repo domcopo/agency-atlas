@@ -6,11 +6,13 @@ import {
   checkTouchNote,
   isWeekday,
   lastTouchByLead,
+  leadDetail,
   nyDay,
   personRows,
   pipelineHealth,
   refreshAllowed,
   refreshDue,
+  splitLeadFollowUps,
   targetProgress,
   todaysPlan,
   touchesOn,
@@ -145,6 +147,41 @@ describe("pipeline health and people", () => {
     });
     expect(rows[0]).toMatchObject({ touchesToday: 1, target: 10, leadsOwned: 1, overdueFollowUps: 1 });
     expect(rows[1]).toMatchObject({ touchesToday: 0, leadsOwned: null, overdueFollowUps: 0 });
+  });
+});
+
+describe("lead page and one follow-up list", () => {
+  it("leadDetail: the lead, its open follow-ups soonest first, reach-outs newest first; unknown id gives null", () => {
+    const d = leadDetail({
+      id: "a",
+      leads: [lead("a"), lead("b")],
+      followUps: [
+        { id: "late", leadId: "a", title: "x", dueOn: "2026-11-20", status: "open", ownerStaffId: null },
+        { id: "soon", leadId: "a", title: "x", dueOn: "2026-11-10", status: "open", ownerStaffId: null },
+        { id: "nodate", leadId: "a", title: "x", dueOn: null, status: "open", ownerStaffId: null },
+        { id: "done", leadId: "a", title: "x", dueOn: "2026-11-01", status: "done", ownerStaffId: null },
+        { id: "gone", leadId: "a", title: "x", dueOn: "2026-11-01", status: "canceled", ownerStaffId: null },
+        { id: "otherLead", leadId: "b", title: "x", dueOn: "2026-11-01", status: "open", ownerStaffId: null },
+      ],
+      touches: [
+        { leadId: "a", kind: "call", at: at("2026-11-10"), by: "me" },
+        { leadId: "a", kind: "text", at: at(TODAY), by: "me" },
+        { leadId: "b", kind: "call", at: at(TODAY), by: "me" },
+      ],
+    });
+    expect(d?.lead.ghlId).toBe("a");
+    expect(d?.followUps.map((f) => f.id)).toEqual(["soon", "late", "nodate"]);
+    expect(d?.touches.map((t) => t.kind)).toEqual(["text", "call"]);
+    // A lead the database didn't return (another pipeline, closed for a salesperson) is "not found".
+    expect(leadDetail({ id: "zzz", leads: [lead("a")], followUps: [], touches: [] })).toBeNull();
+  });
+
+  it("splitLeadFollowUps: sales-pipeline leads vs other pipelines; nothing with a lead is lost; non-lead items left out", () => {
+    const items = [{ id: 1, lead: "a" }, { id: 2, lead: "x" }, { id: 3, lead: null }, { id: 4, lead: "b" }];
+    const { sales, other } = splitLeadFollowUps(items, (i) => i.lead, new Set(["a", "b"]));
+    expect(sales.map((i) => i.id)).toEqual([1, 4]);
+    expect(other.map((i) => i.id)).toEqual([2]);
+    expect(sales.length + other.length).toBe(items.filter((i) => i.lead).length);
   });
 });
 

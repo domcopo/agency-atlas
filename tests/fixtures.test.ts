@@ -1717,14 +1717,24 @@ describe("Home by job (approved 2026-11-10)", () => {
     expect(v.unassigned.map((a) => a.id)).toEqual(["nobody"]);
   });
 
-  it("sales: lead follow-ups only (never client work), new selling-stage leads, appointments by day", async () => {
+  it("sales: sales-pipeline follow-ups only (never client work or other pipelines), new sales leads, not contacted, reach-outs, appointments by day", async () => {
     const { salesView } = await import("@/lib/home-layouts");
+    const lead = (ghlId: string, createdAt: string, status: "open" | "won" = "open") => ({
+      ghlId, name: `Sample Lead ${ghlId} (fictional)`, pipelineId: "pipeSales", pipelineName: "Sales (sample)", stage: "New lead", status, value: 500,
+      source: "synthetic://web", createdAt, updatedAt: createdAt, statusChangedAt: null, assignedUserId: null,
+    });
     const v = salesView({
-      actions: [act({ id: "lead1", kind: "follow_up", client: null, leadGhlId: "abc123", dueOn: "2026-11-09" }), act({ id: "lead2", kind: "follow_up", client: null, leadGhlId: "abc124", dueOn: "2026-11-20" }), act({ id: "client-work" }), act({ id: "lead-done", leadGhlId: "abc125", status: "done" })],
-      deals: [
-        { ghlId: "d1", name: "New Lead (fictional)", stage: "New lead", value: 500, createdAt: "2026-11-08T10:00:00Z" },
-        { ghlId: "d2", name: "Old Lead (fictional)", stage: "New lead", value: 100, createdAt: "2026-10-01T10:00:00Z" },
-        { ghlId: "d3", name: "Onboarding (fictional)", stage: "Onboarding", value: 900, createdAt: "2026-11-09T10:00:00Z" },
+      actions: [
+        act({ id: "lead1", kind: "follow_up", client: null, leadGhlId: "abc123", dueOn: "2026-11-09" }),
+        act({ id: "lead2", kind: "follow_up", client: null, leadGhlId: "abc124", dueOn: "2026-11-20" }),
+        act({ id: "otherPipeline", kind: "follow_up", client: null, leadGhlId: "zzz999", dueOn: "2026-11-01" }),
+        act({ id: "client-work" }),
+        act({ id: "lead-done", leadGhlId: "abc125", status: "done" }),
+      ],
+      leads: [lead("abc123", "2026-11-08T10:00:00Z"), lead("abc124", "2026-10-01T10:00:00Z"), lead("abc125", "2026-11-09T10:00:00Z", "won")],
+      touches: [
+        { leadId: "abc124", kind: "call", at: "2026-11-10T13:00:00Z", by: "u1" },
+        { leadId: "zzz999", kind: "call", at: "2026-11-10T13:00:00Z", by: "u1" },
       ],
       appointments: [
         { startsAt: "2026-11-10T18:00:00Z", calendar: "Discovery (sample)", status: "confirmed" },
@@ -1738,7 +1748,9 @@ describe("Home by job (approved 2026-11-10)", () => {
     });
     expect(v.followUps.map((a) => a.id)).toEqual(["lead1", "lead2"]);
     expect(v.followUpsDue).toBe(1);
-    expect(v.newLeads.map((d) => d.ghlId)).toEqual(["d1"]);
+    expect(v.newLeads.map((d) => d.ghlId)).toEqual(["abc123"]); // won leads and older ones left out
+    expect(v.notContacted).toBe(1); // abc123 open with no reach-out
+    expect(v.touchesToday).toBe(1); // the reach-out on another pipeline's lead doesn't count
     expect(v.appointmentsToday).toHaveLength(1);
     expect(v.appointmentsWeek.map((a) => a.startsAt)).toEqual(["2026-11-12T15:00:00Z"]);
   });

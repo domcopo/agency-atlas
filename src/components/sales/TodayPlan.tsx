@@ -10,13 +10,11 @@ export function TodayPlan({
   items,
   progress,
   lastByLead,
-  users,
   today,
 }: {
   items: PlanItem[];
   progress: { done: number; target: number; weekday: boolean; met: boolean };
   lastByLead: Map<string, LeadTouch>;
-  users: Map<string, string>;
   today: string;
 }) {
   const pct = progress.target ? Math.min(100, Math.round((progress.done / progress.target) * 100)) : 100;
@@ -53,7 +51,6 @@ export function TodayPlan({
                 <LeadRow
                   lead={i.lead}
                   last={lastByLead.get(i.lead.ghlId)}
-                  owner={i.lead.assignedUserId ? (users.get(i.lead.assignedUserId) ?? null) : null}
                   hot={i.hot}
                   why={i.why}
                   today={today}

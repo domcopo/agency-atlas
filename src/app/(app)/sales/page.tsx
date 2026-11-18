@@ -1,51 +1,42 @@
 import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
-import { RoleNotice } from "@/components/shell/RoleNotice";
+import Link from "next/link";
+import { autoRefreshLeads } from "@/app/actions";
+import { PriorityList } from "@/components/cards/ActionRow";
 import { ConversationRow } from "@/components/cards/ConversationRow";
-import { GhlPipelineCard } from "@/components/cards/GhlPipelineCard";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { KpiTile } from "@/components/cards/KpiTile";
 import { ProspectCard, stageInfo } from "@/components/cards/ProspectCard";
-import { WinLossChart } from "@/components/cards/WinLossChart";
-import { Provenance } from "@/components/labels/labels";
-import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import {
-  getAgencySalesKpis,
-  getConversations,
-  getGhlSummary,
-  getProspects,
-  getRosterSource,
-  getToday,
-  getMember,
-  getOps,
-  getTeam,
-  getWinLoss,
-  showsSamples,
-  usesDatabase,
-} from "@/lib/data-source";
-import { PriorityList } from "@/components/cards/ActionRow";
 import { LeadActionForm } from "@/components/forms/LeadActionForm";
-import { isSalesStage } from "@/lib/ops";
-import { formatUsd, formatUsdExact } from "@/lib/format";
-import type { ProspectStage } from "@/lib/types";
-import Link from "next/link";
-import { autoRefreshLeads } from "@/app/actions";
-import { Fold } from "@/components/shell/Fold";
+import { Provenance } from "@/components/labels/labels";
 import { LeadRow } from "@/components/sales/LeadRow";
 import { PipelineHealthCard } from "@/components/sales/PipelineHealthCard";
 import { RefreshLeadsButton } from "@/components/sales/RefreshLeadsButton";
 import { SalesFollowUps } from "@/components/sales/SalesFollowUps";
-import { getSales, type SalesData } from "@/lib/data-source";
+import { Fold } from "@/components/shell/Fold";
+import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
+import { RoleNotice } from "@/components/shell/RoleNotice";
+import {
+  getAgencySalesKpis,
+  getConversations,
+  getMember,
+  getOps,
+  getProspects,
+  getSales,
+  getTeam,
+  getToday,
+  showsSamples,
+  usesDatabase,
+  type SalesData,
+} from "@/lib/data-source";
+import { formatUsd } from "@/lib/format";
 import { isLead } from "@/lib/roles";
-import { isHot, lastTouchByLead, minutesSince, nyDay, personRows, pipelineHealth, type SalesLead } from "@/lib/sales";
+import { isHot, lastTouchByLead, minutesSince, nyDay, personRows, pipelineHealth, splitLeadFollowUps, type SalesLead } from "@/lib/sales";
+import type { ProspectStage } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Sales" };
 
 const pipeline: ProspectStage[] = ["new", "contacted", "call_booked", "proposal_sent", "won", "lost"];
-
-function monthLabel(key: string) {
-  return new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(new Date(`${key}-01T00:00:00Z`));
-}
 
 function refreshedLabel(iso: string | null): string {
   const m = minutesSince(iso, new Date());
@@ -63,7 +54,7 @@ function LeadList({ leads, sales, today, canTouch, limit = 25 }: { leads: SalesL
   if (!sorted.length) return <p className="glass rounded-3xl px-4 py-4 text-sm text-muted">No open leads here.</p>;
   const row = (l: SalesLead) => (
     <li key={l.ghlId}>
-      <LeadRow lead={l} last={last.get(l.ghlId)} owner={l.assignedUserId ? (sales.users.get(l.assignedUserId) ?? null) : null} hot={isHot(l, sales.pipelines)} today={today} canTouch={canTouch} />
+      <LeadRow lead={l} last={last.get(l.ghlId)} hot={isHot(l, sales.pipelines)} today={today} canTouch={canTouch} />
     </li>
   );
   return (
@@ -127,35 +118,78 @@ async function SalespersonSales({ who }: { who?: string }) {
   );
 }
 
+/** Owner and managers: Pipeline health, then one follow-up list, then every open sales lead. */
+async function LeadSales({ member }: { member: { role: string } }) {
+  const refresh = autoRefreshLeads().catch(() => undefined);
+  const [sales, ops, team] = await Promise.all([getSales(), getOps(), getTeam()]);
+  await refresh;
+  const today = nyDay(new Date().toISOString());
+  const owner = member.role === "owner";
+  if (!sales.ready) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Sales needs one setup step first (0020 SQL).</p>;
+  if (!sales.pipelines.some((p) => p.active)) {
+    return owner ? (
+      <Link href="/sales/setup" className="pressable glass block rounded-3xl p-4 text-sm">
+        <span className="font-semibold text-violet">Set up Sales →</span>{" "}
+        <span className="text-muted">Pick your sales pipelines, link salespeople to GoHighLevel users and set daily targets.</span>
+      </Link>
+    ) : (
+      <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+    );
+  }
+  const open = sales.leads.filter((l) => l.status === "open");
+  const staff = team.members.map((m) => ({ id: m.id, name: m.name }));
+  // One follow-up list: follow-ups on sales-pipeline leads. Older ones on leads in other
+  // pipelines are kept underneath, folded, so nothing is lost.
+  const split = splitLeadFollowUps(ops.priorities, (p) => p.action?.leadGhlId, new Set(sales.leads.map((l) => l.ghlId)));
+  const dealOptions = open.slice(0, 300).map((l) => ({ ghlId: l.ghlId, label: `${l.name} · ${l.stage ?? "No stage"}`.slice(0, 90) }));
+  return (
+    <>
+      <RefreshLeadsButton lastLabel={refreshedLabel(sales.lastRefresh)} />
+      {!sales.lastRefresh && <p className="mt-1.5 px-1 text-[11px] text-faint">Leads haven&apos;t been copied from GoHighLevel yet. Press Refresh leads.</p>}
+
+      <SectionTitle aside={owner ? <Link href="/sales/setup" className="font-semibold text-violet">Setup</Link> : undefined}>Pipeline health</SectionTitle>
+      <PipelineHealthCard
+        rows={pipelineHealth({ pipelines: sales.pipelines, leads: sales.leads, touches: sales.touches, today })}
+        people={owner ? personRows({ people: sales.people, leads: sales.leads, touches: sales.touches, followUps: sales.followUps, today }) : null}
+      />
+
+      <section id="follow-ups" className="scroll-mt-16">
+        <SectionTitle aside={`${split.sales.length} open`}>Follow-ups</SectionTitle>
+        <PriorityList items={split.sales} staff={staff} canEdit limit={8} empty="No lead follow-ups yet. Add one so no lead goes quiet." />
+        {dealOptions.length > 0 && (
+          <details className="glass mt-2.5 rounded-3xl px-4 py-1">
+            <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">+ Add a follow-up</summary>
+            <div className="pb-3">
+              <LeadActionForm deals={dealOptions} staff={staff} today={today} />
+            </div>
+          </details>
+        )}
+        {split.other.length > 0 && (
+          <Fold title="Other lead follow-ups" summary="On leads outside your sales pipelines" badge={`${split.other.length} open`} label="Other lead follow-ups">
+            <PriorityList items={split.other} staff={staff} canEdit limit={10} empty="" />
+          </Fold>
+        )}
+        <p className="mt-1.5 px-1 text-[11px] text-faint">Saved in this app only. GoHighLevel is never changed.</p>
+      </section>
+
+      <SectionTitle aside={`${open.length} open`}>Sales leads</SectionTitle>
+      <LeadList leads={open} sales={sales} today={today} canTouch />
+    </>
+  );
+}
+
 export default async function SalesPage({ searchParams }: { searchParams: Promise<{ who?: string }> }) {
   const viewer = usesDatabase() ? await getMember() : null;
   if (viewer?.role === "sales") return <SalespersonSales who={(await searchParams).who} />;
   if (usesDatabase() && !isLead(viewer?.role)) return <RoleNotice title="Sales" />;
   const today = getToday();
-  const winLoss = await getWinLoss(6);
   const prospects = getProspects();
   const names = Object.fromEntries(prospects.map((p) => [p.id, p.name]));
   const open = prospects.filter((p) => p.stage !== "won" && p.stage !== "lost");
   const pipelineLow = open.reduce((n, p) => n + p.estMonthlyUsd.low, 0);
   const pipelineHigh = open.reduce((n, p) => n + p.estMonthlyUsd.high, 0);
   const conversations = getConversations();
-  const real = (await getRosterSource()) !== "demo";
-  const ghl = await getGhlSummary();
-
   const showSamples = showsSamples();
-  const ops = await getOps();
-  const member = usesDatabase() ? await getMember() : null;
-  const canWork = Boolean(member && isLead(member.role));
-  // Sales pipelines (0020): health, and every open lead. Leads refresh at most hourly.
-  const refresh = member ? autoRefreshLeads().catch(() => undefined) : undefined;
-  const sales = await getSales();
-  await refresh;
-  const salesToday = nyDay(new Date().toISOString());
-  const salesOpen = sales.leads.filter((l) => l.status === "open");
-  const salesConfigured = sales.ready && sales.pipelines.some((p) => p.active);
-  const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
-  const leadItems = ops.priorities.filter((p) => p.action?.leadGhlId);
-  const dealOptions = [...ops.deals.filter((d) => isSalesStage(d.stage)), ...ops.deals.filter((d) => !isSalesStage(d.stage))].slice(0, 300).map((d) => ({ ghlId: d.ghlId, label: `${d.name} · ${d.stage}`.slice(0, 90) }));
   const samples = (
     <>
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
@@ -216,105 +250,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
-
-      {sales.ready && (
-        <section id="pipelines" className="scroll-mt-16">
-          {salesConfigured ? (
-            <>
-              <RefreshLeadsButton lastLabel={refreshedLabel(sales.lastRefresh)} />
-              <SectionTitle aside={member?.role === "owner" ? <Link href="/sales/setup" className="font-semibold text-violet">Setup</Link> : undefined}>Pipeline health</SectionTitle>
-              <PipelineHealthCard
-                rows={pipelineHealth({ pipelines: sales.pipelines, leads: sales.leads, touches: sales.touches, today: salesToday })}
-                people={member?.role === "owner" ? personRows({ people: sales.people, leads: sales.leads, touches: sales.touches, followUps: sales.followUps, today: salesToday }) : null}
-              />
-              <Fold title="Sales leads" summary={`${salesOpen.length} open in your sales pipelines`} label="Sales leads">
-                <LeadList leads={salesOpen} sales={sales} today={salesToday} canTouch={canWork} />
-              </Fold>
-            </>
-          ) : member?.role === "owner" ? (
-            <Link href="/sales/setup" className="pressable glass block rounded-3xl p-4 text-sm">
-              <span className="font-semibold text-violet">Set up Sales →</span>{" "}
-              <span className="text-muted">Pick your sales pipelines, link salespeople to GoHighLevel users and set daily targets.</span>
-            </Link>
-          ) : (
-            <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
-          )}
-        </section>
-      )}
-
-      {ops.ready && ghl.lastSync && (
-        <section id="follow-ups" className="scroll-mt-16">
-          <SectionTitle aside={`${leadItems.length} open`}>Lead follow-ups</SectionTitle>
-          {ops.newLeads.length > 0 && (
-            <div className="mb-2.5 rounded-2xl border border-amber/35 bg-amber/8 p-3.5 text-xs">
-              <p className="font-semibold text-amber">
-                {ops.newLeads.length} new lead{ops.newLeads.length === 1 ? "" : "s"} in the last 7 days with no follow-up
-              </p>
-              <p className="text-[11px] text-faint">Counts deals in sales stages only (lead, referral, reach-out, sales call…), not onboarding or delivery.
-              </p>
-              <ul className="mt-1 space-y-0.5 text-muted">
-                {ops.newLeads.slice(0, 5).map((d) => (
-                  <li key={d.ghlId}>
-                    {d.name} · {d.stage}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <PriorityList items={leadItems} staff={staff} canEdit={canWork} limit={5} empty="No lead follow-ups yet. Add one below so no lead goes quiet." />
-          {canWork && dealOptions.length > 0 && (
-            <details className="glass mt-2.5 rounded-3xl px-4 py-1" open={leadItems.length === 0}>
-              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">
-                + Add a lead follow-up
-              </summary>
-              <div className="pb-3">
-                <LeadActionForm deals={dealOptions} staff={staff} today={ops.today} defaultLeadId={ops.newLeads[0]?.ghlId} />
-              </div>
-            </details>
-          )}
-          <p className="mt-1.5 px-1 text-[11px] text-faint">Saved in this app only. GoHighLevel is never changed.</p>
-        </section>
-      )}
-
-
-      <SectionTitle aside={<Provenance kind={real ? "real" : "demo"} />}>Clients won &amp; lost</SectionTitle>
-      <GlassCard>
-        <WinLossChart
-          months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))}
-          lostWithoutDate={winLoss.lostWithoutDate}
-          hasRealData={real}
-        />
-      </GlassCard>
-      <div className="mt-2.5 grid grid-cols-3 gap-2.5 text-center">
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold text-rose">{winLoss.lostTotal}</p>
-          <p className="text-[10px] leading-tight text-muted">Lost all-time</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>
-        </GlassCard>
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold text-amber">{winLoss.pausedCount}</p>
-          <p className="text-[10px] leading-tight text-muted">Paused (at risk)</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>
-        </GlassCard>
-        <GlassCard padding="tight">
-          <p className="font-display text-xl font-bold">{winLoss.lifetimeChurnPct}%</p>
-          <p className="text-[10px] leading-tight text-muted">Lifetime churn</p>
-          <p className="text-[11px] text-faint">lost ÷ ever signed</p>
-        </GlassCard>
-      </div>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">
-        Lost = canceled or expired. Paused clients are shown separately because they may come back.
-      </p>
-
-      <GhlPipelineCard ghl={ghl} />
-
-      {!ghl.lastSync && !showSamples && (
-        <GlassCard className="mt-6 text-sm text-muted">
-          Your GoHighLevel pipeline isn&apos;t synced yet. Press Sync on the Data Safety screen to copy it here
-          (read-only).
-        </GlassCard>
-      )}
-
+      {viewer && <LeadSales member={viewer} />}
       {showSamples && samples}
     </>
   );

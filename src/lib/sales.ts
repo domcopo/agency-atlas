@@ -325,6 +325,50 @@ export function personRows(input: { people: SalesPerson[]; leads: SalesLead[]; t
 }
 
 // ---------------------------------------------------------------------------
+// One lead (the lead page), and follow-ups split by pipeline
+// ---------------------------------------------------------------------------
+
+export interface LeadDetail {
+  lead: SalesLead;
+  /** Open follow-ups on this lead, soonest due first (no date last). */
+  followUps: LeadFollowUp[];
+  /** Reach-outs on this lead (last 30 days), newest first. */
+  touches: LeadTouch[];
+}
+
+/**
+ * One lead with its open follow-ups and reach-outs. null when the lead isn't in the list,
+ * which is already limited by the database to what the signed-in person may see.
+ */
+export function leadDetail(input: { id: string; leads: SalesLead[]; followUps: LeadFollowUp[]; touches: LeadTouch[] }): LeadDetail | null {
+  const lead = input.leads.find((l) => l.ghlId === input.id);
+  if (!lead) return null;
+  return {
+    lead,
+    followUps: input.followUps
+      .filter((f) => f.leadId === lead.ghlId && f.status !== "done" && f.status !== "canceled")
+      .sort((a, b) => (a.dueOn ?? "9999").localeCompare(b.dueOn ?? "9999")),
+    touches: input.touches.filter((t) => t.leadId === lead.ghlId).sort((a, b) => b.at.localeCompare(a.at)),
+  };
+}
+
+/**
+ * Lead follow-ups on leads in the sales pipelines vs everything else, so the Sales tab can
+ * show one list without losing older follow-ups on leads in other pipelines. Items with
+ * no lead are left out (they aren't lead follow-ups).
+ */
+export function splitLeadFollowUps<T>(items: T[], leadIdOf: (item: T) => string | null | undefined, salesLeadIds: Set<string>): { sales: T[]; other: T[] } {
+  const sales: T[] = [];
+  const other: T[] = [];
+  for (const item of items) {
+    const id = leadIdOf(item);
+    if (!id) continue;
+    (salesLeadIds.has(id) ? sales : other).push(item);
+  }
+  return { sales, other };
+}
+
+// ---------------------------------------------------------------------------
 // Refreshing the copy
 // ---------------------------------------------------------------------------
 

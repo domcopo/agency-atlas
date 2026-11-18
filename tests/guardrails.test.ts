@@ -854,6 +854,46 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
   });
 });
 
+describe("Sales simplify (2026-11-17): lead page, one follow-up list, no new powers", () => {
+  const read = (f: string) => readFileSync(join(ROOT, f), "utf8");
+  const leadPage = read("src/app/(app)/sales/lead/[id]/page.tsx");
+  const salesPage = read("src/app/(app)/sales/page.tsx");
+
+  it("the lead page reads only through getSales() (the database decides), and an unknown or unseen lead is 'not found'", () => {
+    expect(leadPage).toMatch(/const sales = await getSales\(\);/);
+    expect(leadPage).toMatch(/leadDetail\(\{ id, leads: sales\.leads/);
+    expect(leadPage).toMatch(/if \(!d\) notFound\(\);/);
+    expect(leadPage).toMatch(/if \(!LEAD_ID\.test\(id\)\) notFound\(\);/);
+    expect(leadPage).toMatch(/!isLead\(me\.role\) && me\.role !== "sales"\)\) return <RoleNotice/);
+    // Reads only; no database client, no GoHighLevel, no AI, no rpc.
+    expect(leadPage).not.toMatch(/createDatabaseClient|@\/lib\/ghl|askAi|\.rpc\(/);
+  });
+
+  it("the lead page writes only through the existing actions (reach-out, add follow-up, update follow-up)", () => {
+    const writers = ["src/app/(app)/sales/lead/[id]/page.tsx", "src/components/sales/LeadRow.tsx", "src/components/sales/TouchButtons.tsx", "src/components/sales/SalesFollowUps.tsx", "src/components/forms/LeadActionForm.tsx"];
+    const used = new Set(writers.flatMap((f) => [...read(f).matchAll(/import \{([^}]+)\} from "@\/app\/actions"/g)].flatMap((m) => m[1]!.split(",").map((x) => x.trim()))));
+    expect([...used].sort()).toEqual(["createLeadAction", "logLeadTouch", "updateAction"]);
+  });
+
+  it("salespeople get no Assign (no staff list) on the lead page or the Sales tab", () => {
+    expect(leadPage).toMatch(/const staff = team \? team\.members/);
+    expect(leadPage).toMatch(/const \[ops, team\] = manage \?/);
+    const seller = salesPage.slice(salesPage.indexOf("async function SalespersonSales"), salesPage.indexOf("async function LeadSales"));
+    expect(seller).toMatch(/staff=\{\[\]\}/);
+    expect(seller).not.toMatch(/getTeam\(/);
+  });
+
+  it("one follow-up list: follow-ups on other pipelines' leads are kept (folded), never dropped", () => {
+    expect(salesPage).toMatch(/splitLeadFollowUps\(ops\.priorities/);
+    expect(salesPage).toMatch(/split\.other\.length > 0 &&/);
+  });
+
+  it("won & lost lives on Clients now; Sales no longer shows the all-pipelines card", () => {
+    expect(salesPage).not.toMatch(/getWinLoss|GhlPipelineCard|getGhlSummary/);
+    expect(read("src/app/(app)/clients/page.tsx")).toMatch(/<WinLossSection /);
+  });
+});
+
 describe("Fix titles and check-ins (0021): owner and managers only, nothing deleted", () => {
   const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
   const fn = (name: string) => {

@@ -9,8 +9,9 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { CHECK_IN_DAYS, getActions, getBilling, getClientHealth, getMember, getOps, getRoster, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, tierOf, usesDatabase } from "@/lib/data-source";
+import { CHECK_IN_DAYS, getActions, getBilling, getClientHealth, getMember, getOps, getRoster, getRosterSource, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, getWinLoss, tierOf, usesDatabase } from "@/lib/data-source";
 import { OwnerGaps } from "@/components/cards/OwnerGaps";
+import { WinLossSection } from "@/components/cards/WinLossSection";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
 
@@ -24,6 +25,7 @@ export default async function ClientsPage() {
   const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c, actions) }));
   // Owner only (null for everyone else; the database also returns them nothing).
   const billing = await getBilling();
+  const [winLoss, rosterSource] = await Promise.all([getWinLoss(6), getRosterSource()]);
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
@@ -206,6 +208,8 @@ export default async function ClientsPage() {
       <div className="mt-5">
         <RosterBrowser clients={rows} />
       </div>
+
+      <WinLossSection winLoss={winLoss} real={rosterSource !== "demo"} />
 
       <p className="mt-6 px-1 text-[11px] text-faint">
         {summary.source !== "demo"
