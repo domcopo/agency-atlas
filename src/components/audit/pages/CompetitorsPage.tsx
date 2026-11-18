@@ -1,6 +1,7 @@
 // Page 4: top competitors (traffic, rankings, authority, reviews) + keyword matrix.
 
 import type { AuditBundle } from "@/lib/audit/data";
+import { shortLabels } from "@/lib/audit/format";
 import { CompetitorTable } from "../CompetitorTable";
 import { PositionMatrix } from "../PositionMatrix";
 import { Slide } from "../Slide";
@@ -15,9 +16,10 @@ export function CompetitorsPage({ bundle }: { bundle: AuditBundle }) {
     const site = byDomain.get(r.domain);
     return site ? [{ ...r, site }] : [];
   });
+  const short = shortLabels(config.competitors.map((c) => c.name));
   const cols = [
     { domain: config.company.domain, label: "You", isClient: true },
-    ...config.competitors.map((c) => ({ domain: c.domain, label: c.name.replace(/\s*\(.*\)$/, "").split(" ")[0] ?? c.name })),
+    ...config.competitors.map((c, i) => ({ domain: c.domain, label: short[i] ?? c.name })),
   ];
   return (
     <Slide bundle={bundle} page={4} title={`Top ${config.competitors.length} competitors`} aside="traffic · rankings · authority · reviews">

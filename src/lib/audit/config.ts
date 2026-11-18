@@ -81,7 +81,7 @@ export interface AuditConfig {
     region: string;
   };
   /** Region map: which state outline to draw, and radius rings around the home base. */
-  map: { state: string; ringsMiles: number[] };
+  map: { state: string; ringsMiles: number[]; /** "state" = whole state; "markets" = zoom to the markets (with a small whole-state inset). */ view?: "state" | "markets" };
   markets: AuditMarket[];
   services: AuditService[];
   competitors: AuditCompetitor[];
@@ -89,6 +89,13 @@ export interface AuditConfig {
   scenarios: AuditScenario[];
   /** Which scenario is the "baseline" used on the cover page. */
   baselineScenario: string;
+  /**
+   * Optional: share of a site's search visits that become jobs, used to model each
+   * site's revenue on page 1 (visits × rate × blended job value). Always shown as a model.
+   */
+  competitorRevenue?: { visitToJobRate: Assumed };
+  /** Optional: the goal the agency sets for the client (shown on page 1 as a goal, not data). */
+  goal?: { months: number; packCities?: number; firstPageTerms?: string[] };
   plans: AuditPlan[];
   roadmap: RoadmapPhase[];
   modules: { dataforseo: boolean; leadsnap: boolean; semrush: boolean };
@@ -213,7 +220,9 @@ export function parseAuditConfig(raw: unknown): ConfigResult {
   const mapState = typeof mp.state === "string" ? mp.state.toUpperCase() : "";
   if (!STATES[mapState]) errors.push(`Map state must be one of: ${STATE_CODES.join(", ")}.`);
   const ringsMiles = (Array.isArray(mp.ringsMiles) ? mp.ringsMiles : []).slice(0, 3).map((v, i) => num(v, `Map ring ${i + 1} (miles)`, 1, 300));
-  const map = { state: mapState, ringsMiles };
+  if (mp.view !== undefined && mp.view !== "state" && mp.view !== "markets") errors.push('Map view must be "state" or "markets".');
+  const map: AuditConfig["map"] = { state: mapState, ringsMiles };
+  if (mp.view === "markets") map.view = "markets";
 
   const markets = list(r.markets, "Markets", AUDIT_LIMITS.markets).map((m, i): AuditMarket => {
     const o = obj(m) ?? {};
@@ -269,6 +278,18 @@ export function parseAuditConfig(raw: unknown): ConfigResult {
   });
   dupes(scenarios.map((s) => s.name), "Scenario names", errors);
   const baselineScenario = text(r.baselineScenario, "Baseline scenario") ?? "";
+  let competitorRevenue: AuditConfig["competitorRevenue"];
+  if (r.competitorRevenue !== undefined) {
+    const cr = obj(r.competitorRevenue) ?? {};
+    competitorRevenue = { visitToJobRate: assumed(cr.visitToJobRate, "Visit-to-job rate", 0, 1) };
+  }
+  let goal: AuditConfig["goal"];
+  if (r.goal !== undefined) {
+    const g = obj(r.goal) ?? {};
+    goal = { months: num(g.months, "Goal months", 1, 36) };
+    if (g.packCities !== undefined) goal.packCities = num(g.packCities, "Goal 3-pack cities", 0, AUDIT_LIMITS.markets);
+    if (g.firstPageTerms !== undefined) goal.firstPageTerms = list(g.firstPageTerms, "Goal terms", 6, 0).map((t, i) => text(t, `Goal term ${i + 1}`) ?? "");
+  }
   if (baselineScenario && !scenarios.some((s) => s.name === baselineScenario)) errors.push("Baseline scenario must be one of the scenarios.");
 
   const plans = list(r.plans, "Plans", AUDIT_LIMITS.plans).map((p, i): AuditPlan => {
@@ -328,6 +349,8 @@ export function parseAuditConfig(raw: unknown): ConfigResult {
       funnel,
       scenarios,
       baselineScenario,
+      ...(competitorRevenue ? { competitorRevenue } : {}),
+      ...(goal ? { goal } : {}),
       plans,
       roadmap,
       modules,

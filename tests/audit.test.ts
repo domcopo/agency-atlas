@@ -24,7 +24,9 @@ import {
 } from "@/lib/audit/compute";
 import { parseAuditConfig, type AuditConfig } from "@/lib/audit/config";
 import type { AuditBundle, AuditData, Fig } from "@/lib/audit/data";
-import { fitState, insidePolygon, STATES } from "@/lib/audit/geo";
+import { boundsOf, fitBounds, fitState, insidePolygon, padBounds, STATES } from "@/lib/audit/geo";
+import { shortLabels } from "@/lib/audit/format";
+import { packCityPresence, packPresence, revenueFromVisits } from "@/lib/audit/compute";
 import { getAuditPreview } from "@/lib/data-source";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -273,5 +275,89 @@ describe("rendered check of all eight audit pages", () => {
     p.forEach((html) => expect(html).not.toMatch(/NaN|undefined|Infinity/));
     expect(p[0]).toContain("not found");
     expect(p[6]).toContain("can&#x27;t be modeled");
+  });
+});
+
+describe("audit template: California, zoomed maps, city pack checks, labels", () => {
+  it("the California outline holds Sacramento-area cities and leaves out Reno and Las Vegas", () => {
+    const ca = STATES.CA!;
+    for (const [lng, lat] of [[-121.49, 38.58], [-121.29, 38.75], [-121.74, 38.54], [-120.8, 38.73], [-118.24, 34.05], [-117.16, 32.72]] as [number, number][]) expect(insidePolygon([lng, lat], ca.outline)).toBe(true);
+    for (const [lng, lat] of [[-119.81, 39.53], [-115.14, 36.17], [-123.0, 42.5]] as [number, number][]) expect(insidePolygon([lng, lat], ca.outline)).toBe(false);
+  });
+
+  it("a zoomed map fits the markets plus padding inside its box", () => {
+    const b = padBounds(boundsOf([[-121.82, 38.44], [-120.8, 38.9]]), 3);
+    const p = fitBounds(b, 290, 330);
+    for (const pt of [[-121.82, 38.44], [-120.8, 38.9]] as [number, number][]) {
+      const [x, y] = p.project(pt);
+      expect(x).toBeGreaterThan(0);
+      expect(x).toBeLessThan(290);
+      expect(y).toBeGreaterThan(0);
+      expect(y).toBeLessThan(330);
+    }
+  });
+
+  it("the map view setting accepts only state or markets", () => {
+    expect(errorsFor((c) => ((c.map as { view?: string }).view = "world")).join()).toMatch(/Map view/);
+    const c = clone(sampleAuditConfig);
+    c.map.view = "markets";
+    const r = parseAuditConfig(c);
+    expect(r.ok && r.config.map.view).toBe("markets");
+  });
+
+  it("city pack checks: 0 = checked and not in the pack, null = not checked; never averaged as a rank", () => {
+    const g = { term: "t", kind: "pack" as const, size: 3, spacingMiles: 0, ranks: [[0, 2, null]], source: "dataforseo" as const, retrieved: "2026-11-17" };
+    expect(packPresence([g])).toEqual({ inPack: 1, checked: 2 });
+    expect(gridStats(g).avg).toBe(2);
+  });
+
+  it("competitor column labels are unique even when names start the same", () => {
+    expect(shortLabels(["Summit Ridge Remodeling (fictional)", "Summit Valley Homes (fictional)", "Harbor Rooter (fictional)", "Copperline Plumbing (fictional)"])).toEqual(["Summit Ridge", "Summit Valley", "Harbor", "Copperline"]);
+  });
+
+  it("keywords whose positions were not looked up never claim that nobody ranks", () => {
+    const kws = clone(sampleAuditData.keywords).map((k) => ({ ...k, positions: {}, positionsChecked: false }));
+    expect(clusterRows(kws).every((r) => !r.checked && r.winner === null)).toBe(true);
+  });
+});
+
+describe("audit page 1: modeled revenue per site and the client's goal", () => {
+  const withGoal = (): AuditConfig => {
+    const c = clone(sampleAuditConfig);
+    c.competitorRevenue = { visitToJobRate: { value: 0.05, basis: "assumption" } };
+    c.goal = { months: 12, packCities: 4, firstPageTerms: ["plumber columbus"] };
+    return c;
+  };
+
+  it("revenue from visits = visits × visit-to-job rate × blended job value; off when no rate is set", () => {
+    const c = withGoal();
+    expect(revenueFromVisits(c, 100)).toBeCloseTo(100 * 0.05 * blendedJobValue(c));
+    expect(revenueFromVisits(c, null)).toBeNull();
+    expect(revenueFromVisits(sampleAuditConfig, 100)).toBeNull();
+  });
+
+  it("the settings check validates the rate and the goal", () => {
+    expect(errorsFor((c) => (c.competitorRevenue = { visitToJobRate: { value: 2, basis: "assumption" } })).join()).toMatch(/Visit-to-job rate/);
+    expect(errorsFor((c) => (c.goal = { months: 99 })).join()).toMatch(/Goal months/);
+    const r = parseAuditConfig(withGoal());
+    expect(r.ok && r.config.goal?.packCities).toBe(4);
+  });
+
+  it("a city counts as in the pack when either term puts the client in the top 3", () => {
+    const g = (ranks: (number | null)[][]) => ({ term: "t", kind: "pack" as const, size: 2, spacingMiles: 0, ranks, source: "dataforseo" as const, retrieved: "2026-11-17" });
+    expect(packCityPresence([g([[0, 2, null]]), g([[1, 0, null]])])).toEqual({ inPack: 2, checked: 2 });
+  });
+
+  it("page 1 shows the revenue column, a goal row and the goal panel, each labeled model / goal / assumption", () => {
+    const html = renderToStaticMarkup(createElement(AUDIT_PAGES[0]!, { bundle: bundle(withGoal()) }));
+    expect(html).toContain("Modeled revenue/mo");
+    expect(html).toContain("12-month goal");
+    expect(html).toContain("could be in 12 months");
+    expect(html).toContain("audit-goal");
+    expect(html).toContain("assumption");
+    expect(html).toContain("plumber columbus");
+    expect(html).not.toMatch(/NaN|undefined|Infinity/);
+    // Without the settings, page 1 stays as before.
+    expect(render(bundle())[0]).not.toContain("Modeled revenue/mo");
   });
 });

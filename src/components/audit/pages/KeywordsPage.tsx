@@ -32,7 +32,7 @@ export function KeywordsPage({ bundle }: { bundle: AuditBundle }) {
                 <td className="num">{fmtNum(r.volume)}</td>
                 <td className="num">{r.cpcMin === null ? <Missing /> : r.cpcMin === r.cpcMax ? fmtUsd(r.cpcMin, { cents: true }) : `${fmtUsd(r.cpcMin, { cents: true })}–${fmtUsd(r.cpcMax, { cents: true })}`}</td>
                 <td className="num">{r.kdMax === null ? <Missing /> : `KD ${r.kdMax}`}</td>
-                <td>{r.winner ? names.get(r.winner) ?? r.winner : "Nobody ranks"}</td>
+                <td>{!r.checked ? <span className="audit-nf">not checked</span> : r.winner ? names.get(r.winner) ?? r.winner : `Nobody in the top ${data.organicDepth ?? 100}`}</td>
               </tr>
             ))}
           </tbody>

@@ -90,7 +90,8 @@ export interface GridStats {
 
 export function gridStats(g: GeoGrid): GridStats {
   const all = g.ranks.flat();
-  const found = all.filter((r): r is number => r !== null);
+  // A 0 means "checked, not in the pack": it counts as a point but has no rank to average.
+  const found = all.filter((r): r is number => r !== null && r > 0);
   return {
     points: all.length,
     found: found.length,
@@ -101,8 +102,29 @@ export function gridStats(g: GeoGrid): GridStats {
 
 /** Average of each grid's average rank (grids with no ranks found are left out). */
 export function avgMapsRank(grids: GeoGrid[]): number | null {
-  const avgs = grids.map((g) => gridStats(g).avg).filter((a): a is number => a !== null);
+  const avgs = grids.filter((g) => (g.kind ?? "maps") === "maps").map((g) => gridStats(g).avg).filter((a): a is number => a !== null);
   return avgs.length ? avgs.reduce((s, a) => s + a, 0) / avgs.length : null;
+}
+
+/** Local-pack checks: how many city checks show the client in the 3-pack, out of those checked. */
+export function packPresence(grids: GeoGrid[]): { inPack: number; checked: number } {
+  const cells = grids.filter((g) => g.kind === "pack").flatMap((g) => g.ranks.flat()).filter((r): r is number => r !== null);
+  return { inPack: cells.filter((r) => r >= 1 && r <= 3).length, checked: cells.length };
+}
+
+/** Cities (cells) where the client is in the 3-pack for at least one term, out of cities checked. */
+export function packCityPresence(grids: GeoGrid[]): { inPack: number; checked: number } {
+  const packs = grids.filter((g) => g.kind === "pack").map((g) => g.ranks.flat());
+  const n = Math.max(0, ...packs.map((p) => p.length));
+  let inPack = 0;
+  let checked = 0;
+  for (let i = 0; i < n; i++) {
+    const cell = packs.map((p) => p[i]).filter((r): r is number => r !== null && r !== undefined);
+    if (!cell.length) continue;
+    checked++;
+    if (cell.some((r) => r >= 1 && r <= 3)) inPack++;
+  }
+  return { inPack, checked };
 }
 
 /** Organic + local-pack visits (null only when both are missing). */
@@ -117,6 +139,14 @@ export interface LeaderRow {
   visits: number | null;
   semrushVisits: number | null;
   trafficValueUsd: number | null;
+  /** Modeled monthly job revenue (visits × visit-to-job rate × blended job value); null when not set or visits missing. */
+  revenueMo: number | null;
+}
+
+/** Revenue a number of search visits would bring in, using the page-1 visit-to-job rate. */
+export function revenueFromVisits(config: AuditConfig, visits: number | null): number | null {
+  const rate = config.competitorRevenue?.visitToJobRate.value;
+  return rate === undefined || visits === null ? null : visits * rate * blendedJobValue(config);
 }
 
 /** Sites ranked by estimated search visits (not found last). */
@@ -130,6 +160,7 @@ export function leaderboard(config: AuditConfig, data: AuditData): LeaderRow[] {
       visits: totalVisits(s),
       semrushVisits: s.semrushVisits?.value ?? null,
       trafficValueUsd: s.trafficValueUsd.value,
+      revenueMo: revenueFromVisits(config, totalVisits(s)),
     }))
     .sort((a, b) => (b.visits ?? -1) - (a.visits ?? -1));
 }
@@ -147,6 +178,8 @@ export interface ClusterRow {
   kdMax: number | null;
   /** Domain holding the best position across the cluster, if anyone ranks. */
   winner: string | null;
+  /** true when at least one keyword in the cluster had positions looked up. */
+  checked: boolean;
 }
 
 export function clusterRows(keywords: KeywordRow[]): ClusterRow[] {
@@ -158,7 +191,7 @@ export function clusterRows(keywords: KeywordRow[]): ClusterRow[] {
       const kds = rows.map((r) => r.difficulty.value).filter((v): v is number => v !== null);
       let winner: string | null = null;
       let best = Infinity;
-      for (const r of rows)
+      for (const r of rows.filter((x) => x.positionsChecked !== false))
         for (const [d, p] of Object.entries(r.positions))
           if (p !== null && p < best) {
             best = p;
@@ -172,6 +205,7 @@ export function clusterRows(keywords: KeywordRow[]): ClusterRow[] {
         cpcMax: cpcs.length ? Math.max(...cpcs) : null,
         kdMax: kds.length ? Math.max(...kds) : null,
         winner,
+        checked: rows.some((x) => x.positionsChecked !== false),
       };
     })
     .sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1));

@@ -68,6 +68,63 @@ export const STATES: Record<string, StateShape> = {
       { name: "Akron", at: [-81.52, 41.08] },
     ],
   },
+  CA: {
+    code: "CA",
+    name: "California",
+    outline: [
+      [-124.21, 41.998], // Oregon line at the coast
+      [-120.0, 41.998], // Oregon / Nevada corner
+      [-120.0, 39.0], // Lake Tahoe
+      [-114.63, 35.0], // Colorado River near Needles
+      [-114.57, 34.8],
+      [-114.13, 34.3],
+      [-114.43, 34.08],
+      [-114.53, 33.93],
+      [-114.5, 33.62],
+      [-114.72, 33.41],
+      [-114.71, 33.09],
+      [-114.72, 32.72], // Yuma
+      [-117.12, 32.53], // Mexico line at the coast
+      [-117.25, 32.7], // San Diego
+      [-117.28, 33.0],
+      [-117.4, 33.2],
+      [-117.88, 33.6],
+      [-118.15, 33.75], // Long Beach
+      [-118.42, 33.75],
+      [-118.4, 33.9],
+      [-118.52, 34.03], // Santa Monica
+      [-118.8, 34.0],
+      [-119.2, 34.15],
+      [-119.7, 34.4], // Santa Barbara
+      [-120.47, 34.45], // Point Conception
+      [-120.62, 34.75],
+      [-120.64, 35.15],
+      [-120.9, 35.45],
+      [-121.3, 35.7],
+      [-121.9, 36.3],
+      [-121.95, 36.6], // Monterey
+      [-121.8, 36.85],
+      [-122.05, 36.95], // Santa Cruz
+      [-122.4, 37.2],
+      [-122.51, 37.78], // San Francisco
+      [-123.0, 38.0],
+      [-123.75, 38.95],
+      [-123.83, 39.8],
+      [-124.4, 40.44], // Cape Mendocino
+      [-124.1, 40.9],
+      [-124.21, 41.75],
+      [-124.21, 41.998],
+    ],
+    landmarks: [
+      { name: "San Francisco", at: [-122.42, 37.77] },
+      { name: "Los Angeles", at: [-118.24, 34.05] },
+      { name: "San Diego", at: [-117.16, 32.72] },
+      { name: "Fresno", at: [-119.79, 36.74] },
+      { name: "Sacramento", at: [-121.49, 38.58] },
+      { name: "Stockton", at: [-121.29, 37.96] },
+      { name: "Reno, NV", at: [-119.81, 39.53] },
+    ],
+  },
 };
 
 export const STATE_CODES = Object.keys(STATES);
@@ -82,28 +139,47 @@ export interface Projection {
   contains: (p: LngLat) => boolean;
 }
 
+export interface Bounds {
+  minLng: number;
+  maxLng: number;
+  minLat: number;
+  maxLat: number;
+}
+
+export function boundsOf(points: LngLat[]): Bounds {
+  const lngs = points.map((p) => p[0]);
+  const lats = points.map((p) => p[1]);
+  return { minLng: Math.min(...lngs), maxLng: Math.max(...lngs), minLat: Math.min(...lats), maxLat: Math.max(...lats) };
+}
+
+/** Grows bounds by a distance in miles on every side (1° latitude ≈ 69 miles). */
+export function padBounds(b: Bounds, miles: number): Bounds {
+  const dLat = miles / 69;
+  const dLng = miles / (69 * Math.cos((((b.minLat + b.maxLat) / 2) * Math.PI) / 180));
+  return { minLng: b.minLng - dLng, maxLng: b.maxLng + dLng, minLat: b.minLat - dLat, maxLat: b.maxLat + dLat };
+}
+
 /**
- * Fits the state into a box (simple equirectangular projection, longitude shrunk by
- * cos(latitude) so the shape isn't stretched). Accurate enough for one state.
+ * Fits an area into a box (simple equirectangular projection, longitude shrunk by
+ * cos(latitude) so shapes aren't stretched). Accurate enough for one state or metro.
  */
-export function fitState(state: StateShape, maxW: number, maxH: number, pad = 8): Projection {
-  const lngs = state.outline.map((p) => p[0]);
-  const lats = state.outline.map((p) => p[1]);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const k = Math.cos((((minLat + maxLat) / 2) * Math.PI) / 180);
-  const spanX = (maxLng - minLng) * k;
-  const spanY = maxLat - minLat;
+export function fitBounds(b: Bounds, maxW: number, maxH: number, pad = 8): Omit<Projection, "contains"> {
+  const k = Math.cos((((b.minLat + b.maxLat) / 2) * Math.PI) / 180);
+  const spanX = (b.maxLng - b.minLng) * k;
+  const spanY = b.maxLat - b.minLat;
   const scale = Math.min((maxW - 2 * pad) / spanX, (maxH - 2 * pad) / spanY);
   const width = spanX * scale + 2 * pad;
   const height = spanY * scale + 2 * pad;
-  const project = ([lng, lat]: LngLat): [number, number] => [pad + (lng - minLng) * k * scale, pad + (maxLat - lat) * scale];
-  return { width, height, project, pxPerMile: scale / 69, contains: (p) => insidePolygon(p, state.outline) };
+  const project = ([lng, lat]: LngLat): [number, number] => [pad + (lng - b.minLng) * k * scale, pad + (b.maxLat - lat) * scale];
+  return { width, height, project, pxPerMile: scale / 69 };
 }
 
-export function outlinePath(state: StateShape, proj: Projection): string {
+/** Fits the whole state into a box. */
+export function fitState(state: StateShape, maxW: number, maxH: number, pad = 8): Projection {
+  return { ...fitBounds(boundsOf(state.outline), maxW, maxH, pad), contains: (p) => insidePolygon(p, state.outline) };
+}
+
+export function outlinePath(state: StateShape, proj: Pick<Projection, "project">): string {
   return state.outline.map((p, i) => `${i ? "L" : "M"}${proj.project(p).map((v) => v.toFixed(1)).join(",")}`).join(" ") + " Z";
 }
 

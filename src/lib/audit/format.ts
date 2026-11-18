@@ -28,3 +28,24 @@ export function fmtDate(iso: string): string {
   if (!y || !m || !d || m < 1 || m > 12) return iso;
   return `${months[m - 1]} ${d}, ${y}`;
 }
+
+/**
+ * Short, unique column labels for competitor names: the first word, or more words when
+ * two names would start the same ("Summit Ridge" vs "Summit Valley").
+ */
+export function shortLabels(names: string[]): string[] {
+  const words = names.map((n) => n.replace(/\s*\((sample|fictional)\)$/i, "").split(/\s+/).filter(Boolean));
+  const take = words.map(() => 1);
+  for (let round = 0; round < 4; round++) {
+    const labels = words.map((w, i) => w.slice(0, take[i]).join(" "));
+    let changed = false;
+    labels.forEach((l, i) => {
+      if (labels.filter((x) => x === l).length > 1 && take[i]! < words[i]!.length) {
+        take[i]! += 1;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+  return words.map((w, i) => w.slice(0, take[i]).join(" ") || names[i]!);
+}

@@ -2,7 +2,7 @@
 
 import { blendedJobValue, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
 import type { AuditBundle } from "@/lib/audit/data";
-import { fmtNum, fmtPct, fmtUsd } from "@/lib/audit/format";
+import { fmtNum, fmtPct, fmtUsd, shortLabels } from "@/lib/audit/format";
 import { BasisTag, ModelTag } from "../Bits";
 import { GrowthChart } from "../GrowthChart";
 import { PrizeCards } from "../PrizeCards";
@@ -17,9 +17,14 @@ export function RevenuePage({ bundle }: { bundle: AuditBundle }) {
   const you = clientSite(config, data);
   const now = you ? totalVisits(you) : null;
   const curve = base && now !== null ? growthCurve(now, base.visits) : null;
-  const refs = data.sites
+  const nationalVisits = data.visitsScope === "national";
+  const shortList = shortLabels(config.competitors.map((c) => c.name));
+  const shortName = new Map(config.competitors.map((c, i) => [c.domain, shortList[i] ?? c.name]));
+  const refs = nationalVisits
+    ? []
+    : data.sites
     .filter((s) => s.domain !== config.company.domain)
-    .map((s) => ({ label: (config.competitors.find((c) => c.domain === s.domain)?.name ?? s.domain).replace(/\s*\(.*\)$/, ""), value: totalVisits(s) }))
+    .map((s) => ({ label: shortName.get(s.domain) ?? s.domain, value: totalVisits(s) }))
     .filter((r): r is { label: string; value: number } => r.value !== null)
     .sort((a, b) => b.value - a.value)
     .slice(0, 3);
@@ -56,7 +61,7 @@ export function RevenuePage({ bundle }: { bundle: AuditBundle }) {
           {curve ? <GrowthChart curve={curve} refs={refs} /> : <p className="audit-nf">Not found: today&apos;s visits or local demand is missing, so the curve can&apos;t be drawn.</p>}
           <p className="audit-note">
             <ModelTag />
-            From today&apos;s ≈{fmtNum(now)} search visits/mo to the {config.baselineScenario.toLowerCase()} scenario. Dashed lines = competitors&apos; current estimated visits. {data.narrative.pageNotes.revenue ?? ""}
+            From today&apos;s ≈{fmtNum(now)} search visits/mo to the {config.baselineScenario.toLowerCase()} scenario. {nationalVisits ? "Competitor lines are not drawn: their visit estimates are US-wide, not local." : "Dashed lines = competitors' current estimated visits."} {data.narrative.pageNotes.revenue ?? ""}
           </p>
         </div>
       </div>

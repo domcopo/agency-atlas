@@ -40,6 +40,8 @@ export interface KeywordRow {
   positionsRetrieved: string;
   /** Marks the keywords shown on the "money terms" table. */
   money?: boolean;
+  /** false = positions were not looked up for this keyword (shows "not checked", never "nobody ranks"). */
+  positionsChecked?: boolean;
 }
 
 export interface SiteMetrics {
@@ -66,8 +68,16 @@ export interface GeoGrid {
   /** Grid size (7 = 7×7 = 49 points). */
   size: number;
   spacingMiles: number;
-  /** Rows top→bottom (north→south), each left→right (west→east). null = not in top 20. */
+  /**
+   * "maps" (default) = Google Maps rank at evenly spaced points (LeadSnap-style), null = not in top 20.
+   * "pack" = the Google local 3-pack as seen from each city: 1–3, 0 = checked and NOT in the pack,
+   *          null = no pack shown / city not available.
+   */
+  kind?: "maps" | "pack";
+  /** Rows top→bottom (north→south), each left→right (west→east). */
   ranks: (number | null)[][];
+  /** Optional name for each cell (pack checks: the city). */
+  cellLabels?: (string | null)[][];
   source: SourceId;
   retrieved: string;
 }
@@ -104,6 +114,10 @@ export interface AuditData {
   /** "Near me" style searches not tied to a town. */
   nearMeSearches: Fig;
   keywords: KeywordRow[];
+  /** "national" = visit estimates are each site's US-wide total, so they are not drawn next to the local model. */
+  visitsScope?: "local" | "national";
+  /** How deep organic positions were checked (default 100): "—" means "not in the top N". */
+  organicDepth?: number;
   sites: SiteMetrics[];
   grids: GeoGrid[];
   scorecard: ScorecardRow[];
