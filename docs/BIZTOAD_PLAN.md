@@ -91,7 +91,7 @@ Today the database only lets the owner and managers use the AI (the `ai_usage` i
 
 - `ai_usage`: add `ask_toad` to the allowed features. Let each allowed role add **only** `ask_toad` rows, **only** for themselves. Reading the cost log stays owner/managers only.
 - `toad_settings` (one row, owner edits): on/off for everyone, which roles may ask, the monthly total cap and the per-person cap.
-- `toad_spend`: an add-only ledger, copied from the Scout pattern. Before each question, the app writes the worst-case cost; a database trigger refuses it if it would pass the person's cap, the BizToad total, or the whole AI budget, or if it breaks the rate limit. Each person reads only their own rows, so the panel can show "you've used $1.20 of $5 this month". (Counting worst-case amounts makes the cap a little stricter than real spending, which is the safe direction.)
+- `toad_spend`: an add-only ledger, copied from the Scout pattern. Before each question, the app writes the worst-case cost; a database trigger refuses it if it would pass the person's cap, the BizToad total, or the whole AI budget, or if it breaks the rate limit. Each person reads only their own rows, so the panel can show "you've used $1.20 of $5 this month". (The check uses real spending so far plus this question's worst case; see Phase 2 details.)
 - Every new table gets RLS, the two-factor (`aal2`) rule, no update/delete grants, and break-in tests in `supabase/tests/10_rls_break_in.sql`.
 - App code keeps working before `0029` is run: the toad shows "Asking needs database update 0029".
 
