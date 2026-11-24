@@ -23,7 +23,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 - **Data:** screens read only through `src/lib/data-source.ts`. With Supabase configured, `showsSamples()` is false, so there are never made-up records next to real ones.
 - **Writes:** all database writes are in `src/app/actions.ts`. They are validated, run as the signed-in user, and every exported action starts with `await notWhilePreviewing();`. The only deletes are `deleteForever` (owner, from Trash).
 - **Database:**
-  - Schema and RLS live in `supabase/migrations/` (order set by the owner 2026-11-24: `0024` Scout, `0025` client care, `0026` sales leaderboard, `0027` SEO Watcher; next free number: 0028. `0023`+ are written but not run yet; confirm a number before claiming it). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
+  - Schema and RLS live in `supabase/migrations/` (order set by the owner 2026-11-24: `0024` Scout, `0025` client care, `0026` sales leaderboard, `0027` SEO Watcher; `0028` client journey; next free number: 0029. `0023`+ are written but not run yet; confirm a number before claiming it). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
   - Every new table needs RLS, a restrictive `aal2` policy and break-in tests in `supabase/tests/10_rls_break_in.sql` (`npm run test:rls`).
   - App code must keep working before a new migration is run (column fallbacks, "needs 00xx" messages).
 - **Sign-in:** `src/proxy.ts` sends any session below `aal2` to `/mfa`. Cookies are httpOnly (secure on Vercel); HSTS and noindex are on. No service worker or offline cache.
@@ -56,7 +56,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
 | Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
 | Audit builder in Sales (checkpoints, saved audits, caps, custom prompt) | `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
-| Client care: plan tiers, Add client, owner-only amounts, VIP/backup, playbook (later) | `docs/CLIENT_CARE_PLAN.md` (`0025`), `src/lib/care.ts` |
+| Client care: plan tiers, Add client, owner-only amounts, VIP/backup, journey (27 touches), status changes, client memory | `docs/CLIENT_CARE_PLAN.md` (`0025`, `0028`), `src/lib/care.ts`, `src/lib/journey.ts` |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |

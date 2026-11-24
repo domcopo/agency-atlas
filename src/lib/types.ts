@@ -334,6 +334,8 @@ export interface RosterClient {
   careStartedOn?: ISODate;
   /** Plan tier per service (0025). Empty before 0025 or when none is set. */
   plans?: ClientPlanRef[];
+  /** Short "client memory" notes (0028): what they want, how to talk to them, what to ask next. */
+  memory?: { goal: string | null; tone: string | null; nextAsk: string | null };
 }
 
 /** A client's tier for one service, e.g. SEO · Starter. */

@@ -1777,6 +1777,76 @@ select test.expect($$insert into public.care_plans (service, name) values ('SEO'
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7v. Client journey (0028): managers pause / mark lost / bring back ONLY after logging
+--     a reason; the log is add-only; touches are add-only and logged as yourself; managers
+--     edit client memory and journey start but nothing else; the owner hears about "lost".
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.clients set status = 'paused', end_date = current_date where slug = 'care-new'$$, -1, 'manager cannot pause a client without logging a reason first');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status) select id, 'active', 'paused' from public.clients where slug = 'care-new'$$, -2, 'pausing needs a reason');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason) select id, 'active', 'incomplete_expired', 'other' from public.clients where slug = 'care-new'$$, -2, 'only active, paused or lost');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason, changed_by) select id, 'active', 'paused', 'price', '00000000-0000-0000-0000-0000000000a1' from public.clients where slug = 'care-new'$$, -1, 'nobody logs a status change as someone else');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason, note) select id, 'active', 'paused', 'price', 'Budget pause for winter (test)' from public.clients where slug = 'care-new'$$, 1, 'manager logs a pause with a reason');
+select test.expect($$update public.clients set status = 'paused', end_date = current_date where slug = 'care-new'$$, 1, 'then the manager pauses the client');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason) select id, 'paused', 'canceled', 'results' from public.clients where slug = 'care-new'$$, 1, 'manager logs a client as lost');
+select test.expect($$update public.clients set status = 'canceled' where slug = 'care-new'$$, 1, 'then marks them lost (nothing is deleted)');
+select test.expect($$select id from public.clients where slug = 'care-new' and status = 'canceled'$$, 1, 'the lost client is still there');
+select test.expect($$update public.client_status_changes set reason = 'other'$$, -1, 'the status log cannot be edited');
+select test.expect($$delete from public.client_status_changes$$, -1, 'the status log cannot be deleted');
+select test.expect($$update public.clients set name = 'Renamed (fictional)' where slug = 'care-new'$$, -1, 'manager still cannot rename a client');
+select test.expect($$update public.clients set services = '{Ads}', status = 'active' where slug = 'care-new'$$, -1, 'manager cannot sneak other changes in with a status change');
+select test.expect($$update public.clients set memory_goal = 'More showroom bookings', memory_tone = 'Warm, no jargon', memory_next_ask = 'Confirm the December offer' where slug = 'care-new'$$, 1, 'manager edits client memory');
+select test.expect($$update public.clients set memory_goal = repeat('x', 121) where slug = 'care-new'$$, -2, 'client memory notes stay short');
+select test.expect($$update public.clients set care_started_on = current_date where slug = 'care-new'$$, 1, 'manager restarts the journey');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, note) select id, 1, 'done', current_date, 'call', 'Kickoff call (test)' from public.clients where slug = 'care-new'$$, 1, 'manager marks a touch done');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on) select id, 2, 'done', current_date from public.clients where slug = 'care-new'$$, -2, 'done needs how it happened (call, text, email, video)');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on) select id, 2, 'skipped', current_date from public.clients where slug = 'care-new'$$, -2, 'skip needs a reason');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, note) select id, 2, 'skipped', current_date, 'Client asked for email only (test)' from public.clients where slug = 'care-new'$$, 1, 'manager skips a touch with a reason');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel) select id, 50, 'done', current_date, 'call' from public.clients where slug = 'care-new'$$, -2, 'unknown touch numbers are rejected');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel) select id, 3, 'done', current_date + 30, 'call' from public.clients where slug = 'care-new'$$, -2, 'touches cannot be logged in the future');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, logged_by) select id, 3, 'done', current_date, 'call', '00000000-0000-0000-0000-0000000000a1' from public.clients where slug = 'care-new'$$, -1, 'nobody logs a touch as someone else');
+select test.expect($$update public.care_touches set note = 'changed'$$, -1, 'touches cannot be edited');
+select test.expect($$delete from public.care_touches$$, -1, 'touches cannot be deleted');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason) select id, 'canceled', 'active', 'back' from public.clients where slug = 'care-new'$$, 1, 'manager logs bringing a client back');
+select test.expect($$update public.clients set status = 'active', end_date = null where slug = 'care-new'$$, 1, 'then brings them back');
+select test.expect('select * from public.notifications where kind = ''client_lost''', 0, 'managers do not get the owner''s notices');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect('select * from public.notifications where kind = ''client_lost''', 1, 'the owner gets one notice when a manager marks a client lost');
+select test.expect('select * from public.care_touches', 2, 'owner reads the touches');
+select test.expect('select * from public.client_status_changes', 3, 'owner reads the status log');
+select test.expect($$update public.clients set status = 'paused' where slug = 'care-new'$$, 1, 'the owner can change status directly (the app still logs it)');
+select test.expect($$delete from public.client_status_changes$$, -1, 'even the owner cannot delete the status log');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.care_touches', 0, 'developer reads no touches');
+select test.expect('select * from public.client_status_changes', 0, 'developer reads no status log');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel) values ('00000000-0000-0000-0000-0000000000c1', 1, 'done', current_date, 'call')$$, -1, 'developer cannot log touches');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.care_touches', 0, 'salesperson reads no touches');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason) values ('00000000-0000-0000-0000-0000000000c1', 'active', 'canceled', 'price')$$, -1, 'salesperson cannot change client status');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.care_touches', 0, 'owner without two-factor reads no touches');
+select test.expect('select * from public.client_status_changes', 0, 'owner without two-factor reads no status log');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
