@@ -185,17 +185,17 @@ describe("daily GoHighLevel sync", () => {
 describe("client care guardrails", () => {
   const actions = read("src/app/actions.ts");
   const ds = read("src/lib/data-source.ts");
-  const migration = read("supabase/migrations/0024_client_care.sql");
+  const migration = read("supabase/migrations/0025_client_care.sql");
 
-  it("no client read asks for monthly_usd once 0024 is run (it's locked)", () => {
+  it("no client read asks for monthly_usd once 0025 is run (it's locked)", () => {
     const cols = ds.slice(ds.indexOf("const CLIENT_COLS"), ds.indexOf("const CARE_PLAN_COLS"));
     expect(cols).not.toMatch(/monthly_usd/);
-    // The newest shape (after 0024) reads the care columns and never the amount.
+    // The newest shape (after 0025) reads the care columns and never the amount.
     expect(ds).toMatch(/select\(`\$\{CLIENT_COLS\}, owner_staff_id, vip, backup_staff_id, care_started_on`\)/);
   });
 
   it("amounts are read only for the owner, from client_money", () => {
-    const fn = ds.slice(ds.indexOf("async function readClientMoney"), ds.indexOf("/** Plan tiers (0024)"));
+    const fn = ds.slice(ds.indexOf("async function readClientMoney"), ds.indexOf("/** Plan tiers (0025)"));
     expect(fn).toMatch(/if \(!isOwner\) return null;/);
     expect(fn).toMatch(/from\("client_money"\)/);
     expect(ds).toMatch(/readClientMoney\(db, clients\.data, clients\.careReady, me\?\.role === "owner"\)/);
@@ -228,7 +228,7 @@ describe("client care guardrails", () => {
     expect(core).not.toMatch(/cookies\(|getRoster\(|revalidatePath|getCurrentMember/);
   });
 
-  it("0024 locks the amount column, adds RLS, and has two-factor rules on every new table", () => {
+  it("0025 locks the amount column, adds RLS, and has two-factor rules on every new table", () => {
     expect(migration).toMatch(/revoke select, insert, update on public\.clients from authenticated;/);
     const grants = migration.match(/grant (select|insert|update) \(([^)]*)\) on public\.clients/g) ?? [];
     expect(grants).toHaveLength(3);

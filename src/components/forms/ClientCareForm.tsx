@@ -39,7 +39,7 @@ export function ClientCareForm({
   staff: { id: string; name: string }[];
   /** Every tier (archived ones are offered only if the client is already on them). */
   tiers: CarePlan[];
-  /** 0024 run: backup, tiers, VIP and amounts can be saved. */
+  /** 0025 run: backup, tiers, VIP and amounts can be saved. */
   careReady: boolean;
   layout?: "stack" | "row";
 }) {

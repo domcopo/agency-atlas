@@ -298,7 +298,7 @@ export interface RosterClient {
   dbId?: string;
   name: string;
   /**
-   * What the client pays a month. OWNER ONLY: null for everyone else (0024 locks it in
+   * What the client pays a month. OWNER ONLY: null for everyone else (0025 locks it in
    * the database too). Never show "$0" for null; show the plan tier instead.
    */
   monthlyUsd: number | null;
@@ -325,14 +325,14 @@ export interface RosterClient {
   ghl?: GhlContactTimes;
   /** Newest contact the TEAM logged (not GoHighLevel). Used to tell if a waiting client got a reply. */
   lastLogged?: ISODate;
-  /** Owner-set "important client" switch (0024). */
+  /** Owner-set "important client" switch (0025). */
   vip?: boolean;
-  /** Backup person for client communication (0024). */
+  /** Backup person for client communication (0025). */
   backupId?: string;
   backupName?: string;
-  /** Day the care plan (onboarding touches) starts counting (0024). */
+  /** Day the care plan (onboarding touches) starts counting (0025). */
   careStartedOn?: ISODate;
-  /** Plan tier per service (0024). Empty before 0024 or when none is set. */
+  /** Plan tier per service (0025). Empty before 0025 or when none is set. */
   plans?: ClientPlanRef[];
 }
 
@@ -345,7 +345,7 @@ export interface ClientPlanRef {
   topTier: boolean;
 }
 
-/** A plan tier (0024, care_plans). Prices are never stored here. */
+/** A plan tier (0025, care_plans). Prices are never stored here. */
 export interface CarePlan {
   id: string;
   service: Service;

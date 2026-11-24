@@ -65,7 +65,7 @@ export default async function ClientPage({ params }: Props) {
   const removed = await getRemovedCheckIns(c.dbId);
   // Owner only: null for everyone else (and the database returns them nothing).
   const pay = (await getBilling())?.byClient.get(c.id) ?? null;
-  // Plan tiers (0024): what this client's tier includes. Empty before 0024.
+  // Plan tiers (0025): what this client's tier includes. Empty before 0025.
   const care = await getCarePlans();
   const myTiers = (c.plans ?? []).map((p) => care.plans.find((t) => t.id === p.planId)).filter((t) => t !== undefined);
 

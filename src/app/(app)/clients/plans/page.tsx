@@ -29,7 +29,7 @@ export default async function PlanTiersPage() {
       <>
         <PageHeader title="Plan tiers" backHref="/clients" backLabel="Clients" />
         <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">
-          Plan tiers turn on after one setup step: run <span className="font-mono text-xs">0024_client_care.sql</span> in Supabase (SQL Editor).
+          Plan tiers turn on after one setup step: run <span className="font-mono text-xs">0025_client_care.sql</span> in Supabase (SQL Editor).
         </p>
       </>
     );

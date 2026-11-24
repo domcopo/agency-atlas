@@ -18,7 +18,7 @@ export default async function SetupPage() {
   const me = usesDatabase() ? await getMember() : null;
   if (me?.role !== "owner") return <RoleNotice title="Set up clients" />;
   const [clients, team, care] = await Promise.all([getRoster(), getTeam(), getCarePlans()]);
-  /** Set up = has a main person, a service, and (after 0024) a tier for each service that has tiers. */
+  /** Set up = has a main person, a service, and (after 0025) a tier for each service that has tiers. */
   const complete = (c: RosterClient) =>
     Boolean(c.ownerId && c.services.length) &&
     (!care.ready || c.services.every((s) => !care.plans.some((p) => p.service === s && !p.archived) || c.plans?.some((p) => p.service === s)));
@@ -47,7 +47,7 @@ export default async function SetupPage() {
       </p>
       {!care.ready && (
         <p className="mb-3 rounded-2xl border border-amber/35 bg-amber/8 px-3.5 py-2.5 text-xs text-muted">
-          Backups, tiers, VIP and owner-only amounts turn on after one setup step: run <span className="font-mono">0024_client_care.sql</span> in Supabase.
+          Backups, tiers, VIP and owner-only amounts turn on after one setup step: run <span className="font-mono">0025_client_care.sql</span> in Supabase.
         </p>
       )}
       <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">

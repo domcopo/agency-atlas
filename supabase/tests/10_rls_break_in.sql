@@ -114,8 +114,8 @@ select test.expect('select id from public.clients', 1, 'manager reads clients');
 select test.expect('select * from public.team_members', 1, 'manager sees only their own team row');
 select test.expect($$update public.clients set services = '{Ads}'$$, -1, 'manager cannot edit clients (0019: refused outright)');
 select test.expect($$select id from public.clients where services = '{Ads}'$$, 0, 'client services unchanged');
-select test.expect($$update public.clients set monthly_usd = 1$$, -1, 'manager cannot edit client amounts (0024: the column is locked)');
-select test.expect($$insert into public.clients (slug, name, monthly_usd, start_date, status) values ('x', 'X', 1, '2026-01-01', 'active')$$, -1, 'manager cannot add a client WITH an amount (0024: managers may add clients, never amounts; see 7u)');
+select test.expect($$update public.clients set monthly_usd = 1$$, -1, 'manager cannot edit client amounts (0025: the column is locked)');
+select test.expect($$insert into public.clients (slug, name, monthly_usd, start_date, status) values ('x', 'X', 1, '2026-01-01', 'active')$$, -1, 'manager cannot add a client WITH an amount (0025: managers may add clients, never amounts; see 7u)');
 select test.expect($$insert into public.check_ins (client_id, happened_on) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-01')$$, 1, 'manager logs a check-in');
 select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'worse')$$, 1, 'manager logs a check-in with how they are doing');
 select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', '2026-11-02', 'furious')$$, -2, 'unknown moods are rejected');
@@ -1696,7 +1696,7 @@ select test.expect('select * from public.audit_settings', 0, 'someone not on the
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7u. Client care (0024): plan tiers (owner edits, managers read), each client's tier
+-- 7u. Client care (0025): plan tiers (owner edits, managers read), each client's tier
 --     (manager may set it once on a new client), amounts OWNER ONLY, managers add clients
 --     but never VIP or an amount, and clients.monthly_usd is locked for everyone.
 -- ---------------------------------------------------------------------------

@@ -232,7 +232,7 @@ export default async function MissionControlPage() {
     id: "results",
     label: "Results",
     icon: <BadgeDollarSign aria-hidden />,
-    // Amounts are owner-only (0024): everyone else sees counts.
+    // Amounts are owner-only (0025): everyone else sees counts.
     stat: summary.moneyShown ? `$${(summary.activeMrr / 1000).toFixed(1)}k` : String(summary.activeCount),
     statLabel: summary.moneyShown ? `a month from ${summary.activeCount} active clients` : "active clients",
     panel: (

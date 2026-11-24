@@ -240,7 +240,7 @@ export const getTrashedIds = cache(async (): Promise<{ ready: boolean; clients: 
   return { ready: true, clients: new Set((c.data ?? []).map((r) => r.id as string)), actions: new Set((a.data ?? []).map((r) => r.id as string)) };
 });
 
-/** Columns every client read uses. Never monthly_usd: from 0024 that is locked (client_money). */
+/** Columns every client read uses. Never monthly_usd: from 0025 that is locked (client_money). */
 const CLIENT_COLS = "id, slug, name, start_date, status, services, listed_in, check_note, follow_up, end_date";
 const CARE_PLAN_COLS = "id, service, name, rank, hours_per_month, includes, heat_maps_per_month, report_every_days, mid_month_check_in, competitor_review_months, top_tier, archived";
 
@@ -280,7 +280,7 @@ function toCarePlan(r: Record<string, unknown>): CarePlan {
 }
 
 /**
- * Client rows, newest database shape first. Before 0024 there are no care columns (and
+ * Client rows, newest database shape first. Before 0025 there are no care columns (and
  * monthly_usd is still readable); before 0006 there is no owner column.
  */
 async function readClientRows(db: DbClient): Promise<{ data: ClientRow[] | null; careReady: boolean }> {
@@ -294,7 +294,7 @@ async function readClientRows(db: DbClient): Promise<{ data: ClientRow[] | null;
 
 /**
  * Monthly amounts by client id. OWNER ONLY: everyone else gets null (hidden), even before
- * 0024 when the database would still allow it. After 0024 they live in client_money.
+ * 0025 when the database would still allow it. After 0025 they live in client_money.
  */
 async function readClientMoney(db: DbClient, rows: ClientRow[], careReady: boolean, isOwner: boolean): Promise<Map<string, number> | null> {
   if (!isOwner) return null;
@@ -304,7 +304,7 @@ async function readClientMoney(db: DbClient, rows: ClientRow[], careReady: boole
   return new Map((data ?? []).map((m) => [m.client_id as string, Number(m.monthly_usd)]));
 }
 
-/** Plan tiers (0024), archived ones included so old assignments still have a name. Empty before 0024. */
+/** Plan tiers (0025), archived ones included so old assignments still have a name. Empty before 0025. */
 export const getCarePlans = cache(async (): Promise<{ ready: boolean; plans: CarePlan[] }> => {
   if (!usesDatabase()) return { ready: false, plans: [] };
   const db = await createDatabaseClient();

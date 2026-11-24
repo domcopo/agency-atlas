@@ -31,7 +31,7 @@ export default async function ServiceGroupPage({ params }: Props) {
     health: h?.level,
   }));
   const levels: HealthLevel[] = ["healthy", "watch", "at_risk"];
-  // Plan tiers for this service (0024): how many current clients are on each.
+  // Plan tiers for this service (0025): how many current clients are on each.
   const { plans } = await getCarePlans();
   const tiers = group.service
     ? plans

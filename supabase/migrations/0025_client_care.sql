@@ -1,6 +1,7 @@
 -- Agency Atlas: client care, Step 1A (approved 2026-11-24, docs/CLIENT_CARE_PLAN.md).
 --
--- Run ONCE in the Supabase SQL Editor (after 0001-0023). Before running it, check that
+-- Run ONCE in the Supabase SQL Editor (after 0001-0024; 0024 is Scout). Numbered 0025 by
+-- the owner on 2026-11-24 (Scout took 0024). Before running it, check that
 -- today's daily backup exists (Supabase > Database > Backups). Undo steps are at the end.
 --
 -- What this adds:

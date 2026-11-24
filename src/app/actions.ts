@@ -1029,7 +1029,7 @@ export async function saveNoticeMutes(_prev: { error?: string; ok?: boolean } | 
 type CareState = { error?: string; ok?: boolean } | undefined;
 const SERVICE_NAMES: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
 
-/** Is 0024 (client care) run? Checked with a column only it adds. */
+/** Is 0025 (client care) run? Checked with a column only it adds. */
 async function careReady(db: Db): Promise<boolean> {
   const { error } = await db.from("clients").select("vip").limit(1);
   return !error;
@@ -1122,7 +1122,7 @@ export async function saveClientCare(_prev: CareState, form: FormData): Promise<
   if (form.has("monthly")) {
     monthly = parseMonthly(text(form, "monthly", 16));
     if (Number.isNaN(monthly)) return { error: "Monthly amount should be a number like 500 or 499.99." };
-    if (monthly !== null && !ready) return { error: "Amounts move to their own owner-only table in setup step 0024. Run it first." };
+    if (monthly !== null && !ready) return { error: "Amounts move to their own owner-only table in setup step 0025. Run it first." };
   }
 
   if (Object.keys(update).length) {
@@ -1158,7 +1158,7 @@ export async function saveClientCare(_prev: CareState, form: FormData): Promise<
   return { ok: true };
 }
 
-/** Owner only: add or edit a plan tier (0024). Never deleted; see setCarePlanArchived. */
+/** Owner only: add or edit a plan tier (0025). Never deleted; see setCarePlanArchived. */
 export async function saveCarePlan(_prev: CareState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
@@ -1201,7 +1201,7 @@ export async function saveCarePlan(_prev: CareState, form: FormData): Promise<{ 
   if (error) {
     console.warn(`Tier not saved: ${error.code}`);
     return {
-      error: MISSING_TABLE.has(error.code ?? "") ? "Plan tiers need one setup step first (0024 SQL)." : error.code === "23505" ? `There's already a ${p.service} tier called ${p.name}.` : "Couldn't save the tier.",
+      error: MISSING_TABLE.has(error.code ?? "") ? "Plan tiers need one setup step first (0025 SQL)." : error.code === "23505" ? `There's already a ${p.service} tier called ${p.name}.` : "Couldn't save the tier.",
     };
   }
   revalidatePath("/", "layout");
@@ -1257,7 +1257,7 @@ async function addClientNow(form: FormData): Promise<AddClientResult> {
 
   const db = await createDatabaseClient();
   const ready = await careReady(db);
-  if (!ready && !isOwner) return { error: "Adding clients needs one setup step first (0024 SQL). Ask the owner." };
+  if (!ready && !isOwner) return { error: "Adding clients needs one setup step first (0025 SQL). Ask the owner." };
   if (ownerId && !(await staffExists(db, ownerId))) return { error: "Pick a main person from the team." };
   if (backupId && !(await staffExists(db, backupId))) return { error: "Pick a backup from the team." };
 
@@ -1287,7 +1287,7 @@ async function addClientNow(form: FormData): Promise<AddClientResult> {
   let slug = uniqueSlug(name, existing.map((c) => c.slug));
   const row: Record<string, unknown> = { name, start_date: startDate, status: "active", services, owner_staff_id: ownerId || null };
   if (ready) Object.assign(row, { backup_staff_id: backupId || null, vip, care_started_on: startDate });
-  else row.monthly_usd = monthly ?? 0; // before 0024 the amount still lives on the client row
+  else row.monthly_usd = monthly ?? 0; // before 0025 the amount still lives on the client row
   let added = await db.from("clients").insert({ ...row, slug }).select("id").single();
   if (added.error?.code === "23505") {
     // Someone added the same address a moment ago: try the next free one.
@@ -1417,7 +1417,7 @@ export async function importPrivateData(): Promise<{ error?: string; message?: s
   if (!roster) return { error: "No private client file found on this Mac." };
   const db = await createDatabaseClient();
 
-  // After 0024 amounts live in client_money (owner only), not on the client row.
+  // After 0025 amounts live in client_money (owner only), not on the client row.
   const ready = await careReady(db);
   const rows = roster.clients.map((c) => ({
     slug: c.id,

@@ -1,7 +1,7 @@
 # Client care plan
 
-**Status:** Phase 1 approved 2026-11-24. **Step 1A built** (not committed, `0024` not run yet). Steps 1B and 1C not started.
-**Branch:** `claude/client-care-53178d` (own worktree). **Database change:** `0024_client_care.sql` covers Step 1A only (number confirmed by the owner; `0023` is saved audits). Steps 1B/1C will need `0025`+ (confirm the number first).
+**Status:** Phase 1 approved 2026-11-24. **Step 1A built** (pull request open, `0025` not run yet). Steps 1B and 1C not started.
+**Branch:** `claude/client-care-53178d` (own worktree). **Database change:** `0025_client_care.sql` covers Step 1A only. The owner set the order on 2026-11-24: 0024 Scout, 0025 Client care, 0026 sales leaderboard, 0027 SEO Watcher. Steps 1B/1C will need `0028`+ (confirm the number first).
 
 ### What Step 1A actually built (differs from the draft below in a few places)
 
@@ -125,7 +125,7 @@ SEO comes first. Each step is its own commit, and the owner tests it before the 
 - **Note:** Atlas doesn't hold message text (GoHighLevel stays read-only, and we only read times). VAs read the actual conversations inside GoHighLevel, with their own GoHighLevel access.
 - Two-factor sign-in is required, as for everyone. The owner adds VA logins the same way as other team logins (`docs/TEAM_ACCESS.md`, updated).
 
-**Database change `0024_client_care.sql`.** The app keeps working before it runs; screens say "needs 0024".
+**Database change `0025_client_care.sql`.** The app keeps working before it runs; screens say "needs 0025".
 
 | Table / change | Who reads | Who writes |
 |---|---|---|
@@ -165,7 +165,7 @@ Ads and Website get their own tiers, playbooks and rhythms, using the same table
 
 ## Risks and how we handle them
 
-- **Moving monthly amounts out of `clients`.** This is the riskiest step. Some screens read that column today, and we'll check every one. The migration copies before changing anything, and the old column isn't cleared until the owner confirms in a later migration. **Before running 0024:** the owner checks that today's daily backup exists. Rollback = run the provided undo SQL; no data is lost, because nothing is deleted.
+- **Moving monthly amounts out of `clients`.** This is the riskiest step. Some screens read that column today, and we'll check every one. The migration copies before changing anything, and the old column isn't cleared until the owner confirms in a later migration. **Before running 0025:** the owner checks that today's daily backup exists. Rollback = run the provided undo SQL; no data is lost, because nothing is deleted.
 - **New VA role = more people with access to client data.** It is limited to the care fields above, protected by RLS, covered by break-in tests for every table and every forbidden table, and requires two-factor sign-in. VAs never see prices or billing.
 - **Too many reminders.** Only new or restarted clients get the 27 touches. Existing clients get the calmer rhythm. Skip is always allowed, with a reason.
 - **STOP / opt-out.** Atlas can't see an incoming STOP (it never reads message text), so a person must flip "No texts". The playbook says so plainly.

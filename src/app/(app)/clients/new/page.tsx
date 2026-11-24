@@ -21,7 +21,7 @@ export default async function AddClientPage() {
         <p className="mb-3 rounded-2xl border border-amber/35 bg-amber/8 px-3.5 py-2.5 text-xs text-muted">
           {me.role === "owner" ? (
             <>
-              Plan tiers, backups and VIP turn on after one setup step: run <span className="font-mono">0024_client_care.sql</span> in Supabase. You can still add a client now.
+              Plan tiers, backups and VIP turn on after one setup step: run <span className="font-mono">0025_client_care.sql</span> in Supabase. You can still add a client now.
             </>
           ) : (
             "Adding clients needs one setup step first. Ask the owner."
