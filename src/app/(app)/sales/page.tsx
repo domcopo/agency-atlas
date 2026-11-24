@@ -89,7 +89,10 @@ async function SalespersonSales({ who }: { who?: string }) {
     <>
       <PageHeader title="Sales" subtitle="Your leads and follow-ups" />
       {!sales.ready || !sales.pipelines.some((p) => p.active) ? (
-        <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+        <>
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+          <AuditsCard mine />
+        </>
       ) : (
         <>
           <RefreshLeadsButton lastLabel={refreshedLabel(sales.lastRefresh)} />
@@ -137,13 +140,19 @@ async function LeadSales({ member }: { member: { role: string } }) {
   const owner = member.role === "owner";
   if (!sales.ready) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Sales needs one setup step first (0020 SQL).</p>;
   if (!sales.pipelines.some((p) => p.active)) {
-    return owner ? (
-      <Link href="/sales/setup" className="pressable glass block rounded-3xl p-4 text-sm">
-        <span className="font-semibold text-violet">Set up Sales →</span>{" "}
-        <span className="text-muted">Pick your sales pipelines, link salespeople to GoHighLevel users and set daily targets.</span>
-      </Link>
-    ) : (
-      <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+    // Audits don't need pipelines, so they show even before Sales is set up.
+    return (
+      <>
+        {owner ? (
+          <Link href="/sales/setup" className="pressable glass block rounded-3xl p-4 text-sm">
+            <span className="font-semibold text-violet">Set up Sales →</span>{" "}
+            <span className="text-muted">Pick your sales pipelines, link salespeople to GoHighLevel users and set daily targets.</span>
+          </Link>
+        ) : (
+          <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
+        )}
+        <AuditsCard mine={false} />
+      </>
     );
   }
   const open = sales.leads.filter((l) => l.status === "open");
