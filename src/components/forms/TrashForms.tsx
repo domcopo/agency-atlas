@@ -30,7 +30,7 @@ export function MoveToTrashButton({ kind, id, what, note }: { kind: TrashKind; i
       </p>
       {note && <p className="text-xs text-muted">{note}</p>}
       <div className="flex gap-2">
-        <button type="submit" className="pressable min-h-11 rounded-xl bg-rose/80 px-4 text-sm font-semibold text-white">
+        <button type="submit" className="pressable min-h-11 rounded-xl bg-rose/80 px-4 text-sm font-semibold text-[#fff]">
           Move to Trash
         </button>
         <button type="button" onClick={() => setAsking(false)} className={btn}>
@@ -91,7 +91,7 @@ export function DeleteForeverForm({ kind, id, what }: { kind: TrashKind; id: str
         </p>
       )}
       <div className="flex gap-2">
-        <button type="submit" disabled={!deleteConfirmed(typed) || pending} className="pressable min-h-11 rounded-xl bg-rose px-4 text-sm font-semibold text-white disabled:opacity-40">
+        <button type="submit" disabled={!deleteConfirmed(typed) || pending} className="pressable min-h-11 rounded-xl bg-rose px-4 text-sm font-semibold text-[#fff] disabled:opacity-40">
           {pending ? "Deleting…" : "Delete forever"}
         </button>
         <button type="button" onClick={() => setOpen(false)} className={btn}>

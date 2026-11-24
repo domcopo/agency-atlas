@@ -43,3 +43,5 @@ Phase 2 rules:
 - App: Sales → Audits list/new/detail/edit, "Audit this lead" on the lead page, an Audits card on the Sales tab, Growth → SEO audits links there. Viewer `/audit/[id]` opens saved audits (only the chosen pages, renumbered) for owner/managers/sales.
 - Map state may be any US state; only OH and CA have outlines (others print "outline isn't added yet").
 - Zero plans allowed: Investment says "prices not set".
+
+- 2026-11-24 (owner): Home radar moved top right on computers; app renamed "YO Marketing Co" with the agency logo (`public/brand/`, `BrandLogo.tsx`); desktop-only light theme with a switch in the side menu. Details in `docs/DESKTOP_LAYOUT_PLAN.md` (Follow-up).

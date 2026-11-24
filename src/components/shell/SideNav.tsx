@@ -12,7 +12,9 @@ import { usePathname } from "next/navigation";
 import { useEffect, type ComponentType } from "react";
 import { cn } from "@/lib/format";
 import { useSeen } from "@/lib/use-seen";
+import type { Theme } from "@/lib/theme";
 import { BrandLogo } from "./BrandLogo";
+import { ThemeToggle } from "./ThemeToggle";
 import { MODE_TABS, tabs, type NavHint, type NavMode } from "./BottomNav";
 
 interface SideNavProps {
@@ -24,13 +26,15 @@ interface SideNavProps {
   notices: number | null;
   /** Data Safety link: shown to the same people who see the shield on Home. */
   showSafety: boolean;
+  /** Saved light/dark choice, for the switch at the bottom. */
+  theme: Theme;
 }
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSafety }: SideNavProps) {
+export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSafety, theme }: SideNavProps) {
   const pathname = usePathname();
   const only = MODE_TABS[mode];
   const shown = only ? tabs.filter((t) => only.includes(t.href)) : tabs;
@@ -39,7 +43,7 @@ export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSa
     <nav
       aria-label="Main"
       data-side-nav
-      className="fixed inset-y-0 left-0 z-50 hidden w-60 flex-col border-r border-line bg-[#0d0b17]/95 px-3 pb-5 pt-6 backdrop-blur-xl lg:flex"
+      className="fixed inset-y-0 left-0 z-50 hidden w-60 flex-col border-r border-line bg-panel/95 px-3 pb-5 pt-6 backdrop-blur-xl lg:flex"
     >
       <Link href="/" className="pressable mb-6 flex items-center rounded-2xl px-3 py-1">
         <BrandLogo className="w-36" priority />
@@ -69,6 +73,8 @@ export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSa
         {showSafety && <PlainItem href="/safety" label="Data Safety" icon={ShieldCheck} active={isActive(pathname, "/safety")} iconClass="text-lime" />}
         <PlainItem href="/account" label="Account" icon={UserRound} active={isActive(pathname, "/account")} />
       </ul>
+
+      <ThemeToggle initial={theme} />
     </nav>
   );
 }
@@ -140,7 +146,7 @@ function PlainItem({
         <Icon aria-hidden className={cn("size-5 shrink-0", iconClass)} />
         <span className="flex-1">{label}</span>
         {count > 0 && (
-          <span aria-hidden className={cn("min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold leading-5", tone === "rose" ? "bg-rose text-white" : "bg-violet/30 text-ink")}>
+          <span aria-hidden className={cn("min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold leading-5", tone === "rose" ? "bg-rose text-[#fff]" : "bg-violet/30 text-ink")}>
             {count > 99 ? "99+" : count}
           </span>
         )}

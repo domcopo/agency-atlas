@@ -481,11 +481,15 @@ export default async function MissionControlPage() {
     { label: "Pipeline value", value: synced ? formatUsd(ghl.open.value) : "–", source: synced ? "Open deals · not revenue" : "Not synced", href: "/sales", tone: "amber" },
   ];
 
+  const radar = <DetectionRadar detections={detections} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />;
+
   return (
     <>
-      {/* Wide screens: the header, numbers and tabs on the left with the radar beside them at the
-          top; today's lists in two columns below. Phones: one column, same order as before. */}
-      <Columns layout="halves">
+      {/* Wide screens: header, numbers, tabs and today's lists on the left; the radar, Atlas asks
+          and follow-ups on the right, both starting at the top. Phones: one column, same order as
+          before (the radar shows after the tabs, so it's placed twice and each copy shows on one
+          screen size only). */}
+      <Columns layout="main">
       <Column>
       <PageHeader title="Mission Control" subtitle={data.weekLabel} action={safetyLink} />
       {homeLayout && !samples && <HomeSwitcher current={homeLayout.layout} />}
@@ -501,7 +505,7 @@ export default async function MissionControlPage() {
 
       {!samples && <PulseStrip tiles={pulse} hidden={pulseHidden} hiddenLabel="pipeline value" />}
 
-      <div className="lg:grid lg:grid-cols-2 lg:gap-x-8 lg:empty:hidden xl:gap-x-10">
+      <div>
       {billing && (
         <Link href="/billing" className="pressable glass mb-3 block rounded-2xl p-3 text-sm lg:p-4">
           <span className="flex items-center justify-between gap-2">
@@ -545,16 +549,8 @@ export default async function MissionControlPage() {
       </div>
 
       <HomeTabs tabs={tabs} />
-      </Column>
-      <Column className="lg:pt-9">
-      <div className="mt-3">
-        <DetectionRadar detections={detections} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />
-      </div>
-      </Column>
-      </Columns>
 
-      <Columns layout="halves" className="lg:mt-2">
-      <Column>
+      <div className="mt-3 lg:hidden">{radar}</div>
 
       {!samples && (
         <Fold
@@ -622,7 +618,8 @@ export default async function MissionControlPage() {
       )}
 
       </Column>
-      <Column>
+      <Column className="lg:pt-8">
+      <div className="hidden lg:block">{radar}</div>
       <AtlasAsks questions={atlasQuestions} today={data.today} />
 
       {data.followUps.length > 0 && (

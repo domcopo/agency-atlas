@@ -2,6 +2,7 @@
 // team_members get past this point; everyone else is sent to sign in.
 
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import { BottomNav } from "@/components/shell/BottomNav";
 import { PreviewBanner } from "@/components/shell/PreviewBanner";
@@ -11,6 +12,7 @@ import Link from "next/link";
 import { NoticePill } from "@/components/shell/NoticePill";
 import { BrandLogo } from "@/components/shell/BrandLogo";
 import { isSales } from "@/lib/roles";
+import { parseTheme, THEME_COOKIE } from "@/lib/theme";
 import { getCoachHints, getDeveloperViewer, getMember, getNotices, getWorkOrderBadge, usesDatabase } from "@/lib/data-source";
 
 // AI briefings can take up to ~2 minutes; give server actions room on the host.
@@ -41,6 +43,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         workOrders={badge !== null ? { count: badge, href: ordersHref } : null}
         notices={notices ? notices.unread : null}
         showSafety={!developer && !sales}
+        theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)}
       />
       <div className="lg:pl-60">
         <main id="main" className="wide mx-auto max-w-lg px-4 pb-44 lg:max-w-[100rem] lg:px-10 lg:pb-20 xl:px-14">

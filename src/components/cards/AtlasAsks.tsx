@@ -50,7 +50,7 @@ function Fields({ q, today }: { q: AtlasQuestion; today: string }) {
 export function AtlasAsks({ questions, today }: { questions: AtlasQuestion[]; today: string }) {
   if (questions.length === 0) return null;
   return (
-    <section aria-labelledby="atlas-asks" className="glass mt-3 rounded-3xl p-4">
+    <section aria-labelledby="atlas-asks" className="glass mt-3 rounded-3xl p-4 lg:mt-4 lg:p-5">
       <h2 id="atlas-asks" className="flex items-center gap-2 text-sm font-semibold">
         <MessageCircleQuestion aria-hidden className="size-4 text-violet" /> Atlas asks
         <span className="text-xs font-normal text-faint">· {questions.length} quick {questions.length === 1 ? "question" : "questions"}</span>
@@ -64,7 +64,7 @@ export function AtlasAsks({ questions, today }: { questions: AtlasQuestion[]; to
               <p className="text-[11px] text-faint">{q.why}</p>
               <Fields q={q} today={today} />
               <div className="flex gap-2">
-                <button type="submit" name="status" value="answered" className={`${btn} flex-1 bg-violet-deep`}>
+                <button type="submit" name="status" value="answered" className={`${btn} flex-1 bg-violet-deep lg:flex-none lg:px-8`}>
                   Save
                 </button>
                 <button type="submit" name="status" value="later" formNoValidate className={`${btn} border border-line text-muted`}>

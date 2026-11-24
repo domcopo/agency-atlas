@@ -19,6 +19,10 @@
   /* Deadline colors (work orders): red uses rose, green uses lime. */
   --color-due-orange: #ff9a52;
   --color-due-yellow: #f2e35c;
+  /* Solid panels: side menu and the top data-source strips. */
+  --color-panel: #0d0b17;
+  --color-banner-teal: #05221f;
+  --color-banner-amber: #2a1f05;
 
   /* System fonts: looks native on iPhone and needs no download. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui,
@@ -237,6 +241,62 @@ body {
   body:has([data-side-nav]) [data-demo-banner] > * {
     max-width: 100rem;
     padding-inline: 2.5rem;
+  }
+}
+
+/* Light theme: computers only (1024 px and up), inside the signed-in app (pages with the side
+   menu). Phones, tablets, the sign-in page and the SEO audit slides always stay dark.
+   Chosen with the switch in the side menu; saved in the "theme" cookie. Tailwind's see-through
+   white classes (bg-white/5 and so on) read --color-white, so pointing it at dark ink turns
+   every "light tint on dark" into a "dark tint on light" without editing each screen. Accent
+   colors get deeper versions so text stays readable on white. */
+@media (min-width: 64rem) {
+  html[data-theme="light"]:has([data-side-nav]) {
+    color-scheme: light;
+    --color-bg: #f4f3f8;
+    --color-bg-raised: #ffffff;
+    --color-ink: #17142a;
+    --color-muted: #514d68;
+    --color-faint: #6b6784;
+    --color-line: rgb(23 20 42 / 0.12);
+    --color-white: #17142a;
+    --color-panel: #ffffff;
+    --color-banner-teal: #e3f4f1;
+    --color-banner-amber: #fbf0d9;
+
+    --color-violet: #6d28d9;
+    --color-violet-deep: #5b21b6;
+    --color-lime: #3f7a0c;
+    --color-teal: #0f766e;
+    --color-amber: #b45309;
+    --color-rose: #be123c;
+    --color-sky: #0369a1;
+    --color-due-orange: #c2410c;
+    --color-due-yellow: #a16207;
+  }
+
+  html[data-theme="light"]:has([data-side-nav]) .glass {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.8));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.9),
+      0 8px 24px -14px rgb(23 20 42 / 0.25);
+  }
+
+  html[data-theme="light"]:has([data-side-nav]) .app-glow {
+    opacity: 0.35;
+  }
+
+  /* Solid purple buttons and "white text" spots keep white text (ink is dark here). */
+  html[data-theme="light"]:has([data-side-nav]) :is(.bg-violet, .bg-violet-deep, .text-white) {
+    color: #fff;
+  }
+
+  /* Logo: the light version, with "multiply" hiding its white background. */
+  html[data-theme="light"]:has([data-side-nav]) .brand-dark {
+    display: none;
+  }
+  html[data-theme="light"]:has([data-side-nav]) .brand-light {
+    display: block;
   }
 }
 

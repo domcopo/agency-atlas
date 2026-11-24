@@ -833,6 +833,18 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
     expect(side).not.toMatch(/sales: \[|developer: \[/);
   });
 
+  it("the light theme is computers-only and the theme cookie can only say light or dark", async () => {
+    const css = readFileSync(join(ROOT, "src/app/globals.css"), "utf8");
+    // Every light-theme rule sits inside the one 1024 px block, so phones always stay dark.
+    const start = css.indexOf("@media (min-width: 64rem) {\n  html[data-theme=\"light\"]");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start, css.indexOf("\n}\n", start));
+    expect(css.split('data-theme="light"').length).toBe(block.split('data-theme="light"').length);
+    const { parseTheme } = await import("../src/lib/theme");
+    expect(parseTheme("light")).toBe("light");
+    for (const v of ["dark", "", undefined, null, "LIGHT", "light;x=1", "<script>"]) expect(parseTheme(v)).toBe("dark");
+  });
+
   it("only the owner picks pipelines, links logins and sets targets", () => {
     for (const name of ["saveSalesPipeline", "linkGhlUser", "saveSalesTarget"]) expect(fn(name), name).toMatch(/me\.role !== "owner"/);
     // Pipeline names and hot stages come from our own copy, never from the form alone.

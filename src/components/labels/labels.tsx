@@ -198,9 +198,9 @@ export function StatusPill({ status }: { status: SubscriptionStatus }) {
 }
 
 export const healthStyle: Record<HealthLevel, { label: string; dot: string; text: string; ring: string }> = {
-  healthy: { label: "Healthy", dot: "bg-lime", text: "text-lime", ring: "#d4f57a" },
-  watch: { label: "Watch", dot: "bg-amber", text: "text-amber", ring: "#fbbf4a" },
-  at_risk: { label: "At risk", dot: "bg-rose", text: "text-rose", ring: "#ff7a93" },
+  healthy: { label: "Healthy", dot: "bg-lime", text: "text-lime", ring: "var(--color-lime)" },
+  watch: { label: "Watch", dot: "bg-amber", text: "text-amber", ring: "var(--color-amber)" },
+  at_risk: { label: "At risk", dot: "bg-rose", text: "text-rose", ring: "var(--color-rose)" },
 };
 
 /** Small colored dot + word for a client's health. */

@@ -99,7 +99,7 @@ export function HealthRing({
           cy={size / 2}
           r={r}
           fill="none"
-          stroke="rgb(255 255 255 / 0.08)"
+          className="stroke-white/[0.08]"
           strokeWidth={stroke}
         />
         <circle
@@ -107,12 +107,11 @@ export function HealthRing({
           cy={size / 2}
           r={r}
           fill="none"
-          stroke={color}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
-          style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+          style={{ stroke: color, filter: `drop-shadow(0 0 6px ${color})` }}
         />
       </svg>
       <span
@@ -146,18 +145,17 @@ export function ScoreRing({
   return (
     <div role="img" aria-label={label} className="relative shrink-0" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgb(255 255 255 / 0.08)" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" className="stroke-white/[0.08]" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke={color}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
-          style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+          style={{ stroke: color, filter: `drop-shadow(0 0 6px ${color})` }}
         />
       </svg>
       <span aria-hidden className="absolute inset-0 flex items-center justify-center font-display font-bold" style={{ fontSize: size * 0.3 }}>

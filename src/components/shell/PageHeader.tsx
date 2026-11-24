@@ -13,7 +13,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, backHref, backLabel, action }: PageHeaderProps) {
   return (
-    <header className="mb-5 pt-4 lg:mb-8 lg:pt-9">
+    <header className="mb-5 pt-4 lg:mb-6 lg:pt-8">
       {backHref && (
         <Link
           href={backHref}
@@ -38,7 +38,7 @@ export function PageHeader({ title, subtitle, backHref, backLabel, action }: Pag
 
 export function SectionTitle({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
   return (
-    <div className="mb-2.5 mt-7 flex items-baseline justify-between px-1 lg:mb-3.5 lg:mt-10">
+    <div className="mb-2.5 mt-7 flex items-baseline justify-between px-1 lg:mb-3 lg:mt-8">
       <h2 className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted lg:text-sm">
         {children}
       </h2>
