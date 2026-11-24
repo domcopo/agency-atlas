@@ -1439,7 +1439,10 @@ create temp table sales_scope_check as
                           -- 0024: one settings row salespeople read on purpose (their Scout cap);
                           -- tested explicitly in 7u. Every other scout_ table stays in this check
                           -- AND gets own-rows / shared-pool checks in 7u.
-                          'scout_settings');
+                          'scout_settings',
+                          -- 0026: the leaderboard view (names + totals only) is meant for
+                          -- salespeople; tested explicitly in 7w.
+                          'sales_leaderboard');
 do $$
 declare r record; n bigint;
 begin
@@ -1908,6 +1911,86 @@ select test.expect('select * from public.care_plans', 0, 'owner without two-fact
 select test.expect('select * from public.client_money', 0, 'owner without two-factor reads no amounts');
 select test.expect($$insert into public.care_plans (service, name) values ('SEO', 'No 2FA (test)')$$, -1, 'owner without two-factor cannot add a tier');
 commit;
+
+-- ---------------------------------------------------------------------------
+-- 7w. Sales leaderboard (0026): one read-only view of totals. Owner, managers and sales
+--     read it (two-factor); it lists salespeople plus linked owner/managers, with this
+--     month's Won value from GoHighLevel copies (sales pipelines only once picked).
+--     Salespeople still can't read the won deals behind the totals.
+-- ---------------------------------------------------------------------------
+update public.team_members set ghl_user_id = 'ghluserOwn1' where user_id = '00000000-0000-0000-0000-0000000000a1';
+insert into public.ghl_opportunities (ghl_id, name, status, monetary_value, pipeline_id, assigned_user_id, status_changed_at) values
+  ('wdeal1', 'Sample Won Roofing (fictional)', 'won', 5000, 'pipeSales', 'ghluser01', now()),
+  ('wdeal2', 'Sample Old Win (fictional)', 'won', 2500, 'pipeSales', 'ghluser01', '2000-01-15'),
+  ('wdeal3', 'Sample Dev Win (fictional)', 'won', 1000, 'pipeDev', 'ghluser01', now()),
+  ('wdeal4', 'Sample Won Bakery (fictional)', 'won', 750, 'pipeSales', 'ghluser09', now()),
+  ('wdeal5', 'Sample No Value Win (fictional)', 'won', null, 'pipeSales', 'ghluser01', now()),
+  ('wdeal6', 'Sample Lost (fictional)', 'lost', 9000, 'pipeSales', 'ghluser01', now()),
+  ('wdeal7', 'Sample Owner Win (fictional)', 'won', 4000, 'pipeSales', 'ghluserOwn1', now());
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.sales_leaderboard', 3, 'sales sees the board: both salespeople and the linked owner (not the unlinked manager or developers)');
+select test.expect($$select * from public.sales_leaderboard where is_me and name = 'Sales 1 (test)' and won_usd = 5000 and won_deals = 2$$, 1, 'only this month''s Won deals in sales pipelines count (old, other-pipeline and lost deals do not)');
+select test.expect($$select * from public.sales_leaderboard where name = 'Sales 2 (test)' and won_usd = 750 and not is_me$$, 1, 'the other salesperson''s total, credited by their GoHighLevel link');
+select test.expect($$select * from public.sales_leaderboard where name = 'Owner (test)' and won_usd = 4000 and linked$$, 1, 'a linked owner is on the board');
+select test.expect($$select * from public.ghl_opportunities where ghl_id like 'wdeal%'$$, 0, 'sales still cannot read the won deals behind the totals');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.sales_leaderboard', 3, 'a manager reads the board');
+commit;
+
+-- Before any sales pipeline is picked, every pipeline counts.
+update public.sales_pipelines set active = false;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.sales_leaderboard where is_me and won_usd = 6000 and won_deals = 3$$, 1, 'with no sales pipelines picked, Won deals in every pipeline count');
+commit;
+update public.sales_pipelines set active = true;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.sales_leaderboard', 0, 'developers read nothing from the board');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal1"}';
+select test.expect('select * from public.sales_leaderboard', 0, 'sales without two-factor read nothing from the board');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.sales_leaderboard', 0, 'someone not on the team reads nothing from the board');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.sales_leaderboard', -1, 'signed out cannot read the board');
+commit;
+
+do $$
+declare cols text;
+begin
+  select string_agg(column_name, ',' order by column_name) into cols
+  from information_schema.columns where table_schema = 'public' and table_name = 'sales_leaderboard';
+  if cols <> 'is_me,linked,name,won_deals,won_usd' then
+    raise exception 'FAILED: sales_leaderboard exposes unexpected columns: %', cols;
+  end if;
+  raise notice 'ok: the board shows only name, linked, is_me and totals';
+  if has_table_privilege('authenticated', 'public.sales_leaderboard', 'INSERT, UPDATE, DELETE, TRUNCATE') then
+    raise exception 'FAILED: signed-in users can write to sales_leaderboard';
+  end if;
+  raise notice 'ok: the board is read-only (select is the only permission)';
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
