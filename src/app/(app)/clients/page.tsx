@@ -61,7 +61,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
     .filter((c) => c.status === "active" && (!c.ownerId || noNextIds.has(c.id)))
     .sort((a, b) => Number(Boolean(a.ownerId)) - Number(Boolean(b.ownerId)) || byImportance(a, b));
   const money = summary.moneyShown;
-  // Journey (0028) and today's goal (0029): hidden until those setup steps are run.
+  // Journey (0028) and today's goal (0030): hidden until those setup steps are run.
   const allClients = withHealth.map(({ c }) => c);
   const growth = activeByMonth(allClients, today, 12);
   const stageCounts = [0, 0, 0, 0, 0, 0];

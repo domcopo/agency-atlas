@@ -96,7 +96,7 @@ export function draftMessage(t: JourneyTouch, business: string): string {
   return base.replaceAll("[Business]", business);
 }
 
-/** Done / Skip / unanswered call as saved (care_touches; "attempt" from 0029). */
+/** Done / Skip / unanswered call as saved (care_touches; "attempt" from 0030). */
 export interface TouchLog {
   step: number;
   status: "done" | "skipped" | "attempt";
@@ -132,7 +132,7 @@ export interface JourneyState {
   /** The 27 touches, in order (all "todo" for a client who never started onboarding). */
   ticks: Tick[];
   handled: number;
-  /** attempts = unanswered calls on this touch so far (0029). */
+  /** attempts = unanswered calls on this touch so far (0030). */
   next: { step: number; title: string; how: string; due: string; overdue: boolean; attempts: number } | null;
   startedOn: string | null;
 }
@@ -262,7 +262,7 @@ export function asTouchChannel(v: unknown): TouchChannel | null {
 }
 
 // ---------------------------------------------------------------------------
-// Calls first: points toward the daily goal (0029)
+// Calls first: points toward the daily goal (0030)
 // ---------------------------------------------------------------------------
 
 /** A real conversation counts most; a voicemail + text or a text/email counts 1. Tune here. */

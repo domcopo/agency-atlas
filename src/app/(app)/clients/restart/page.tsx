@@ -87,7 +87,7 @@ export default async function RestartPage({ searchParams }: { searchParams: Prom
       <SectionTitle aside={`talked ${CARE_POINTS.talked} · text, email or voicemail ${CARE_POINTS.message}`}>Daily goals</SectionTitle>
       {!goals.ready ? (
         <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">
-          Daily goals turn on after one setup step: run <span className="font-mono text-xs">0029_care_goals.sql</span> in Supabase.
+          Daily goals turn on after one setup step: run <span className="font-mono text-xs">0030_care_goals.sql</span> in Supabase.
         </p>
       ) : (
         <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
