@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { archiveAudit } from "@/app/actions";
+import { AdsAuditView } from "@/components/audit/ads/AdsAuditView";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -28,8 +29,9 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
   const audit = await getSavedAudit((await params).id);
   if (!audit) notFound();
   const settings = await getAuditSettings();
-  const i = audit.intake;
   const canEdit = isLead(me.role) || (audit.createdBy === me.userId && !audit.archived);
+  if (audit.kind === "ads") return <AdsAuditView audit={audit} settings={settings} canEdit={canEdit} canArchive={isLead(me.role)} />;
+  const i = audit.intake;
   const prompt = i ? buildAuditPrompt(i, audit.sections, { agencyName: settings.agency.agencyName, plans: settings.agency.plans, perAuditUsd: settings.caps.perAuditUsd }) : "";
   const pages = deckPages(audit.sections).length;
   const extras = AUDIT_SECTIONS.filter((s) => s.kind === "prompt" && audit.sections.includes(s.id));
@@ -51,14 +53,13 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="@container">
-      <PageHeader title={i?.company ?? audit.title} subtitle={i ? `${i.domain} · SEO audit` : "SEO audit"} backHref={`/audits/${audit.kind}`} backLabel={audit.kind === "ads" ? "Google Ads audits" : "SEO audits"} />
+      <PageHeader title={i?.company ?? audit.title} subtitle={i ? `${i.domain} · SEO audit` : "SEO audit"} backHref="/audits/seo" backLabel="SEO audits" />
 
       <div className="@3xl:grid @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @3xl:items-start @3xl:gap-6">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-1.5">
             {audit.archived && <Pill>Archived</Pill>}
             {audit.hasResults ? <Pill color="lime">Results attached</Pill> : <Pill color="amber">Not pulled yet</Pill>}
-            {i?.wantsAds && <Pill>Google Ads requested</Pill>}
           </div>
 
           <div className="grid grid-cols-2 gap-2">

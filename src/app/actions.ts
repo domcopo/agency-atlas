@@ -66,6 +66,7 @@ import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, u
 import { parseAuditConfig } from "@/lib/audit/config";
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
+import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -2640,6 +2641,93 @@ export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<
   revalidatePath("/growth/audits");
   revalidatePath("/audits", "layout");
   redirect(`/audits/${savedId}`);
+}
+
+const ADS_SETUP = "Saving Google Ads audits needs one setup step first (0028 SQL).";
+
+/** Save a Google Ads audit (new or edited). Same rules as saveAudit; checked by parseAdsIntake. */
+export async function saveAdsAudit(_prev: AuditFormState, form: FormData): Promise<AuditFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can save audits." };
+  const id = text(form, "id", 40);
+  if (id && !isUuid(id)) return { error: "Unknown audit." };
+  const leadId = text(form, "leadId", 64);
+  if (leadId && !/^[A-Za-z0-9_-]{1,64}$/.test(leadId)) return { error: "Unknown lead." };
+  const competitors = [0, 1, 2, 3, 4].map((i) => ({ name: text(form, `comp_name_${i}`, 120), domain: text(form, `comp_domain_${i}`, 200), town: text(form, `comp_town_${i}`, 120) }));
+  const checked = parseAdsIntake({
+    company: text(form, "company", 120),
+    domain: text(form, "domain", 300),
+    niche: text(form, "niche", 120),
+    hqTown: text(form, "hqTown", 120),
+    state: text(form, "state", 2),
+    cities: text(form, "cities", 1200),
+    services: text(form, "services", 800),
+    avgJobUsd: text(form, "avgJobUsd", 20),
+    avgJobConfirmed: form.get("avgJobConfirmed") === "on",
+    clickToLeadRate: text(form, "clickToLeadRate", 10),
+    leadToJobRate: text(form, "leadToJobRate", 10),
+    budgetsUsd: [0, 1, 2].map((i) => text(form, `budget_${i}`, 12)),
+    competitors,
+    modules: { dataforseo: form.get("mod_dataforseo") === "on", semrush: form.get("mod_semrush") === "on" },
+    notes: typeof form.get("notes") === "string" ? String(form.get("notes")).slice(0, INTAKE_LIMITS.notes + 50) : "",
+  });
+  if (!checked.ok) return { errors: checked.errors.slice(0, 8) };
+  const intake = checked.intake;
+  const sections = parseAdsSections(form.getAll("section"));
+  const title = `${intake.company} Google Ads audit`.slice(0, 120);
+  const db = await createDatabaseClient();
+  let savedId = id;
+  if (id) {
+    const { data, error } = await db.from("audits").update({ title, intake, sections }).eq("id", id).eq("kind", "ads").select("id").maybeSingle();
+    if (error || !data) {
+      console.warn(`Ads audit not saved: ${error?.code ?? "no row"}`);
+      return { error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : error?.code === "23514" ? ADS_SETUP : "Couldn't save it (it may be archived, or not yours)." };
+    }
+  } else {
+    const { data, error } = await db
+      .from("audits")
+      .insert({ title, kind: "ads", intake, sections, lead_ghl_id: leadId || null, created_by: me.userId })
+      .select("id")
+      .single();
+    if (error || !data) {
+      console.warn(`Ads audit not added: ${error?.code}`);
+      // 23514 here almost always means 0028 hasn't been run (the old rule refuses "ads_" checkpoints).
+      return { error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : error?.code === "42501" ? "That lead isn't an open lead in a sales pipeline." : error?.code === "23514" ? ADS_SETUP : "Couldn't save it." };
+    }
+    savedId = data.id as string;
+  }
+  revalidatePath("/sales", "layout");
+  revalidatePath("/audits", "layout");
+  redirect(`/audits/${savedId}`);
+}
+
+/** Owner: the Google Ads management plans (audit_settings.ads_plans, 0028). */
+export async function saveAdsPlans(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can set Google Ads prices." };
+  const rec = text(form, "recommended", 2);
+  const rawPlans = [0, 1, 2, 3]
+    .map((i) => ({
+      name: text(form, `ads_name_${i}`, 40),
+      feeUsd: Number(text(form, `ads_fee_${i}`, 10).replace(/[$,\s]/g, "")),
+      summary: text(form, `ads_summary_${i}`, 120),
+      recommended: rec === String(i),
+    }))
+    .filter((p) => p.name);
+  const found = contactDetailsIn(rawPlans.map((p) => `${p.name} ${p.summary}`).join(" "));
+  if (found.length) return { error: `Leave out ${found.join(" and ")}.` };
+  const plans = parseAdsPlans(rawPlans);
+  if (plans.length !== rawPlans.length) return { error: "Each plan needs a name and a monthly fee of $0–$100,000." };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("audit_settings").update({ ads_plans: plans, updated_by: me.userId, updated_at: new Date().toISOString() }).eq("id", true);
+  if (error) {
+    console.warn(`Ads plans refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Google Ads prices need one setup step first (0028 SQL)." : "Couldn't save the prices." };
+  }
+  revalidatePath("/audits", "layout");
+  return { ok: true };
 }
 
 /** Owner and managers: hide an audit (or bring it back). Never deleted. */

@@ -5,14 +5,13 @@ import { FileSearch, MousePointerClick } from "lucide-react";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { stateName } from "@/lib/audit/geo";
-import { deckPages } from "@/lib/audit/sections";
 import type { SavedAudit } from "@/lib/data-source";
 import { formatShortDate } from "@/lib/format";
 
 export const KIND_LABEL = { seo: "SEO audit", ads: "Google Ads audit" } as const;
 
 export function SavedAuditCard({ a, showKind = false }: { a: SavedAudit; showKind?: boolean }) {
-  const i = a.intake;
+  const i = a.base;
   const Icon = a.kind === "ads" ? MousePointerClick : FileSearch;
   return (
     <GlassCard href={`/audits/${a.id}`} label={`Open ${a.title}`} className="h-full space-y-1.5">
@@ -32,7 +31,7 @@ export function SavedAuditCard({ a, showKind = false }: { a: SavedAudit; showKin
       )}
       <p className="text-[11px] text-faint">
         {showKind ? `${KIND_LABEL[a.kind]} · ` : ""}
-        {deckPages(a.sections).length} pages · {i?.competitors.length ?? 0} competitors named · {a.createdByName ? `by ${a.createdByName}, ` : ""}
+        {a.pageCount} pages · {i?.competitors ?? 0} competitors named · {a.createdByName ? `by ${a.createdByName}, ` : ""}
         {formatShortDate(a.createdAt.slice(0, 10))}
         {a.leadGhlId ? " · from a lead" : ""}
       </p>

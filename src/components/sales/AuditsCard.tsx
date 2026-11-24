@@ -23,7 +23,7 @@ export function AuditDoors() {
         <Link href="/audits/ads" className="pressable flex min-h-16 flex-col justify-center gap-1 rounded-2xl border border-line bg-white/5 px-3 py-2">
           <MousePointerClick aria-hidden className="size-5 text-amber" />
           <span className="text-sm font-semibold">
-            Google Ads audit <span className="block text-[10.5px] font-normal text-faint">Coming soon</span>
+            Google Ads audit
           </span>
         </Link>
       </div>
@@ -45,9 +45,9 @@ export async function AuditsCard({ mine }: { mine: boolean }) {
                 <Link href={`/audits/${a.id}`} className="pressable flex min-h-12 items-center gap-3 px-4 py-2.5">
                   {a.kind === "ads" ? <MousePointerClick aria-hidden className="size-4 shrink-0 text-amber" /> : <FileSearch aria-hidden className="size-4 shrink-0 text-teal" />}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{a.intake?.company ?? a.title}</span>
+                    <span className="block truncate text-sm font-semibold">{a.base?.company ?? a.title}</span>
                     <span className="block truncate text-[11px] text-faint">
-                      {a.kind === "ads" ? "Google Ads" : "SEO"} · {a.intake?.domain ?? ""} · {formatShortDate(a.createdAt.slice(0, 10))}
+                      {a.kind === "ads" ? "Google Ads" : "SEO"} · {a.base?.domain ?? ""} · {formatShortDate(a.createdAt.slice(0, 10))}
                     </span>
                   </span>
                 </Link>

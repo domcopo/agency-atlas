@@ -1993,6 +1993,47 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 7x. Google Ads audits (0028): Ads audits use their own checkpoint list (ads_ ids only),
+--     SEO audits keep theirs; nobody can mix them. Ads management prices: owner edits,
+--     sales reads. Who reads or saves audits is unchanged (7t).
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$insert into public.audits (id, kind, title, sections, intake) values ('00000000-0000-0000-0000-00000000ae11', 'ads', 'Sample Plumbing Google Ads audit (fictional)', '{ads_market,ads_cpc,ads_calculator,ads_plan}', '{"domain":"plumbing.example"}')$$, 1, 'sales saves a Google Ads audit with Ads checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('ads', 'X', '{summary}', '{}')$$, -2, 'an Ads audit cannot use SEO checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('seo', 'X', '{summary,ads_cpc}', '{}')$$, -2, 'an SEO audit cannot use Ads checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('ads', 'X', '{ads_market,ads_hack}', '{}')$$, -2, 'unknown Ads checkpoints are rejected');
+select test.expect($$update public.audits set sections = '{ads_market,rankings}' where id = '00000000-0000-0000-0000-00000000ae11'$$, -2, 'an Ads audit cannot be edited to SEO checkpoints');
+select test.expect($$update public.audits set sections = '{ads_market,ads_bidders,ads_spend}' where id = '00000000-0000-0000-0000-00000000ae11'$$, 1, 'sales edits the checkpoints of their own Ads audit');
+select test.expect($$update public.audits set kind = 'seo' where id = '00000000-0000-0000-0000-00000000ae11'$$, -1, 'nobody can change the kind of an audit');
+select test.expect($$select ads_plans from public.audit_settings$$, 1, 'sales reads the Google Ads prices');
+select test.expect($$update public.audit_settings set ads_plans = '[{"name":"Sneaky (test)","feeUsd":1}]'$$, 0, 'sales cannot set Google Ads prices');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect($$select * from public.audits where id = '00000000-0000-0000-0000-00000000ae11'$$, 0, 'another salesperson cannot read someone else''s Ads audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.audits where kind = 'ads'$$, 1, 'owner reads every Ads audit');
+select test.expect($$update public.audit_settings set ads_plans = '[{"name":"Launch (test)","feeUsd":500},{"name":"Grow (test)","feeUsd":900,"recommended":true}]', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner sets the Google Ads prices');
+select test.expect($$update public.audit_settings set ads_plans = '[1,2,3,4,5]', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'at most 4 Google Ads plans');
+select test.expect($$update public.audit_settings set ads_plans = '{"name":"x"}', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'Google Ads plans must be a list');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.audits where kind = 'ads'$$, 0, 'developers read no Ads audits');
+select test.expect($$select ads_plans from public.audit_settings$$, 0, 'developers read no Google Ads prices');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
