@@ -2,7 +2,7 @@
 
 Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Vercel Pro) for a small marketing agency (SEO, ads, website builds). Roles: owner, manager, developer, sales. Tabs: Home · Clients · Sales · Work · Growth · Kit, plus Data Safety (shield on Home).
 
-**Status (2026-11-24):** live for the team. Database migrations 0001–0023 have been run (0024 Scout written, not run). Real data lives only in the user's Supabase project (33 clients, 7 team); `private-data/` was moved to the user's Trash, so the database is the only live copy (daily backups). Two-factor is required for everyone.
+**Status (2026-11-24):** live for the team. Database migrations 0001–0024 have been run. Real data lives only in the user's Supabase project (33 clients, 7 team); `private-data/` was moved to the user's Trash, so the database is the only live copy (daily backups). Two-factor is required for everyone.
 
 **Detailed notes per feature:** `docs/PROJECT_HISTORY.md` (what each phase added, column names, triggers, edge cases). Each feature also has its own plan doc (table below). Read the relevant one before changing an area; don't load them all.
 
@@ -23,7 +23,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 - **Data:** screens read only through `src/lib/data-source.ts`. With Supabase configured, `showsSamples()` is false, so there are never made-up records next to real ones.
 - **Writes:** all database writes are in `src/app/actions.ts`. They are validated, run as the signed-in user, and every exported action starts with `await notWhilePreviewing();`. The only deletes are `deleteForever` (owner, from Trash).
 - **Database:**
-  - Schema and RLS live in `supabase/migrations/` (next number: 0025; `0023` saved audits is run; `0024` Scout is written but not run yet). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
+  - Schema and RLS live in `supabase/migrations/` (next number: 0025; 0001–0024 are run). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
   - Every new table needs RLS, a restrictive `aal2` policy and break-in tests in `supabase/tests/10_rls_break_in.sql` (`npm run test:rls`).
   - App code must keep working before a new migration is run (column fallbacks, "needs 00xx" messages).
 - **Sign-in:** `src/proxy.ts` sends any session below `aal2` to `/mfa`. Cookies are httpOnly (secure on Vercel); HSTS and noindex are on. No service worker or offline cache.

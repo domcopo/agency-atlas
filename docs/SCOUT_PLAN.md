@@ -1,6 +1,6 @@
 # Plan: Scout, a local prospect finder in Sales
 
-Status: **approved 2026-11-24. S1 built** (not committed; `0024` not run yet). Owner answers:
+Status: **approved 2026-11-24. S1 built and committed; `0024` run by the owner 2026-11-24.** Owner answers:
 - **Home base:** Austintown, Ohio (the office). **Area:** Mahoning, Trumbull and Columbiana counties, or anything within **30 miles**. Later maybe an hour's drive, if the leads are good and it's worth it.
 - **First kinds of business:** **construction companies and home-service businesses** (contractors, roofers, HVAC, plumbers, electricians, landscapers…). In other words, anyone we can rank high in local SEO, then grow into ads and scale.
 - **Who runs scouts:** salespeople may run them too.
