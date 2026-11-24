@@ -1,7 +1,7 @@
 -- Agency Atlas: calls-first touches, daily goals and the AI helper's cost log (client care
 -- Step 1D, approved 2026-11-24, docs/CLIENT_CARE_PLAN.md).
 --
--- Run ONCE in the Supabase SQL Editor, after 0028_client_journey.sql and 0029 (Google Ads audits; any order). Check today's backup
+-- Run ONCE in the Supabase SQL Editor, after 0028_client_journey.sql, 0029 (Google Ads audits) and 0030 (BizToad). Keeps BizToad's 'ask_toad' AI feature. Check today's backup
 -- first. Undo steps are at the end.
 --
 -- What this adds:
@@ -76,7 +76,7 @@ create policy care_targets_requires_2fa on public.care_targets as restrictive fo
 -- ---------------------------------------------------------------------------
 alter table public.ai_usage drop constraint ai_usage_feature_check;
 alter table public.ai_usage add constraint ai_usage_feature_check
-  check (feature in ('briefing', 'client_profile', 'work_orders', 'work_prompt', 'quick_add', 'care_suggestions', 'care_draft'));
+  check (feature in ('briefing', 'client_profile', 'work_orders', 'work_prompt', 'quick_add', 'ask_toad', 'care_suggestions', 'care_draft'));
 
 commit;
 

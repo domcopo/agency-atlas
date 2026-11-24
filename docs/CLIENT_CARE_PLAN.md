@@ -1,7 +1,7 @@
 # Client care plan
 
-**Status (2026-11-24):** Steps 1A (`0025`) and 1B (`0028`) are built, merged and run on the live database. **Step 1D was approved and BUILT on 2026-11-24 (`0030_care_goals.sql` not run yet; Google Ads audits took 0029).** Step 1C (VA logins) has not started.
-**Branch:** `claude/client-care-53178d` (own worktree). **Migration order** (owner, 2026-11-24): 0024 Scout, 0025 client care, 0026 sales leaderboard, 0027 SEO Watcher, 0028 client journey. 0029 Google Ads audits, 0030 care goals (Step 1D); next free 0031.
+**Status (2026-11-24):** Steps 1A (`0025`) and 1B (`0028`) are built, merged and run on the live database. **Step 1D was approved and BUILT on 2026-11-24 (`0031_care_goals.sql` not run yet; Google Ads audits took 0029 and BizToad 0030).** Step 1C (VA logins) has not started.
+**Branch:** `claude/client-care-53178d` (own worktree). **Migration order** (owner, 2026-11-24): 0024 Scout, 0025 client care, 0026 sales leaderboard, 0027 SEO Watcher, 0028 client journey. 0029 Google Ads audits, 0030 BizToad, 0031 care goals (Step 1D); next free 0032.
 
 ## Step 1D (built 2026-11-24): restart everyone, journey board, daily goal, AI helper
 
@@ -47,7 +47,7 @@ The owner's request: put every client back through month 1 in "an amazing system
 - **"Check-ins due"** is replaced by the journey's touches due, because the two said the same thing.
 - **The owner's setup links** (Set up clients, Plan tiers, Match GoHighLevel contacts, Restart journeys) go into one "Setup" row of small buttons.
 
-**Database change `0030_care_goals.sql`** (renumbered from 0029, which Google Ads audits took):
+**Database change `0031_care_goals.sql`** (renumbered twice: Google Ads audits took 0029, BizToad 0030; it keeps BizToad's `ask_toad` AI feature in the cost-log rule):
 - `care_touches` gains an `attempt` status and an `outcome` (talked / voicemail / text instead).
 - `care_targets`: a daily goal per person (owner sets it; each person reads their own).
 - RLS, the two-factor rule and break-in tests, as always.

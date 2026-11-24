@@ -2241,7 +2241,7 @@ select test.expect($$select ads_plans from public.audit_settings$$, 0, 'develope
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7y. Calls first + daily goals (0030): an unanswered call is an "attempt" (call or video,
+-- 7y. Calls first + daily goals (0031): an unanswered call is an "attempt" (call or video,
 --     voicemail only); "talked" only for calls; goals: owner sets, you read your own.
 -- ---------------------------------------------------------------------------
 begin;

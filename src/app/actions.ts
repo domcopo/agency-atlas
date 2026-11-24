@@ -1374,7 +1374,7 @@ export async function setClientStatus(_prev: JourneyFormState, form: FormData): 
   return { ok: true };
 }
 
-/** How a touch happened, as picked on the Done form. "call_noanswer" keeps the touch open (0030). */
+/** How a touch happened, as picked on the Done form. "call_noanswer" keeps the touch open (0031). */
 const TOUCH_HOW = {
   call_talked: { status: "done", channel: "call", outcome: "talked" },
   call_noanswer: { status: "attempt", channel: "call", outcome: "voicemail" },
@@ -1386,7 +1386,7 @@ const TOUCH_HOW = {
 /**
  * Log a journey touch:
  * - Done (talked, text or email) also logs a check-in, so health and "last contact" stay right;
- * - No answer (voicemail + text) keeps the touch open for the next working day (0030);
+ * - No answer (voicemail + text) keeps the touch open for the next working day (0031);
  * - Skip needs a reason.
  */
 export async function logTouch(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
@@ -1413,11 +1413,11 @@ export async function logTouch(_prev: JourneyFormState, form: FormData): Promise
   const outcome = how && how.outcome === null && touch.channel === "call" ? "text_instead" : (how?.outcome ?? null);
   const row: Record<string, string | number | null> = { client_id: clientId, step: touch.step, status: skip ? "skipped" : how!.status, happened_on: day, channel: how?.channel ?? null, note: note || null };
   let { error } = await db.from("care_touches").insert(outcome ? { ...row, outcome } : row);
-  // Before 0030 there's no outcome column (and no "no answer"): save the plain touch.
+  // Before 0031 there's no outcome column (and no "no answer"): save the plain touch.
   if (error && MISSING_COLUMN.has(error.code) && row.status !== "attempt") ({ error } = await db.from("care_touches").insert(row));
   if (error) {
     console.warn(`Touch not logged: ${error.code}`);
-    if (row.status === "attempt") return { error: "\"No answer\" needs one setup step first (0030 SQL). Ask the owner." };
+    if (row.status === "attempt") return { error: "\"No answer\" needs one setup step first (0031 SQL). Ask the owner." };
     return { error: MISSING_TABLE.has(error.code ?? "") ? "The journey needs one setup step first (0028 SQL). Ask the owner." : "Couldn't save that." };
   }
   if (how && how.status === "done") {
@@ -1501,7 +1501,7 @@ export async function restartAllJourneys(form: FormData) {
   redirect("/clients");
 }
 
-/** Owner only: one person's daily goal in points (0030). */
+/** Owner only: one person's daily goal in points (0031). */
 export async function saveCareTarget(form: FormData) {
   await notWhilePreviewing();
   const me = await getCurrentMember();

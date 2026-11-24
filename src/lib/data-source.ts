@@ -356,7 +356,7 @@ export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map
 });
 
 /**
- * Today's goal for the signed-in person (0030): points from the touches they logged today
+ * Today's goal for the signed-in person (0031): points from the touches they logged today
  * against their daily goal (default 15). null before 0028 or for people who can't log touches.
  */
 export const getCareToday = cache(async (): Promise<ReturnType<typeof dayProgress> & { ready: boolean } | null> => {
@@ -368,7 +368,7 @@ export const getCareToday = cache(async (): Promise<ReturnType<typeof dayProgres
   const mine = (cols: string) => db.from("care_touches").select(cols).eq("logged_by", me.userId).eq("happened_on", day).limit(500);
   let res = await mine("step, status, channel, outcome");
   const ready = !res.error;
-  if (res.error) res = await mine("step, status, channel"); // before 0030
+  if (res.error) res = await mine("step, status, channel"); // before 0031
   if (res.error) return null; // before 0028
   const goalRow = ready ? await db.from("care_targets").select("daily_points").eq("user_id", me.userId).maybeSingle() : { data: null };
   const goal = Number((goalRow.data as { daily_points?: number } | null)?.daily_points ?? DEFAULT_DAILY_POINTS);
@@ -381,7 +381,7 @@ export const getCareToday = cache(async (): Promise<ReturnType<typeof dayProgres
   return { ...dayProgress(logs, goal), ready };
 });
 
-/** Owner: every login and their daily care goal (0030). ready=false before 0030. */
+/** Owner: every login and their daily care goal (0031). ready=false before 0031. */
 export async function getCareGoals(): Promise<{ ready: boolean; people: { userId: string; name: string; role: string; points: number }[] }> {
   if (!usesDatabase() || (await getMember())?.role !== "owner") return { ready: false, people: [] };
   const db = await createDatabaseClient();

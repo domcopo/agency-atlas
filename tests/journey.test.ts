@@ -128,7 +128,7 @@ describe("touches due on Home", () => {
   });
 });
 
-describe("calls first (0030)", () => {
+describe("calls first (0031)", () => {
   it("an unanswered call keeps the touch open and brings it back the next working day", () => {
     const j = journeyState({ startedOn: "2026-11-20", touches: [{ step: 1, status: "attempt", happenedOn: "2026-11-20" }], today: "2026-11-24" });
     // Fri Nov 20 → Mon Nov 23 (weekend skipped).

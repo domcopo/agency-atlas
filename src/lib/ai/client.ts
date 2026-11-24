@@ -168,7 +168,7 @@ const obj = (properties: Record<string, unknown>) => ({
   additionalProperties: false,
 });
 
-// Client care helper (0030, docs/CLIENT_CARE_PLAN.md Step 1D). Suggestions only.
+// Client care helper (0031, docs/CLIENT_CARE_PLAN.md Step 1D). Suggestions only.
 export const CARE_MOVES_SCHEMA = obj({
   moves: { type: "array", items: obj({ client: str, why: str, lead_with: str }) },
 });
