@@ -1435,7 +1435,11 @@ create temp table sales_scope_check as
                           -- 0023: one settings row salespeople read on purpose (caps + plan prices);
                           -- tested explicitly in 7t. audits / audit_spend / audit_user_limits stay
                           -- in this check AND get own-rows-only checks in 7t.
-                          'audit_settings');
+                          'audit_settings',
+                          -- 0024: one settings row salespeople read on purpose (their Scout cap);
+                          -- tested explicitly in 7u. Every other scout_ table stays in this check
+                          -- AND gets own-rows / shared-pool checks in 7u.
+                          'scout_settings');
 do $$
 declare r record; n bigint;
 begin
@@ -1696,7 +1700,136 @@ select test.expect('select * from public.audit_settings', 0, 'someone not on the
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7u. Client care (0025): plan tiers (owner edits, managers read), each client's tier
+-- 7u. Scout (0024): runs, a capped spending ledger, prospects (own + shared pool, claim
+--     for yourself only), an add-only visit log, do-not-contact. No phones or emails.
+--     Caps: $10/month per salesperson, $25/month for everyone.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.scout_settings', 1, 'sales reads the one Scout settings row (their cap)');
+select test.expect($$insert into public.scout_runs (id, area, kinds, size, est_usd) values ('00000000-0000-0000-0000-0000000005c1', 'Austintown, OH, 30 mi', '{roofing contractor,plumber}', 100, 4.25)$$, 1, 'sales starts a Scout run');
+select test.expect($$insert into public.scout_runs (area, kinds, size, est_usd, created_by) values ('X', '{plumber}', 10, 1, '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot start a run as someone else');
+select test.expect($$insert into public.scout_runs (area, kinds, size, est_usd) values ('call 330-555-0100', '{plumber}', 10, 1)$$, -2, 'run areas refuse phone numbers');
+select test.expect($$insert into public.scout_runs (area, kinds, size, est_usd) values ('X', '{plumber}', 5000, 1)$$, -2, 'runs are at most 200 businesses');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd, at) values ('00000000-0000-0000-0000-0000000005c1', 'dataforseo', 4.25, '2020-01-01')$$, 1, 'sales records the run estimate before it runs');
+select test.expect($$select * from public.scout_spend where at > now() - interval '1 minute'$$, 1, 'a back-dated Scout spend row is stamped with now');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c1', 'dataforseo', 6)$$, -2, 'the $10/month per-salesperson cap stops more');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c1', 'dataforseo', 5.75)$$, 1, 'spend up to the per-salesperson cap is allowed');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c1', 'other', 0.1)$$, -2, 'unknown Scout data providers are rejected');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd, user_id) values ('00000000-0000-0000-0000-0000000005c1', 'dataforseo', 0.01, '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot record Scout spend as someone else');
+select test.expect($$update public.scout_spend set usd = 0.01$$, -1, 'Scout spend rows cannot be changed');
+select test.expect($$delete from public.scout_spend$$, -1, 'Scout spend rows cannot be deleted');
+select test.expect($$insert into public.scout_prospects (id, run_id, business_key, name, town, score, angle, assigned_to, status, lat, lng) values ('00000000-0000-0000-0000-0000000005a1', '00000000-0000-0000-0000-0000000005c1', 'd:sample-roofing-a.example.com', 'Sample Roofing A (fictional)', 'Austintown', 80, 'ads', '00000000-0000-0000-0000-0000000000a6', 'won', 41.1, -80.7)$$, 1, 'sales saves a prospect from their own run, for themselves');
+select test.expect($$select * from public.scout_prospects where status = 'new' and name_key = 'sampleroofingafictional'$$, 1, 'a new prospect always starts as new, and the database works out its name key');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle) values ('00000000-0000-0000-0000-0000000005c1', 'd:pool.example.com', 'Sample Pool Add (fictional)', 50, 'seo')$$, -1, 'sales cannot put prospects in the shared pool');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle, assigned_to) values ('00000000-0000-0000-0000-0000000005c1', 'd:x1.example.com', 'Call 330-555-0100', 50, 'seo', '00000000-0000-0000-0000-0000000000a6')$$, -2, 'prospect names refuse phone numbers');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, address, score, angle, assigned_to) values ('00000000-0000-0000-0000-0000000005c1', 'd:x2.example.com', 'Sample X (fictional)', 'pat@example.com', 50, 'seo', '00000000-0000-0000-0000-0000000000a6')$$, -2, 'prospect addresses refuse email addresses');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle, assigned_to, signals) values ('00000000-0000-0000-0000-0000000005c1', 'd:x3.example.com', 'Sample Y (fictional)', 50, 'seo', '00000000-0000-0000-0000-0000000000a6', '{"phone":"3305550100"}')$$, -2, 'prospect signals refuse phone numbers');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle, assigned_to) values ('00000000-0000-0000-0000-0000000005c1', 'n:x|y', 'The Pat Example (fictional) LLC', 50, 'seo', '00000000-0000-0000-0000-0000000000a6')$$, 0, 'a business that is already a client is skipped');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle, assigned_to) values ('00000000-0000-0000-0000-0000000005c1', 'n:a|b', 'Sample Roofing (fictional), Inc.', 50, 'seo', '00000000-0000-0000-0000-0000000000a6')$$, 0, 'a business already in the GoHighLevel copy is skipped (even though sales cannot read that lead)');
+select test.expect($$update public.scout_prospects set name = 'Renamed' where id = '00000000-0000-0000-0000-0000000005a1'$$, -1, 'nobody can change a prospect''s business facts');
+select test.expect($$update public.scout_prospects set status = 'won' where id = '00000000-0000-0000-0000-0000000005a1'$$, 0, 'sales cannot change their prospect''s status directly (only by logging a visit)');
+select test.expect($$delete from public.scout_prospects$$, -1, 'sales cannot delete prospects');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome, note) values ('00000000-0000-0000-0000-0000000005a1', 'walk_in', 'not_interested', 'Owner busy, try spring')$$, 1, 'sales logs a walk-in on their prospect');
+select test.expect($$select * from public.scout_prospects where id = '00000000-0000-0000-0000-0000000005a1' and status = 'not_interested' and next_ok_on > current_date and assigned_to = '00000000-0000-0000-0000-0000000000a6'$$, 1, 'not interested: status moves and a try-again date is set; nothing else changes');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome, note) values ('00000000-0000-0000-0000-0000000005a1', 'call', 'staff', 'call 330-555-0100')$$, -2, 'visit notes refuse phone numbers');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome) values ('00000000-0000-0000-0000-0000000005a1', 'email', 'staff')$$, -2, 'unknown visit kinds are rejected');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome, user_id) values ('00000000-0000-0000-0000-0000000005a1', 'call', 'staff', '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot log a visit as someone else');
+select test.expect($$update public.scout_visits set outcome = 'interested'$$, -1, 'visits cannot be changed');
+select test.expect($$delete from public.scout_visits$$, -1, 'visits cannot be deleted');
+select test.expect('select * from public.scout_do_not_contact', 0, 'sales cannot read the do-not-contact list');
+select test.expect($$insert into public.scout_do_not_contact (business_key, name_key) values ('d:z.example.com', 'z')$$, -1, 'sales cannot write the do-not-contact list directly');
+select test.expect($$update public.scout_settings set per_rep_monthly_usd = 500$$, 0, 'sales cannot raise the Scout caps');
+select test.expect($$insert into public.scout_user_limits (user_id, monthly_usd) values ('00000000-0000-0000-0000-0000000000a6', 500)$$, -1, 'sales cannot set their own Scout cap');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.scout_runs (id, area, kinds, size, est_usd) values ('00000000-0000-0000-0000-0000000005c2', 'Mahoning, Trumbull, Columbiana', '{general contractor}', 150, 6.25)$$, 1, 'owner starts a Scout run');
+select test.expect($$insert into public.scout_prospects (id, run_id, business_key, name, score, angle) values ('00000000-0000-0000-0000-0000000005a2', '00000000-0000-0000-0000-0000000005c2', 'd:pool-one.example.com', 'Sample Pool One (fictional)', 70, 'seo')$$, 1, 'owner adds a prospect to the shared pool');
+select test.expect($$insert into public.scout_prospects (id, run_id, business_key, name, score, angle) values ('00000000-0000-0000-0000-0000000005a3', '00000000-0000-0000-0000-0000000005c2', 'd:pool-two.example.com', 'Sample Pool Two (fictional)', 60, 'website')$$, 1, 'owner adds a second pool prospect');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle) values ('00000000-0000-0000-0000-0000000005c2', 'd:pool-one.example.com', 'Sample Pool One Again (fictional)', 70, 'seo')$$, -3, 'the same business is saved only once');
+select test.expect('select * from public.scout_prospects', 3, 'owner reads every prospect');
+select test.expect('select * from public.scout_runs', 2, 'owner reads every run');
+select test.expect($$update public.scout_settings set monthly_usd = 25, updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner sets the Scout caps');
+select test.expect($$update public.scout_settings set monthly_usd = 99999, updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'absurd Scout caps are rejected');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c1', 'dataforseo', 0.01)$$, -1, 'nobody records spend on someone else''s run');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c2', 'dataforseo', 15)$$, 1, 'owner spend up to the monthly total is allowed');
+select test.expect($$insert into public.scout_spend (run_id, provider, usd) values ('00000000-0000-0000-0000-0000000005c2', 'dataforseo', 0.01)$$, -2, 'the $25/month Scout total stops everyone, the owner too');
+select test.expect($$update public.scout_prospects set name = 'Renamed (fictional)', score = 1 where id = '00000000-0000-0000-0000-0000000005a2'$$, -1, 'even the owner cannot change business facts or the score');
+select test.expect($$delete from public.scout_prospects$$, -1, 'even the owner cannot delete prospects');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect('select * from public.scout_prospects', 2, 'another salesperson sees only the shared pool, not someone else''s prospects');
+select test.expect($$select * from public.scout_prospects where id = '00000000-0000-0000-0000-0000000005a1'$$, 0, 'a salesperson cannot read another salesperson''s prospect');
+select test.expect('select * from public.scout_runs', 0, 'a salesperson cannot read someone else''s runs');
+select test.expect('select * from public.scout_spend', 0, 'a salesperson cannot read someone else''s Scout spend');
+select test.expect('select * from public.scout_visits', 0, 'a salesperson cannot read someone else''s visits');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a6' where id = '00000000-0000-0000-0000-0000000005a3'$$, -1, 'a salesperson cannot claim for someone else');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a7', status = 'won', archived_at = now() where id = '00000000-0000-0000-0000-0000000005a2'$$, -1, 'claiming cannot change anything else');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a7' where id = '00000000-0000-0000-0000-0000000005a2'$$, 1, 'a salesperson claims a pool prospect for themselves');
+select test.expect($$update public.scout_prospects set assigned_to = null where id = '00000000-0000-0000-0000-0000000005a2'$$, 0, 'a salesperson cannot put a prospect back in the pool');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a7' where id = '00000000-0000-0000-0000-0000000005a1'$$, 0, 'a salesperson cannot take someone else''s prospect');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome) values ('00000000-0000-0000-0000-0000000005a3', 'walk_in', 'owner')$$, -1, 'a salesperson cannot log a visit on a pool prospect they have not claimed');
+select test.expect($$insert into public.scout_visits (prospect_id, kind, outcome) values ('00000000-0000-0000-0000-0000000005a2', 'walk_in', 'no_soliciting')$$, 1, 'a salesperson logs "no soliciting" on their prospect');
+select test.expect($$select * from public.scout_prospects where id = '00000000-0000-0000-0000-0000000005a2' and status = 'do_not_contact'$$, 1, 'no soliciting = do not contact');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.scout_prospects where id = '00000000-0000-0000-0000-0000000005a2'$$, 0, 'once claimed, other salespeople no longer see it');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a6' where id = '00000000-0000-0000-0000-0000000005a2'$$, 0, 'a claimed prospect cannot be claimed again');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.scout_prospects', 3, 'a manager reads every prospect');
+select test.expect('select * from public.scout_do_not_contact', 1, 'a manager reads the do-not-contact list (filled by the visit)');
+select test.expect($$insert into public.scout_prospects (run_id, business_key, name, score, angle) values ('00000000-0000-0000-0000-0000000005c2', 'd:other-site.example.com', 'Sample Pool One (fictional)', 70, 'seo')$$, 0, 'a do-not-contact business is skipped in future runs, even under another web address');
+select test.expect($$insert into public.scout_do_not_contact (business_key, name_key) values ('d:dnc.example.com', 'dnc')$$, 1, 'a manager adds to the do-not-contact list');
+select test.expect($$delete from public.scout_do_not_contact$$, -1, 'nobody deletes from the do-not-contact list');
+select test.expect($$update public.scout_prospects set assigned_to = '00000000-0000-0000-0000-0000000000a6', status = 'new' where id = '00000000-0000-0000-0000-0000000005a3'$$, 1, 'a manager assigns a prospect to a salesperson');
+select test.expect($$update public.scout_settings set monthly_usd = 400, updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 0, 'managers cannot change the Scout caps');
+select test.expect($$insert into public.scout_user_limits (user_id, monthly_usd) values ('00000000-0000-0000-0000-0000000000a6', 50)$$, -1, 'managers cannot set a salesperson''s Scout cap');
+select test.expect($$update public.scout_runs set status = 'attached', found = 2 where id = '00000000-0000-0000-0000-0000000005c2'$$, 1, 'a manager attaches results to a run');
+select test.expect($$update public.scout_runs set status = 'attached', found = 3 where id = '00000000-0000-0000-0000-0000000005c2'$$, -2, 'results can be attached only once');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.scout_prospects', 0, 'developers read no prospects');
+select test.expect('select * from public.scout_runs', 0, 'developers read no Scout runs');
+select test.expect('select * from public.scout_settings', 0, 'developers read no Scout settings');
+select test.expect('select * from public.scout_spend', 0, 'developers read no Scout spend');
+select test.expect('select * from public.scout_visits', 0, 'developers read no visits');
+select test.expect('select * from public.scout_do_not_contact', 0, 'developers read no do-not-contact list');
+select test.expect($$insert into public.scout_runs (area, kinds, size, est_usd) values ('X', '{plumber}', 10, 1)$$, -1, 'developers cannot start Scout runs');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal1"}';
+select test.expect('select * from public.scout_prospects', 0, 'sales without two-factor reads no prospects');
+select test.expect($$insert into public.scout_runs (area, kinds, size, est_usd) values ('X', '{plumber}', 10, 1)$$, -1, 'sales without two-factor cannot start runs');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.scout_prospects', 0, 'someone not on the team reads no prospects');
+select test.expect('select * from public.scout_settings', 0, 'someone not on the team reads no Scout settings');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7v. Client care (0025): plan tiers (owner edits, managers read), each client's tier
 --     (manager may set it once on a new client), amounts OWNER ONLY, managers add clients
 --     but never VIP or an amount, and clients.monthly_usd is locked for everyone.
 -- ---------------------------------------------------------------------------

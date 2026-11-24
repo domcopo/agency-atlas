@@ -31,7 +31,7 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
   const { id } = await params;
   let bundle: AuditBundle | null = null;
   let sections: AuditSectionId[] | undefined;
-  let back = { href: "/sales/audits", label: "Audits" };
+  let back = { href: "/audits/seo", label: "Audits" };
   if (id === SAMPLE_AUDIT_ID) {
     bundle = getAuditPreview(id);
   } else if (usesDatabase()) {
@@ -39,7 +39,7 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
     if (saved) {
       bundle = await getSavedAuditBundle(saved);
       sections = saved.sections;
-      back = { href: `/sales/audits/${saved.id}`, label: saved.intake?.company ?? "Audit" };
+      back = { href: `/audits/${saved.id}`, label: saved.intake?.company ?? "Audit" };
     }
   }
   if (!bundle) notFound();

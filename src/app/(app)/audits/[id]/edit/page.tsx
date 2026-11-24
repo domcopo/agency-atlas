@@ -25,7 +25,7 @@ export default async function EditAuditPage({ params }: { params: Promise<{ id: 
   const intake: Partial<AuditIntake> = audit.intake ?? (audit.rawIntake as Partial<AuditIntake>);
   return (
     <>
-      <PageHeader title="Edit audit" subtitle={audit.intake?.company ?? audit.title} backHref={`/sales/audits/${audit.id}`} backLabel="Audit" />
+      <PageHeader title="Edit audit" subtitle={audit.intake?.company ?? audit.title} backHref={`/audits/${audit.id}`} backLabel="Audit" />
       <AuditBuilder id={audit.id} intake={intake} sections={audit.sections} capsLine={capsLine(settings, spend)} plansSet={settings.agency.plans.length > 0} ready={settings.ready} />
     </>
   );
