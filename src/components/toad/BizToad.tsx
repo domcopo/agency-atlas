@@ -1,0 +1,265 @@
+"use client";
+
+// BizToad (Phase 1, docs/BIZTOAD_PLAN.md): the toad in the corner. No AI yet: tapping it
+// opens a small "coming soon" panel. All timing and distances come from TOAD_RULES.
+//
+// - corner (computers): eyes follow a nearby mouse, a small idle move every 1–2 minutes,
+//   tucks to the edge when a button is underneath it.
+// - bar (phones/tablets): a still face in the top bar. No motion at all.
+// Nothing moves with "reduce motion", in calm mode, in a background tab, while typing, or
+// while a dialog is open. Hidden mode is handled by the layout (nothing is rendered).
+
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { cn } from "@/lib/format";
+import { CONTROL_SELECTOR, mayMove, nextIdleDelay, pickIdleMove, pupilOffset, TOAD_COOKIE, TOAD_RULES, type IdleMove, type ToadMode } from "@/lib/toad";
+import { TOAD_EYES, ToadSvg } from "./ToadSvg";
+
+/** Remember the choice in this browser for a year (a display preference, no personal data). */
+export function saveToadMode(mode: ToadMode) {
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `${TOAD_COOKIE}=${mode}; path=/; max-age=31536000; samesite=lax${secure}`;
+}
+
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const finePointer = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+function busy() {
+  const a = document.activeElement;
+  const typing = Boolean(a && a.matches("input, textarea, select, [contenteditable=true]"));
+  const dialogOpen = Boolean(document.querySelector("dialog[open], [role=dialog][aria-modal=true]"));
+  return { typing, dialogOpen };
+}
+
+export function BizToad({
+  variant,
+  initialMode,
+  links,
+}: {
+  variant: "corner" | "bar";
+  initialMode: ToadMode;
+  /** Screens this person's role can open, shown while asking isn't available yet. */
+  links: { label: string; href: string }[];
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const panelId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const svgBoxRef = useRef<HTMLSpanElement>(null);
+  const leftPupil = useRef<SVGGElement>(null);
+  const rightPupil = useRef<SVGGElement>(null);
+  const [mode, setMode] = useState<ToadMode>(initialMode);
+  const [open, setOpen] = useState(false);
+  const [move, setMove] = useState<IdleMove | null>(null);
+  const [tucked, setTucked] = useState(false);
+  const corner = variant === "corner";
+
+  const canMove = useCallback(
+    () => mayMove({ mode, reducedMotion: reducedMotion(), tabHidden: document.hidden, ...busy() }) && (rootRef.current?.getClientRects().length ?? 0) > 0,
+    [mode],
+  );
+
+  // Eyes follow the mouse (corner only, mouse/trackpad only). At most one update per frame.
+  useEffect(() => {
+    if (!corner || mode !== "on" || !finePointer()) return;
+    const pupils = [leftPupil, rightPupil];
+    let pointer: { x: number; y: number } | null = null;
+    let frame = 0;
+    const draw = () => {
+      frame = 0;
+      const box = svgBoxRef.current?.getBoundingClientRect();
+      const still = !box || !canMove();
+      TOAD_EYES.forEach((e, i) => {
+        const g = pupils[i]?.current;
+        if (!g) return;
+        const scale = box ? box.width / 64 : 1;
+        const { dx, dy } = still ? { dx: 0, dy: 0 } : pupilOffset({ x: box.left + e.x * scale, y: box.top + e.y * scale }, pointer);
+        g.style.transform = `translate(${dx}px, ${dy}px)`;
+      });
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(draw);
+    };
+    const onMove = (ev: PointerEvent) => {
+      pointer = { x: ev.clientX, y: ev.clientY };
+      schedule();
+    };
+    const onLeave = () => {
+      pointer = null;
+      schedule();
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onLeave);
+    window.addEventListener("blur", onLeave);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      document.documentElement.removeEventListener("pointerleave", onLeave);
+      window.removeEventListener("blur", onLeave);
+      if (frame) cancelAnimationFrame(frame);
+      pupils.forEach((p) => p.current?.style.removeProperty("transform")); // back to the middle
+    };
+  }, [corner, mode, canMove]);
+
+  // One small idle move every 1–2 minutes (corner only).
+  useEffect(() => {
+    if (!corner || mode !== "on") return;
+    let wait: ReturnType<typeof setTimeout>;
+    let stop: ReturnType<typeof setTimeout>;
+    const plan = () => {
+      wait = setTimeout(() => {
+        if (canMove()) {
+          setMove(pickIdleMove(Math.random()));
+          stop = setTimeout(() => setMove(null), TOAD_RULES.moveMs);
+        }
+        plan();
+      }, nextIdleDelay(Math.random()));
+    };
+    plan();
+    return () => {
+      clearTimeout(wait);
+      clearTimeout(stop);
+    };
+  }, [corner, mode, canMove]);
+
+  // Never cover a button: if a control is under the toad's spot, tuck into the edge.
+  useEffect(() => {
+    if (!corner || mode === "hidden") return;
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      const root = rootRef.current;
+      if (!root || root.getClientRects().length === 0) return;
+      const r = root.getBoundingClientRect();
+      const points = [
+        [r.left + r.width / 2, r.top + r.height / 2],
+        [r.left + 8, r.top + 8],
+        [r.right - 8, r.top + 8],
+        [r.left + 8, r.bottom - 8],
+        [r.right - 8, r.bottom - 8],
+      ];
+      const covered = points.some(([x, y]) =>
+        document.elementsFromPoint(x!, y!).some((el) => !root.contains(el) && el.closest(CONTROL_SELECTOR) !== null),
+      );
+      setTucked(covered);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(check);
+    };
+    schedule();
+    const later = setTimeout(schedule, 600); // after the new page has drawn
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      clearTimeout(later);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [corner, mode, pathname]);
+
+  // Close the panel on Escape, on a tap outside it, and when the page changes.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [open]);
+  const [shownOn, setShownOn] = useState(pathname);
+  if (shownOn !== pathname) {
+    setShownOn(pathname);
+    setOpen(false);
+  }
+
+  function choose(next: ToadMode) {
+    saveToadMode(next);
+    setMode(next);
+    if (next === "hidden") {
+      setOpen(false);
+      router.refresh();
+    }
+  }
+
+  if (mode === "hidden") return null;
+
+  const panel = open && (
+    <div
+      id={panelId}
+      role="dialog"
+      aria-label="Ask BizToad"
+      className={cn(
+        "glass z-50 rounded-3xl border border-line bg-bg-raised/95 p-4 text-sm shadow-[0_20px_50px_-12px_rgb(0_0_0/0.7)] backdrop-blur-xl",
+        corner ? "absolute bottom-full right-0 mb-3 w-80" : "fixed inset-x-3 top-28",
+      )}
+    >
+      <p className="font-display text-base font-semibold">Hi, I&apos;m BizToad.</p>
+      <p className="mt-1 text-muted">Soon you&apos;ll be able to ask me questions about your work right here. Until then, these might help:</p>
+      {links.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {links.map((l) => (
+            <li key={l.href}>
+              <Link href={l.href} className="pressable flex min-h-11 items-center rounded-2xl border border-line px-3 font-medium hover:bg-white/5">
+                {l.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div role="group" aria-label="BizToad options" className="mt-3 flex gap-2 border-t border-line pt-3">
+        {corner && (
+          <button
+            type="button"
+            onClick={() => choose(mode === "calm" ? "on" : "calm")}
+            aria-pressed={mode === "calm"}
+            className="pressable min-h-11 flex-1 rounded-2xl border border-line px-2 text-[13px] font-medium text-muted hover:text-ink"
+          >
+            {mode === "calm" ? "Let me move" : "Stay still"}
+          </button>
+        )}
+        <button type="button" onClick={() => choose("hidden")} className="pressable min-h-11 flex-1 rounded-2xl border border-line px-2 text-[13px] font-medium text-muted hover:text-ink">
+          Hide BizToad
+        </button>
+      </div>
+      <p className="mt-2 text-[11px] text-faint">You can bring me back or calm me down on the Account page.</p>
+    </div>
+  );
+
+  return (
+    <div
+      ref={rootRef}
+      data-toad
+      className={cn(
+        corner ? "toad-corner fixed bottom-6 right-6 z-30 hidden lg:block" : "relative",
+        corner && tucked && !open && "toad-tucked",
+        move && `toad-move-${move}`,
+      )}
+    >
+      {panel}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setOpen(true);
+        }}
+        aria-label="Ask BizToad"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        className={cn(
+          "toad-button pressable flex items-center justify-center rounded-full",
+          corner ? "size-16" : "size-11",
+        )}
+      >
+        <span ref={svgBoxRef} className="flex">
+          <ToadSvg size={corner ? 64 : 32} pupilRefs={corner ? [leftPupil, rightPupil] : undefined} />
+        </span>
+      </button>
+    </div>
+  );
+}

@@ -300,6 +300,73 @@ body {
   }
 }
 
+/* BizToad (docs/BIZTOAD_PLAN.md). Pupils are moved by BizToad.tsx; the rest are short
+   idle moves, each under a second. The reduce-motion rule below switches all of them off. */
+.toad-pupil {
+  transition: transform 120ms ease-out;
+}
+.toad-lid {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  transform: scaleY(0);
+}
+.toad-body,
+.toad-tie,
+.toad-glance {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+.toad-move-blink .toad-lid {
+  animation: toad-blink 260ms ease-in-out;
+}
+.toad-move-hop .toad-body {
+  animation: toad-hop 700ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.toad-move-wiggle .toad-tie {
+  animation: toad-wiggle 800ms ease-in-out;
+}
+.toad-move-glance .toad-glance {
+  animation: toad-glance 900ms ease-in-out;
+}
+@keyframes toad-blink {
+  0%, 100% { transform: scaleY(0); }
+  50% { transform: scaleY(1); }
+}
+@keyframes toad-hop {
+  0%, 60%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-6px); }
+  78% { transform: translateY(-2px); }
+}
+@keyframes toad-wiggle {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-12deg); }
+  45% { transform: rotate(10deg); }
+  70% { transform: rotate(-6deg); }
+}
+@keyframes toad-glance {
+  0%, 100% { transform: translateX(0); }
+  25%, 40% { transform: translateX(-3px); }
+  65%, 80% { transform: translateX(3px); }
+}
+/* Tucked: slides into the right edge (a 20 px peek) while a button is underneath its spot.
+   Pointing at it or tabbing to it brings it back. */
+.toad-corner .toad-button {
+  transition: transform 220ms ease, opacity 220ms ease;
+}
+.toad-tucked {
+  pointer-events: none; /* its empty spot must not block the button underneath */
+}
+.toad-tucked .toad-button {
+  pointer-events: auto;
+  transform: translateX(68px);
+  opacity: 0.85;
+}
+.toad-tucked:hover .toad-button,
+.toad-tucked:focus-within .toad-button {
+  transform: none;
+  opacity: 1;
+}
+
 /* Visible keyboard focus everywhere. */
 :focus-visible {
   outline: 2px solid var(--color-violet);

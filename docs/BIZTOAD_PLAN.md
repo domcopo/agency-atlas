@@ -11,6 +11,8 @@
 5. Picture rights: **still open.** The owner must confirm the agency owns the rights to the "Biz Toad CEO" picture before the redraw copies its look.
 Defaults kept: no billing in BizToad (even for the owner), conversations not saved, per-device hide plus an owner switch for everyone.
 
+**Phase 1 built 2026-11-24** (no AI, no database change, no new package): `src/lib/toad.ts` (rules, tested in `tests/toad.test.ts`), `src/components/toad/` (`ToadSvg`, `BizToad`, `ToadModePicker`), styles in `globals.css`, placed in `src/app/(app)/layout.tsx`, switch on the Account page (cookie `toad`: on / calm / hidden). The drawing is a generic green toad with a black bow tie, not a copy of the "Biz Toad CEO" picture (rights still unconfirmed). Not in Phase 1: the owner's "off for everyone" switch, which needs the `toad_settings` table (Phase 2).
+
 ## In one paragraph
 
 BizToad is a small, hand-drawn toad (green head, black bow tie) that sits in the bottom-right corner of the app on computers. Its eyes follow your mouse when the mouse comes close, and every minute or two it blinks or does a tiny hop. Tap it and a chat panel opens where you can ask a question ("Which of my work orders are overdue?", "Where do I log a check-in?", "What should I look at today?"). It answers using the same guarded AI path the app already uses for Smart add and the briefing, and it can only see what *your* login can already see. It suggests; it never saves, sends or changes anything by itself. Talking to it out loud comes later, in two steps: free push-to-talk first, a paid real-time "call" only if you want it.

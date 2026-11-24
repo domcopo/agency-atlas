@@ -59,6 +59,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, playbook (later) | `docs/CLIENT_CARE_PLAN.md` (`0025`), `src/lib/care.ts` |
 | SEO Watcher (rankings board, demand, opportunity markets; Phase A = sample preview) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |
+| BizToad (animated toad, face of the AI helper; Phase 1 = look and motion, no AI) | `docs/BIZTOAD_PLAN.md`, `src/lib/toad.ts`, `src/components/toad/` |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |
