@@ -7,6 +7,8 @@ import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getActions, getCarePlans, getClientHealth, getRosterSource, getServiceGroup, getToday, tierOf } from "@/lib/data-source";
 import { describeTenure, formatUsdExact } from "@/lib/format";
+import { getJourneys } from "@/lib/data-source";
+import { journeyRow } from "@/lib/journey-view";
 import type { HealthLevel } from "@/lib/types";
 
 type Props = { params: Promise<{ service: string }> };
@@ -24,11 +26,13 @@ export default async function ServiceGroupPage({ params }: Props) {
   const real = (await getRosterSource()) !== "demo";
   const { actions } = await getActions();
   const withHealth = group.clients.map((c) => ({ c, h: getClientHealth(c, actions) }));
+  const journeys = await getJourneys();
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
     tier: tierOf(c.monthlyUsd),
     health: h?.level,
+    journey: journeyRow(journeys.bySlug.get(c.id)),
   }));
   const levels: HealthLevel[] = ["healthy", "watch", "at_risk"];
   // Plan tiers for this service (0025): how many current clients are on each.

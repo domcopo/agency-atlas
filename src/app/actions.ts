@@ -60,6 +60,7 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
+import { asStatusReason, asTouchChannel, CHECK_IN_KIND, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
@@ -1316,6 +1317,135 @@ async function addClientNow(form: FormData): Promise<AddClientResult> {
   revalidatePath("/", "layout");
   if (problems.length) return { error: `Client added, but the ${problems.join(" and ")} didn't save. Open the client to fix it.`, similar: [{ name, slug }] };
   redirect(`/clients/${slug}`);
+}
+
+// ---------------------------------------------------------------------------
+// Client journey + status (0028, docs/CLIENT_CARE_PLAN.md Step 1B). Owner and managers.
+// Nothing is deleted and nothing is sent: status changes and touches are add-only logs.
+// ---------------------------------------------------------------------------
+
+type JourneyFormState = { error?: string; ok?: boolean } | undefined;
+const STATUS_WORDS = { active: "Back to active", paused: "Paused", canceled: "Marked lost" } as const;
+
+/**
+ * Pause, mark lost, or bring back a client. The reason is written to the status log FIRST;
+ * the database refuses a manager's status change that isn't in the log. Nothing is deleted.
+ */
+export async function setClientStatus(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can change a client's status." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const pick = text(form, "to", 10);
+  const to = pick === "lost" ? "canceled" : pick === "paused" ? "paused" : pick === "active" ? "active" : null;
+  if (!to) return { error: "Pick Active, Paused or Lost." };
+  const reason = to === "active" ? "back" : asStatusReason(text(form, "reason", 20));
+  if (!reason) return { error: "Pick a reason." };
+  const note = text(form, "note", 300);
+  const dayRaw = text(form, "date", 10);
+  const day = dayRaw ? anyDate(dayRaw) : localToday();
+  if (!day || day > localToday()) return { error: "Pick today or an earlier day." };
+  const db = await createDatabaseClient();
+  const { data: before } = await db.from("clients").select("status").eq("id", clientId).maybeSingle();
+  const from = (before as { status?: string } | null)?.status;
+  if (!from) return { error: "Client not found." };
+  if (from === to) return { error: "The client already has that status." };
+  const logged = await db.from("client_status_changes").insert({ client_id: clientId, from_status: from, to_status: to, reason, note: note || null });
+  if (logged.error) {
+    console.warn(`Status log refused: ${logged.error.code}`);
+    return { error: MISSING_TABLE.has(logged.error.code ?? "") ? "Status changes need one setup step first (0028 SQL). Ask the owner." : "Couldn't save the status change." };
+  }
+  const { error } = await db.from("clients").update({ status: to, end_date: to === "active" ? null : day }).eq("id", clientId);
+  if (error) {
+    console.warn(`Status change refused: ${error.code}`);
+    return { error: "The reason was saved, but the status didn't change. Try again." };
+  }
+  const why = STATUS_REASONS.find(([k]) => k === reason)?.[1];
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `${STATUS_WORDS[to]}${why ? ` (${why})` : ""}` });
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Mark a journey touch Done (also logs a check-in) or Skipped (needs a reason). */
+export async function logTouch(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can log touches." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const touch = touchByStep(Number(text(form, "step", 4)));
+  if (!touch) return { error: "Unknown touch." };
+  const skip = text(form, "op", 6) === "skip";
+  const channel = skip ? null : asTouchChannel(text(form, "channel", 6));
+  if (!skip && !channel) return { error: "How did it happen? Pick call, text, email or video." };
+  const note = text(form, "note", 300);
+  if (skip && !note) return { error: "Say why you're skipping it." };
+  const mood = text(form, "mood", 10);
+  if (mood && mood !== "better" && mood !== "same" && mood !== "worse") return { error: "Pick better, same or worse." };
+  const secret = findSecrets(note);
+  if (secret) return { error: secret };
+  const day = localToday();
+  const db = await createDatabaseClient();
+  const { error } = await db.from("care_touches").insert({ client_id: clientId, step: touch.step, status: skip ? "skipped" : "done", happened_on: day, channel, note: note || null });
+  if (error) {
+    console.warn(`Touch not logged: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "The journey needs one setup step first (0028 SQL). Ask the owner." : "Couldn't save that." };
+  }
+  if (!skip && channel) {
+    // Done = we talked to them: a check-in, so health and "last contact" stay right.
+    const { error: ci } = await db.from("check_ins").insert({
+      client_id: clientId,
+      happened_on: day,
+      note: `${touch.title}${note ? `: ${note}` : ""}`.slice(0, 500),
+      kind: CHECK_IN_KIND[channel],
+      ...(mood ? { mood } : {}),
+    });
+    if (ci) console.warn(`Touch check-in not logged: ${ci.code}`);
+  }
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Start (or restart) the 27-touch journey from today. Touches before today stop counting. */
+export async function startOnboarding(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("clients").update({ care_started_on: localToday() }).eq("id", clientId);
+  if (error) {
+    console.warn(`Journey start refused: ${error.code}`);
+    return;
+  }
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: "Journey started: touch 1 of 27" });
+  refreshOps(text(form, "slug", 90));
+}
+
+/** Client memory: goal, tone, next ask. Short notes only; no contact details or passwords. */
+export async function saveClientMemory(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can edit client memory." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const goal = text(form, "goal", 120);
+  const tone = text(form, "tone", 120);
+  const nextAsk = text(form, "nextAsk", 120);
+  const all = `${goal}\n${tone}\n${nextAsk}`;
+  if (contactDetailsIn(all).length) return { error: "Leave out emails and phone numbers (they live in GoHighLevel)." };
+  const secret = findSecrets(all);
+  if (secret) return { error: secret };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("clients").update({ memory_goal: goal || null, memory_tone: tone || null, memory_next_ask: nextAsk || null }).eq("id", clientId);
+  if (error) {
+    console.warn(`Client memory refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Client memory needs one setup step first (0028 SQL). Ask the owner." : "Couldn't save it." };
+  }
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
 }
 
 /** Who owns a client (owner only; the database enforces this too). */

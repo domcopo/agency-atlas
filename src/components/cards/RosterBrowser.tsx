@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn, formatDate, formatUsdExact } from "@/lib/format";
 import { servicesLabel } from "@/lib/ops";
+import { JourneyMini } from "@/components/cards/JourneyCard";
 import type { HealthLevel, RosterClient, SubscriptionStatus } from "@/lib/types";
 import { EmptyState, HealthBadge, StatusPill } from "@/components/labels/labels";
 import { Chip, ChipRow, SearchBox } from "./Filters";
@@ -24,6 +25,8 @@ export interface RosterRow extends RosterClient {
   /** Owner only: payment status from billing (0015). */
   billing?: BillingChipKind | null;
   billingDetail?: string | null;
+  /** Where they are on the journey (0028), current clients only. */
+  journey?: { stage: number; label: string; overdue: boolean; started: boolean } | null;
 }
 
 const groups: { id: string; title: string; hint: string; match: (c: RosterRow) => boolean }[] = [
@@ -137,6 +140,11 @@ export function RosterBrowser({ clients, showMoney }: { clients: RosterRow[]; sh
                           {c.tenure} · since {formatDate(c.startDate)}
                         </span>
                       </p>
+                      {c.journey && (
+                        <span className="mt-1.5 block">
+                          <JourneyMini stage={c.journey.stage} label={c.journey.label} overdue={c.journey.overdue} started={c.journey.started} />
+                        </span>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       {c.monthlyUsd !== null && <span className="text-sm font-semibold">{formatUsdExact(c.monthlyUsd)}</span>}

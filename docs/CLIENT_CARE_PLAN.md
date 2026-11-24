@@ -81,7 +81,62 @@ SEO comes first. Each step is its own commit, and the owner tests it before the 
   - No timer, no new API route, no cost.
   - If nobody opens the app all day, it runs the next time someone does.
 
-**Step 1B: the communication playbook**
+**Step 1B (revised 2026-11-24): status changes + the client journey. BUILT 2026-11-24 (`0028_client_journey.sql` not run yet).**
+
+As built: the 27 touches and the Grow rhythm live in `src/lib/journey.ts` (tested in `tests/journey.test.ts`). The screens are `JourneyCard` (client page: stages, ticks, next move), `NextMoveForm` (Copy, Done, Skip), `ClientStatusForm`, `ClientMemoryForm`, `JourneyMini` on the Clients and service lists, and "Touches due" on the Client care Home. Grow = monthly report, mid-month check-in (if the tier has one), and a quarterly review (competitor review + upsell ideas). Existing clients count from their last contact. RLS section 7v. Not checked with real data: the demo has no database, so the journey only appears once 0028 is run.
+
+Owner decisions (2026-11-24): managers may mark a client lost themselves (the owner gets a notice); 6 stages with 27 ticks; add client memory (goal, tone, next ask); database number `0028`.
+
+The owner asked for two things, with a ChatGPT mock-up as a guide (a "relationship journey" track, a timeline of contacts, a "next move" card and a short "client memory"):
+
+1. **Managers can pause, mark lost, or bring back a client. Nothing is deleted.**
+   - On the client page, a **Status** button: Active / Paused / Lost. A reason is required (dropdown: price, results, went in-house, closed or sold, no reply, other) plus an optional note.
+   - "Lost" sets the status to canceled with today's end date. The client then moves to "Canceled & expired" on Clients and counts in **Clients won & lost**. Everything about them stays: history, check-ins, work orders, tier, amount.
+   - "Bring back" sets them active again and clears the end date.
+   - Every change is kept in an add-only log (who, when, from, to, reason). Nobody can edit or delete that log.
+   - The owner gets an in-app notice when a manager marks a client lost.
+   - Trash and Delete forever stay exactly as they are today: owner only, from Trash.
+2. **Client journey.** The 27-touch plan, grouped into 6 stages so it reads at a glance:
+
+   | Stage | Touches | What happens |
+   |---|---|---|
+   | 1. Kickoff (week 1) | 1–4 | Kickoff call, recap text, first 2 pages (day 2–3), check-in + 2 more pages (day 7) |
+   | 2. First results (weeks 2–4) | 5–9 | First heat map (day 14) + text, week-3 nudge, month-1 report + text |
+   | 3. Month 2 | 10–18 | Check-in, work plan, 45-day call + recap, mid-month snapshot, review/photo nudge, month-2 report + text, "anything you need" |
+   | 4. Month 3 | 19–23 | Check-in, month-3 plan, 60–70-day call + recap, "90-day report coming" heads-up |
+   | 5. 90-day wrap | 24–27 | 90-day report + text, survey, referral ask |
+   | 6. Grow (ongoing) | repeats | Monthly report, mid-month check-in, competitor review by tier, an upsell review each quarter |
+
+   - **Client page: "Relationship journey" card.** It shows 6 stage dots (done / current / next) with a thin 27-tick bar under them showing each touch.
+   - **"Next move" card**, next to the journey. It shows:
+     - the next touch, its due date and channel;
+     - what to say and what to ask for;
+     - a **Copy message** button (from a template; no AI yet, and nothing is ever sent);
+     - **Done** (how it went: call, text, email or video; optional note and mood). Done also logs a check-in, so health and "last contact" stay right;
+     - **Skip** (a reason is required).
+   - **Clients list: a small track on the right of each client.** It shows 6 short lines, with the current stage highlighted and a label, for example "Month 2 · touch 12 due Nov 28" in amber when overdue. The client page mock-up's left-hand list ("Draft ready", "Check-in due", "On track") becomes this same short status.
+   - **Home (Client care view): "Touches due"**, today and overdue, for the clients each person is the main person or backup on.
+   - **Existing clients** start in stage 6 (Grow), so nobody gets 27 overdue reminders. A **Start onboarding** button (owner and managers) restarts the journey from touch 1 for a new or returning client.
+   - **Client memory** (optional; the owner decides): 3 short fields on each client (goal, tone, next ask), shown on the client page. They're useful later, when the bots draft messages.
+   - **Changing the touches:** the 27 touches and their wording live in one tested list (`src/lib/care.ts`). An in-app editor comes later (Phase 2).
+
+**Database change: `0028_client_journey.sql`** (next free number; the owner confirms it first):
+- `care_touches`: each Done or Skip (client, touch number, done/skipped, date, channel, note, who). Add-only; the owner can fix mistakes. Owner and managers read and write.
+- `client_status_changes`: the add-only status log above, plus a trigger that sends the owner a notice for "lost".
+- The 0019 client guard is widened: managers may now change `status` and `end_date` (and Trash), still nothing else. Lost always needs a log row with a reason.
+- If the owner says yes to client memory: three short columns on `clients` (managers may edit only those).
+- RLS, the restrictive two-factor rule and break-in tests for each table, as always.
+
+**Moved to Step 1B+ (later, small):** week-1 intake checklist, "No texts" switch and preferred channel, "Needs the owner" button and VIP alerts, Kit playbook pages. **Step 1C** (VA logins) is unchanged.
+
+**Done means:**
+- A manager can pause, mark lost and bring back a client on a phone, and the log shows who and why.
+- A lost client shows under "Canceled & expired" and in won & lost, with nothing missing.
+- A new client shows touch 1 on day 1. Done moves the journey on and logs a check-in.
+- Clients shows the small track on every current client.
+- All tests, RLS tests and the build pass, and the screens are checked at phone and desktop width.
+
+**Original Step 1B draft (kept for reference; the revised scope above replaces it):**
 
 - **The 27-touch onboarding plan** lives in `src/lib/care.ts`: a tested list, editable in a later phase. Each touch has a number, its timing (for example "day 1" or "about day 45"), a channel, who does it ("comm" or "comm + SEO"), what it's for, and an optional message template. The steps are those in the owner's roadmap:
   - **Month 1:** kickoff call and recap text, first pages at day 2–3, two more pages at day 7, first heat map at day 14, light nudge in week 3, month-1 report.

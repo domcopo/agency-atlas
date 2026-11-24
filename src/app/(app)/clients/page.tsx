@@ -15,6 +15,8 @@ import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { WinLossSection } from "@/components/cards/WinLossSection";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import { byImportance } from "@/lib/ops";
+import { getJourneys } from "@/lib/data-source";
+import { journeyRow } from "@/lib/journey-view";
 import type { HealthLevel } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Clients" };
@@ -27,7 +29,7 @@ export default async function ClientsPage() {
   const withHealth = (await getRoster()).map((c) => ({ c, h: getClientHealth(c, actions) }));
   // Owner only (null for everyone else; the database also returns them nothing).
   const billing = await getBilling();
-  const [winLoss, rosterSource] = await Promise.all([getWinLoss(6), getRosterSource()]);
+  const [winLoss, rosterSource, journeys] = await Promise.all([getWinLoss(6), getRosterSource(), getJourneys()]);
   const rows: RosterRow[] = withHealth.map(({ c, h }) => ({
     ...c,
     tenure: describeTenure(c.startDate, today),
@@ -35,6 +37,7 @@ export default async function ClientsPage() {
     health: h?.level,
     billing: billing?.byClient.get(c.id)?.chip ?? null,
     billingDetail: billing?.byClient.get(c.id)?.detail ?? null,
+    journey: journeyRow(journeys.bySlug.get(c.id)),
   }));
   const levels: HealthLevel[] = ["healthy", "watch", "at_risk"];
   const current = withHealth.filter(({ h }) => h !== null);
