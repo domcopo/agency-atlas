@@ -5,8 +5,9 @@
 export const TOAD_RULES = {
   /** Eyes follow the mouse only when it's this close to an eye (CSS pixels). */
   followRadiusPx: 200,
-  /** Furthest a pupil can slide from the middle of its eye (drawing units = px at 64 px). */
-  maxPupilPx: 4,
+  /** Furthest a pupil can slide from the middle of its eye (drawing units = px at 64 px).
+      Small, so the pupil stays inside the golden iris. */
+  maxPupilPx: 2.8,
   /** Closer than this, the pupil slides only part of the way (so it doesn't jitter on top of the eye). */
   rampPx: 40,
   /** Wait between idle moves: random, from 1 to 2 minutes. */
@@ -16,7 +17,9 @@ export const TOAD_RULES = {
   moveMs: 900,
 } as const;
 
-/** Saved per device in a plain cookie, like the light/dark theme. */
+/** Saved per device in a plain cookie, like the light/dark theme.
+ *  "hidden" means tucked away: he sinks into the corner with his eyes peeking out, and a
+ *  tap brings him back (he's never gone for good; only the owner can switch him off). */
 export const TOAD_COOKIE = "toad";
 export type ToadMode = "on" | "calm" | "hidden";
 
@@ -62,7 +65,12 @@ export function pickIdleMove(random: number): IdleMove {
   return "wiggle";
 }
 
-/** Whether the toad may move right now (eyes or idle moves). */
+/** While tucked away his eyes still follow a nearby mouse (no idle moves, no hopping). */
+export function eyesMayFollow(s: Parameters<typeof mayMove>[0]): boolean {
+  return mayMove({ ...s, mode: s.mode === "hidden" ? "on" : s.mode });
+}
+
+/** Whether the toad may make idle moves right now (and, unless tucked away, follow with his eyes). */
 export function mayMove(s: {
   mode: ToadMode;
   reducedMotion: boolean;

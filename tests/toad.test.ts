@@ -1,6 +1,6 @@
 // BizToad (docs/BIZTOAD_PLAN.md): motion rules (Phase 1) and what the AI is given (Phase 2).
 import { describe, expect, it } from "vitest";
-import { mayMove, nextIdleDelay, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
+import { eyesMayFollow, mayMove, nextIdleDelay, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
 import { buildCodebook, buildStaffBook } from "@/lib/ai/snapshot";
 import { buildToadFacts, pipelineCounts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, scrubMoney, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
 import type { RosterClient } from "@/lib/types";
@@ -25,7 +25,7 @@ describe("eyes follow the mouse only when it's close", () => {
     expect(up.dy).toBeCloseTo(-TOAD_RULES.maxPupilPx);
   });
 
-  it("never slides further than 4 px, wherever the mouse is", () => {
+  it("never slides further than the limit (inside the iris), wherever the mouse is", () => {
     for (let i = 0; i < 500; i++) {
       const p = { x: 100 + (Math.random() - 0.5) * 500, y: 100 + (Math.random() - 0.5) * 500 };
       const { dx, dy } = pupilOffset(eye, p);
@@ -70,6 +70,13 @@ describe("when the toad may move", () => {
     expect(mayMove({ ...calm, tabHidden: true })).toBe(false);
     expect(mayMove({ ...calm, typing: true })).toBe(false);
     expect(mayMove({ ...calm, dialogOpen: true })).toBe(false);
+  });
+
+  it("tucked away: no idle moves, but his peeking eyes may still follow (unless reduce motion)", () => {
+    expect(mayMove({ ...calm, mode: "hidden" })).toBe(false);
+    expect(eyesMayFollow({ ...calm, mode: "hidden" })).toBe(true);
+    expect(eyesMayFollow({ ...calm, mode: "hidden", reducedMotion: true })).toBe(false);
+    expect(eyesMayFollow({ ...calm, mode: "calm" })).toBe(false);
   });
 
   it("reads the saved choice safely", () => {

@@ -39,7 +39,7 @@ export default async function AccountPage() {
       <SectionTitle>BizToad</SectionTitle>
       <ToadModePicker initial={toadMode} />
       <p className="mt-2 px-1 text-[11px] text-faint">
-        The toad in the corner (top bar on phones). &ldquo;Stay still&rdquo; stops its eyes and little moves. Saved on this device only.
+        The frog in the corner (top bar on phones). &ldquo;Stay still&rdquo; stops his eyes and little moves; &ldquo;Tucked away&rdquo; sinks him into the corner until you tap him. Saved on this device only.
       </p>
     </div>
   );

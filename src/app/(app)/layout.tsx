@@ -32,9 +32,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const mode = developer ? "developer" : sales ? "sales" : "full";
   const ordersHref = developer ? "/work" : "/work/orders";
   const cookieJar = await cookies();
-  // BizToad: shown, still, or hidden on this device; the owner can switch it off for everyone (0030).
+  // BizToad: shown, still, or tucked away on this device; the owner can switch it off for everyone (0030).
   const toad = await getToadStatus();
-  const toadMode = toad.ready && !toad.enabled ? "hidden" : parseToadMode(cookieJar.get(TOAD_COOKIE)?.value);
+  // Off for everyone (owner's switch) = not shown at all. A person's own "tuck away" keeps him
+  // peeking in the corner so he can be brought back.
+  const toadOff = toad.ready && !toad.enabled;
+  const toadMode = parseToadMode(cookieJar.get(TOAD_COOKIE)?.value);
   // Asking (Phase 2): owner and managers whose role is switched on, outside a preview.
   const toadAsk = toad.canAsk && isLead(member?.role) && !viewer?.preview ? { usedUsd: toad.myUsedUsd, capUsd: toad.perPersonUsd } : null;
   const toadNote = !usesDatabase()
@@ -73,7 +76,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             <Link href="/" className="inline-block">
               <BrandLogo className="w-[88px]" priority />
             </Link>
-            {toadMode !== "hidden" && <BizToad variant="bar" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
+            {!toadOff && <BizToad variant="bar" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
           </div>
           {viewer?.preview && <PreviewBanner name={viewer.name} />}
           {notices && notices.unread > 0 && <NoticePill count={notices.unread} />}
@@ -82,7 +85,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       </div>
       {badge !== null && <WorkOrdersButton count={badge} href={ordersHref} />}
       {/* Computers: bottom-right corner (main has extra bottom space so nothing ends up under it). */}
-      {toadMode !== "hidden" && <BizToad variant="corner" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
+      {!toadOff && <BizToad variant="corner" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
       <BottomNav hints={hints} mode={mode} />
     </>
   );

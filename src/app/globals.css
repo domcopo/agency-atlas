@@ -305,10 +305,11 @@ body {
 .toad-pupil {
   transition: transform 120ms ease-out;
 }
+/* Heavy lids rest about half-closed (a calm, stoic look) and close fully for a blink. */
 .toad-lid {
   transform-box: fill-box;
   transform-origin: 50% 0%;
-  transform: scaleY(0);
+  transform: scaleY(0.42);
 }
 .toad-body,
 .toad-tie,
@@ -329,7 +330,7 @@ body {
   animation: toad-glance 900ms ease-in-out;
 }
 @keyframes toad-blink {
-  0%, 100% { transform: scaleY(0); }
+  0%, 100% { transform: scaleY(0.42); }
   50% { transform: scaleY(1); }
 }
 @keyframes toad-hop {
@@ -345,12 +346,12 @@ body {
 }
 @keyframes toad-glance {
   0%, 100% { transform: translateX(0); }
-  25%, 40% { transform: translateX(-3px); }
-  65%, 80% { transform: translateX(3px); }
+  25%, 40% { transform: translateX(-2.5px); }
+  65%, 80% { transform: translateX(2.5px); }
 }
 /* Thinking (waiting for an answer): eyes look up. A still pose, so it's fine with reduce motion. */
 .toad-thinking .toad-glance {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
 }
 /* Tucked: slides into the right edge (a 20 px peek) while a button is underneath its spot.
    Pointing at it or tabbing to it brings it back. */
@@ -369,6 +370,25 @@ body {
 .toad-tucked:focus-within .toad-button {
   transform: none;
   opacity: 1;
+}
+/* Tucked away (the person chose it): sunk into the bottom-right corner with only the top
+   of his head and eyes peeking out. Tap him to bring him back. His empty spot never blocks
+   the page; only the peeking part is clickable. */
+.toad-away {
+  pointer-events: none;
+}
+.toad-away .toad-button {
+  pointer-events: auto;
+  transform: translateY(60px);
+}
+.toad-away:hover .toad-button,
+.toad-away:focus-within .toad-button {
+  transform: translateY(46px);
+}
+/* Phones: the still face in the top bar just shrinks and fades a little. */
+.toad-away-bar .toad-button {
+  opacity: 0.55;
+  transform: scale(0.8);
 }
 
 /* Visible keyboard focus everywhere. */

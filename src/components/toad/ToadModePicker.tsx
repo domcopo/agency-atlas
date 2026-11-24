@@ -1,7 +1,7 @@
 "use client";
 
-// Account page: show, calm (no moving) or hide BizToad on this device. Saved in a cookie,
-// then the page refreshes so the toad appears or disappears at once.
+// Account page: show, calm (no moving) or tuck BizToad away on this device (he waits in the
+// corner with his eyes peeking out). Saved in a cookie, then the page refreshes.
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -12,7 +12,7 @@ import { saveToadMode } from "./BizToad";
 const OPTIONS: { value: ToadMode; label: string }[] = [
   { value: "on", label: "Show" },
   { value: "calm", label: "Stay still" },
-  { value: "hidden", label: "Hide" },
+  { value: "hidden", label: "Tucked away" },
 ];
 
 export function ToadModePicker({ initial }: { initial: ToadMode }) {

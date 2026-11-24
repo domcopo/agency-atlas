@@ -8,13 +8,14 @@
 //   tucks to the edge when a button is underneath it.
 // - bar (phones/tablets): a still face in the top bar. No motion at all.
 // Nothing moves with "reduce motion", in calm mode, in a background tab, while typing, or
-// while a dialog is open. Hidden mode is handled by the layout (nothing is rendered).
+// while a dialog is open. Tucked away ("hidden"), he sinks into the corner with his eyes
+// peeking out (they still follow a nearby mouse) and a tap brings him back.
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/format";
-import { CONTROL_SELECTOR, mayMove, nextIdleDelay, pickIdleMove, pupilOffset, TOAD_COOKIE, TOAD_RULES, type IdleMove, type ToadMode } from "@/lib/toad";
+import { CONTROL_SELECTOR, eyesMayFollow, mayMove, nextIdleDelay, pickIdleMove, pupilOffset, TOAD_COOKIE, TOAD_RULES, type IdleMove, type ToadMode } from "@/lib/toad";
 import { ToadChat } from "./ToadChat";
 import { TOAD_EYES, ToadSvg } from "./ToadSvg";
 
@@ -49,7 +50,6 @@ export function BizToad({
   /** Why asking isn't available (e.g. the database update hasn't been run). */
   note?: string;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   const panelId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -57,27 +57,33 @@ export function BizToad({
   const leftPupil = useRef<SVGGElement>(null);
   const rightPupil = useRef<SVGGElement>(null);
   const [mode, setMode] = useState<ToadMode>(initialMode);
+  // The Account page's switch saves a new choice and refreshes: follow it.
+  const [savedMode, setSavedMode] = useState(initialMode);
+  if (savedMode !== initialMode) {
+    setSavedMode(initialMode);
+    setMode(initialMode);
+  }
   const [open, setOpen] = useState(false);
   const [move, setMove] = useState<IdleMove | null>(null);
   const [tucked, setTucked] = useState(false);
   const [thinking, setThinking] = useState(false);
   const corner = variant === "corner";
 
-  const canMove = useCallback(
-    () => mayMove({ mode, reducedMotion: reducedMotion(), tabHidden: document.hidden, ...busy() }) && (rootRef.current?.getClientRects().length ?? 0) > 0,
-    [mode],
-  );
+  const shown = () => (rootRef.current?.getClientRects().length ?? 0) > 0;
+  const canMove = useCallback(() => mayMove({ mode, reducedMotion: reducedMotion(), tabHidden: document.hidden, ...busy() }) && shown(), [mode]);
+  // Tucked away, his peeking eyes still follow a nearby mouse.
+  const canFollow = useCallback(() => eyesMayFollow({ mode, reducedMotion: reducedMotion(), tabHidden: document.hidden, ...busy() }) && shown(), [mode]);
 
   // Eyes follow the mouse (corner only, mouse/trackpad only). At most one update per frame.
   useEffect(() => {
-    if (!corner || mode !== "on" || !finePointer()) return;
+    if (!corner || mode === "calm" || !finePointer()) return;
     const pupils = [leftPupil, rightPupil];
     let pointer: { x: number; y: number } | null = null;
     let frame = 0;
     const draw = () => {
       frame = 0;
       const box = svgBoxRef.current?.getBoundingClientRect();
-      const still = !box || !canMove();
+      const still = !box || !canFollow();
       TOAD_EYES.forEach((e, i) => {
         const g = pupils[i]?.current;
         if (!g) return;
@@ -107,7 +113,7 @@ export function BizToad({
       if (frame) cancelAnimationFrame(frame);
       pupils.forEach((p) => p.current?.style.removeProperty("transform")); // back to the middle
     };
-  }, [corner, mode, canMove]);
+  }, [corner, mode, canFollow]);
 
   // One small idle move every 1–2 minutes (corner only).
   useEffect(() => {
@@ -132,7 +138,7 @@ export function BizToad({
 
   // Never cover a button: if a control is under the toad's spot, tuck into the edge.
   useEffect(() => {
-    if (!corner || mode === "hidden") return;
+    if (!corner || mode === "hidden") return; // tucked away: already out of the way
     let frame = 0;
     const check = () => {
       frame = 0;
@@ -189,13 +195,9 @@ export function BizToad({
   function choose(next: ToadMode) {
     saveToadMode(next);
     setMode(next);
-    if (next === "hidden") {
-      setOpen(false);
-      router.refresh();
-    }
+    if (next === "hidden") setOpen(false);
   }
-
-  if (mode === "hidden") return null;
+  const away = mode === "hidden";
 
   const panel = open && (
     <div
@@ -236,10 +238,10 @@ export function BizToad({
           </button>
         )}
         <button type="button" onClick={() => choose("hidden")} className="pressable min-h-11 flex-1 rounded-2xl border border-line px-2 text-[13px] font-medium text-muted hover:text-ink">
-          Hide BizToad
+          Tuck me away
         </button>
       </div>
-      <p className="mt-2 text-[11px] text-faint">You can bring me back or calm me down on the Account page.</p>
+      <p className="mt-2 text-[11px] text-faint">Tucked away, I wait in the corner: tap me to bring me back. More options on the Account page.</p>
     </div>
   );
 
@@ -249,7 +251,8 @@ export function BizToad({
       data-toad
       className={cn(
         corner ? "toad-corner fixed bottom-6 right-6 z-30 hidden lg:block" : "relative",
-        corner && tucked && !open && "toad-tucked",
+        corner && tucked && !open && !away && "toad-tucked",
+        away && (corner ? "toad-away" : "toad-away-bar"),
         move && `toad-move-${move}`,
         thinking && "toad-thinking",
       )}
@@ -257,13 +260,14 @@ export function BizToad({
       {panel}
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (away ? choose("on") : setOpen((o) => !o))}
         onContextMenu={(e) => {
           e.preventDefault();
-          setOpen(true);
+          if (!away) setOpen(true);
         }}
-        aria-label="Ask BizToad"
-        aria-expanded={open}
+        aria-label={away ? "Bring BizToad back" : "Ask BizToad"}
+        title={away ? "Bring BizToad back" : undefined}
+        aria-expanded={away ? undefined : open}
         aria-controls={open ? panelId : undefined}
         className={cn(
           "toad-button pressable flex items-center justify-center rounded-full",
