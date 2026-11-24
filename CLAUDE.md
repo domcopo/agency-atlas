@@ -23,7 +23,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 - **Data:** screens read only through `src/lib/data-source.ts`. With Supabase configured, `showsSamples()` is false, so there are never made-up records next to real ones.
 - **Writes:** all database writes are in `src/app/actions.ts`. They are validated, run as the signed-in user, and every exported action starts with `await notWhilePreviewing();`. The only deletes are `deleteForever` (owner, from Trash).
 - **Database:**
-  - Schema and RLS live in `supabase/migrations/` (order set by the owner 2026-11-24: `0024` Scout, `0025` client care, `0026` sales leaderboard, `0027` SEO Watcher; next free number: 0028. `0001`–`0024` are run; `0025`+ are written or planned, not run yet; confirm a number before claiming it). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
+  - Schema and RLS live in `supabase/migrations/` (order set by the owner 2026-11-24: `0024` Scout, `0025` client care, `0026` sales leaderboard, `0027` SEO Watcher; next free number: 0028. `0001`–`0024` are run; `0025`+ are written or planned, not run yet (`0027` SEO Watcher is written); confirm a number before claiming it). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
   - Every new table needs RLS, a restrictive `aal2` policy and break-in tests in `supabase/tests/10_rls_break_in.sql` (`npm run test:rls`).
   - App code must keep working before a new migration is run (column fallbacks, "needs 00xx" messages).
 - **Sign-in:** `src/proxy.ts` sends any session below `aal2` to `/mfa`. Cookies are httpOnly (secure on Vercel); HSTS and noindex are on. No service worker or offline cache.
@@ -58,7 +58,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Audits area (SEO + Google Ads doors), audit builder (checkpoints, saved audits, caps, custom prompt), leaderboard plan | `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`, `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, playbook (later) | `docs/CLIENT_CARE_PLAN.md` (`0025`), `src/lib/care.ts` |
-| SEO Watcher (rankings board, demand, opportunity markets; Phase A = sample preview) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |
+| SEO Watcher (rankings board, demand, opportunity markets; A = sample preview, B = watched clients, lists, rounds via copy-only prompt + attach results) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |

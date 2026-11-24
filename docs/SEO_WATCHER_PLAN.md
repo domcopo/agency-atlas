@@ -1,6 +1,6 @@
 # Plan: SEO Watcher (rankings "stock market", search demand, opportunity markets, USA map, coach, reports)
 
-Status: **Phase A approved and built 2026-11-24** (branch `claude/elastic-wu-472a3e`): preview at `/growth/watcher/preview` on fictional data, math in `src/lib/watch/compute.ts` + `view.ts`, tests in `tests/watch.test.ts`. No database, no network, $0. Phase B needs its own go-ahead. Owner answers:
+Status: **Phase A approved and built 2026-11-24** (branch `claude/elastic-wu-472a3e`): preview at `/growth/watcher/preview` on fictional data, math in `src/lib/watch/compute.ts` + `view.ts`, tests in `tests/watch.test.ts`. No database, no network, $0. **Phase B approved and built 2026-11-24** (see "Phase B as built" below); `0027` written, **not run yet**. Owner answers:
 - **Cap: $20 a month** for Watcher data. **Only the most important clients** are watched (a per-client "Watch" switch), not all 33. When the cap or the list limits are close to full (80%), the app **asks the owner** for more room with the numbers that justify it; it never raises anything itself.
 - **AI budget stays as it is.** The coach runs only when someone taps it, inside the existing budget; report wording is written by a person until the owner decides otherwise.
 - **Developers** see rankings (no dollar figures) for the clients they have work on, so they can deliver to those clients. Salespeople: opportunity markets only (default, not yet confirmed).
@@ -212,6 +212,17 @@ Then it shows **one** idea, with the reason. Owner/manager can switch it off (or
 - **New screens:** `src/app/(app)/growth/watcher/` (home, `preview` board, `preview/[client]`, `preview/demand`, `preview/opportunities`; later the real versions and `reports/[id]`), `src/components/watcher/` (hand-written SVG charts and map, no chart package).
 - **Changed:** `src/app/actions.ts` (list edits, attach results, make report, mark reviewed/sent, coach accept/dismiss; each starts with `notWhilePreviewing()`), `src/lib/data-source.ts`, `src/components/shell/SideNav.tsx`, Growth page card, `src/lib/roles.ts` (a `canSeeWatcher` helper), `tests/guardrails.test.ts`, `supabase/tests/10_rls_break_in.sql`, `CLAUDE.md`.
 - **Not touched:** `src/lib/ghl/`, billing, the audit tables (import reads saved audits; it doesn't change them).
+
+## Phase B as built (2026-11-24)
+
+**Run `0027_seo_watcher.sql` once in the Supabase SQL Editor.** Until then every Watcher screen says "needs 0027" and nothing else changes.
+
+- **Watched clients** (`/growth/watcher/setup`, owner/managers): pick the important clients (website + what they do), pause/resume (history kept). Owner sets the cap ($20/month) and list limits (25 / 5 / 5).
+- **Per client** (`/growth/watcher/c/[slug]`): rankings + competitors; owner/managers edit keywords (with a "money" mark), cities (state required; map position optional, the first round fills it in) and competitors, or **copy from a saved SEO audit** (towns, competitors, and keywords + starting positions when the audit has results).
+- **Rounds** (`/growth/watcher/rounds/new` → `/rounds/[id]`): pick clients, see the estimate vs what's left of the cap, start. The database writes the estimate first and refuses a round past the cap. Copy the Watcher prompt into Claude Code (DataForSEO), then attach the results file. The checker (`parseWatchResults`) only accepts this round's keyword/city ids, drops anything malformed, and never treats the file as instructions. Search volumes are fetched only when last month isn't stored.
+- **Board** (`/growth/watcher`): the Phase A board on real data. Owner/managers also see spending, lists near full (asks at 80%) and recent rounds. Developers see only clients they work on, no costs (link on their Home).
+- **Not yet:** map (C), reports + upsell (D), coach (E), automatic weekly rounds (F). The upsell checklist shows only on the sample.
+- **Files:** `supabase/migrations/0027_seo_watcher.sql`, break-in tests 7w, `src/lib/watch/{rounds,lists}.ts`, `src/components/watcher/{Board,ClientDetail,Forms}.tsx`, Watcher actions at the end of `src/app/actions.ts`, `getWatch*` at the end of `src/lib/data-source.ts`, `tests/watch-rounds.test.ts`.
 
 ## 11. Phases (each one checked and approved before the next)
 - **A. Screens on sample data.** Compute module + tests, board, client page, demand, opportunities (list), preview banner. **No database, no network, $0.**

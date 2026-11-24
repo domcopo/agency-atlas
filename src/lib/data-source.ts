@@ -13,7 +13,9 @@
 import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
 import { WATCH_SAMPLE_TODAY, watchSample, watchSampleOpportunities, watchSampleRoom, type SampleOpportunity } from "@/fixtures/watch-sample";
-import type { WatchData } from "@/lib/watch/compute";
+import { WATCH_RULES, type RankCheck, type VolumeMonth, type WatchClient, type WatchData, type WatchMarket } from "@/lib/watch/compute";
+import { fromAudit, type AuditImport } from "@/lib/watch/lists";
+import { parseAuditConfig } from "@/lib/audit/config";
 import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
 import { parseSections, type AuditSectionId } from "@/lib/audit/sections";
@@ -2446,3 +2448,179 @@ export const getScout = cache(async (): Promise<ScoutData> => {
     names,
   };
 });
+
+// ---------------------------------------------------------------- SEO Watcher, real data (0027, Phase B)
+
+export const WATCH_SETUP = "The SEO Watcher needs one setup step first (0027 SQL).";
+
+export interface WatchListKeyword { id: string; clientId: string; keyword: string; money: boolean; active: boolean }
+export interface WatchListMarket { id: string; clientId: string; city: string; state: string; lat: number | null; lng: number | null; locationCode: number | null; active: boolean }
+export interface WatchListCompetitor { id: string; clientId: string; domain: string; source: string; active: boolean }
+export interface WatchedClient { id: string; slug: string; name: string; domain: string; niche: string; active: boolean; startedOn: string; services: string[] }
+export interface WatchRun { id: string; clientIds: string[]; pairs: number; volumes: boolean; estUsd: number; actualUsd: number | null; status: "planned" | "attached"; checksSaved: number | null; createdAt: string; attachedAt: string | null }
+export interface WatchSettings { capUsd: number; keywordsPerClient: number; marketsPerClient: number; competitorsPerClient: number }
+
+export interface WatchLive {
+  /** 0027 has been run and the signed-in person may use the Watcher. */
+  ready: boolean;
+  role: string;
+  /** Owner and managers edit lists, start rounds, attach results and see costs. */
+  canEdit: boolean;
+  isOwner: boolean;
+  clients: WatchedClient[];
+  keywords: WatchListKeyword[];
+  markets: WatchListMarket[];
+  competitors: WatchListCompetitor[];
+  /** For the math in src/lib/watch/ (active watched clients and active list entries only). */
+  data: WatchData;
+  /** Owner/managers only (developers never see costs). */
+  settings: WatchSettings | null;
+  runs: WatchRun[];
+  /** Spent (real cost, or the estimate until results are in) this calendar month, New York time. */
+  spentThisMonthUsd: number;
+  /** Latest month with stored search volumes, YYYY-MM (null = none yet). */
+  latestVolumeMonth: string | null;
+}
+
+const WATCH_EMPTY: WatchLive = {
+  ready: false, role: "", canEdit: false, isOwner: false, clients: [], keywords: [], markets: [], competitors: [],
+  data: { clients: [], markets: [], keywords: [], checks: [], volumes: [], competitors: [] },
+  settings: null, runs: [], spentThisMonthUsd: 0, latestVolumeMonth: null,
+};
+
+function nyMonthStartIso(now = new Date()): string {
+  const ym = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit" }).format(now).slice(0, 7);
+  // Midnight New York on the 1st, close enough for a monthly total (the database enforces the cap exactly).
+  return new Date(`${ym}-01T05:00:00Z`).toISOString();
+}
+
+/**
+ * Everything the Watcher screens show, read as the signed-in person: the database decides
+ * what each role gets (developers: only clients they work on, never costs).
+ */
+export const getWatch = cache(async (): Promise<WatchLive> => {
+  if (!usesDatabase()) return WATCH_EMPTY;
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "developer")) return WATCH_EMPTY;
+  const db = await createDatabaseClient();
+  const names = await db.from("watch_client_names").select("client_id, slug, name, start_date, services, domain, niche, active").order("name").limit(200);
+  if (names.error) return { ...WATCH_EMPTY, role: me.role }; // before 0027
+  const lead = isLead(me.role);
+  const [kw, mk, cp, checks, vols, settings, runs] = await Promise.all([
+    db.from("watch_keywords").select("id, client_id, keyword, money, active").order("created_at").limit(5000),
+    db.from("watch_markets").select("id, client_id, city, state, lat, lng, location_code, active").order("created_at").limit(1000),
+    db.from("watch_competitors").select("id, client_id, domain, source, active").order("created_at").limit(1000),
+    db.from("watch_rank_checks").select("client_id, keyword_id, market_id, checked_on, organic, pack, others, source").gte("checked_on", new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)).order("checked_on").limit(50000),
+    db.from("watch_volumes").select("market_id, keyword, month, volume, source").gte("month", new Date(Date.now() - 800 * 86_400_000).toISOString().slice(0, 10)).order("month").limit(50000),
+    lead ? db.from("watch_settings").select("monthly_usd, keywords_per_client, markets_per_client, competitors_per_client").maybeSingle() : Promise.resolve({ data: null }),
+    lead ? db.from("watch_runs").select("id, client_ids, pairs, volumes, est_usd, actual_usd, status, checks_saved, created_at, attached_at").order("created_at", { ascending: false }).limit(100) : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+  ]);
+  const clients: WatchedClient[] = (names.data ?? []).map((r) => ({
+    id: r.client_id as string,
+    slug: r.slug as string,
+    name: r.name as string,
+    domain: r.domain as string,
+    niche: r.niche as string,
+    active: Boolean(r.active),
+    startedOn: String(r.start_date ?? ""),
+    services: (r.services as string[] | null) ?? [],
+  }));
+  const keywords: WatchListKeyword[] = (kw.data ?? []).map((r) => ({ id: r.id as string, clientId: r.client_id as string, keyword: r.keyword as string, money: Boolean(r.money), active: Boolean(r.active) }));
+  const markets: WatchListMarket[] = (mk.data ?? []).map((r) => ({
+    id: r.id as string, clientId: r.client_id as string, city: r.city as string, state: r.state as string,
+    lat: r.lat === null ? null : Number(r.lat), lng: r.lng === null ? null : Number(r.lng),
+    locationCode: r.location_code === null ? null : Number(r.location_code), active: Boolean(r.active),
+  }));
+  const competitors: WatchListCompetitor[] = (cp.data ?? []).map((r) => ({ id: r.id as string, clientId: r.client_id as string, domain: r.domain as string, source: r.source as string, active: Boolean(r.active) }));
+
+  const live = new Set(clients.filter((c) => c.active).map((c) => c.id));
+  const kwActive = keywords.filter((k) => k.active && live.has(k.clientId));
+  const mkActive = markets.filter((m) => m.active && live.has(m.clientId));
+  const kwIds = new Set(kwActive.map((k) => k.id));
+  const mkIds = new Set(mkActive.map((m) => m.id));
+  const kwText = new Set(kwActive.map((k) => `${k.clientId}|${k.keyword}`));
+  const mkClient = new Map(mkActive.map((m) => [m.id, m.clientId]));
+  const asOthers = (v: unknown) =>
+    Array.isArray(v) ? v.flatMap((o) => (o && typeof o === "object" && typeof (o as { domain?: unknown }).domain === "string" && Number.isInteger((o as { position?: unknown }).position) ? [{ domain: (o as { domain: string }).domain, position: (o as { position: number }).position }] : [])) : [];
+  const data: WatchData = {
+    clients: clients.filter((c) => c.active).map((c): WatchClient => ({
+      id: c.id, name: c.name, domain: c.domain, niche: c.niche, services: c.services, nextServices: [],
+      startedOn: c.startedOn, health: "good", openComplaint: false, lastMood: null, lastUpsellSentOn: null,
+    })),
+    markets: mkActive.map((m): WatchMarket => ({ id: m.id, clientId: m.clientId, city: m.city, state: m.state, lat: m.lat ?? 0, lng: m.lng ?? 0 })),
+    keywords: kwActive.map((k) => ({ id: k.id, clientId: k.clientId, keyword: k.keyword, money: k.money })),
+    checks: (checks.data ?? []).flatMap((r): RankCheck[] =>
+      kwIds.has(r.keyword_id as string) && mkIds.has(r.market_id as string)
+        ? [{ keywordId: r.keyword_id as string, marketId: r.market_id as string, date: String(r.checked_on), organic: r.organic === null ? null : Number(r.organic), pack: r.pack === null ? null : Number(r.pack), others: asOthers(r.others), source: r.source === "audit" ? "audit" : "dataforseo" }]
+        : [],
+    ),
+    volumes: (vols.data ?? []).flatMap((r): VolumeMonth[] => {
+      const client = mkClient.get(r.market_id as string);
+      return client && kwText.has(`${client}|${r.keyword as string}`)
+        ? [{ keyword: r.keyword as string, marketId: r.market_id as string, month: String(r.month).slice(0, 7), volume: r.volume === null ? null : Number(r.volume), source: r.source === "audit" ? "audit" : "dataforseo" }]
+        : [];
+    }),
+    competitors: competitors.filter((c) => c.active && live.has(c.clientId)).map((c) => ({ clientId: c.clientId, domain: c.domain })),
+  };
+  const s = settings.data as Record<string, unknown> | null;
+  const runRows: WatchRun[] = ((runs.data ?? []) as Record<string, unknown>[]).map((r) => ({
+    id: r.id as string, clientIds: (r.client_ids as string[]) ?? [], pairs: Number(r.pairs), volumes: Boolean(r.volumes),
+    estUsd: Number(r.est_usd), actualUsd: r.actual_usd === null ? null : Number(r.actual_usd),
+    status: r.status === "attached" ? "attached" : "planned", checksSaved: r.checks_saved === null ? null : Number(r.checks_saved),
+    createdAt: r.created_at as string, attachedAt: (r.attached_at as string | null) ?? null,
+  }));
+  const monthStart = nyMonthStartIso();
+  const spent = runRows.filter((r) => r.createdAt >= monthStart).reduce((t, r) => t + (r.actualUsd ?? r.estUsd), 0);
+  const months = (vols.data ?? []).map((r) => String(r.month).slice(0, 7)).sort();
+  return {
+    ready: true,
+    role: me.role,
+    canEdit: lead,
+    isOwner: me.role === "owner",
+    clients,
+    keywords,
+    markets,
+    competitors,
+    data,
+    settings: s
+      ? { capUsd: Number(s.monthly_usd), keywordsPerClient: Number(s.keywords_per_client), marketsPerClient: Number(s.markets_per_client), competitorsPerClient: Number(s.competitors_per_client) }
+      : lead ? { capUsd: 20, keywordsPerClient: WATCH_RULES.limits.keywords, marketsPerClient: WATCH_RULES.limits.markets, competitorsPerClient: WATCH_RULES.limits.competitors } : null,
+    runs: runRows,
+    spentThisMonthUsd: Math.round(spent * 100) / 100,
+    latestVolumeMonth: months.at(-1) ?? null,
+  };
+});
+
+/** Owner/managers: every current client, to pick which ones to watch. No money columns. */
+export async function getWatchCandidates(): Promise<{ id: string; slug: string; name: string; status: string }[]> {
+  if (!usesDatabase()) return [];
+  const me = await getMember();
+  if (!me || !isLead(me.role)) return [];
+  const db = await createDatabaseClient();
+  const { data } = await db.from("clients").select("id, slug, name, status").is("trashed_at", null).in("status", ["active", "paused"]).order("name").limit(500);
+  return (data ?? []).map((r) => ({ id: r.id as string, slug: r.slug as string, name: r.name as string, status: r.status as string }));
+}
+
+/** Owner/managers: saved SEO audits that can seed a watched client's lists. */
+export async function getWatchAuditChoices(): Promise<{ id: string; title: string; retrieved: string | null }[]> {
+  if (!usesDatabase()) return [];
+  const me = await getMember();
+  if (!me || !isLead(me.role)) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("audits").select("id, title, data_retrieved").eq("kind", "seo").not("config", "is", null).is("archived_at", null).order("created_at", { ascending: false }).limit(100);
+  if (error) return [];
+  return (data ?? []).map((r) => ({ id: r.id as string, title: r.title as string, retrieved: (r.data_retrieved as string | null) ?? null }));
+}
+
+/** What a saved audit would add to the Watcher (read as the signed-in person; checked again on save). */
+export async function getWatchAuditImport(auditId: string): Promise<AuditImport | null> {
+  if (!usesDatabase() || !/^[0-9a-f-]{36}$/.test(auditId)) return null;
+  const me = await getMember();
+  if (!me || !isLead(me.role)) return null;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("audits").select("config, data").eq("id", auditId).maybeSingle();
+  if (error || !data?.config) return null;
+  const config = parseAuditConfig(data.config);
+  if (!config.ok) return null;
+  return fromAudit(config.config, data.data ?? null);
+}

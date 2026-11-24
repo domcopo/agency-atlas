@@ -34,6 +34,9 @@ import {
   getRoster,
   getToday,
   getScout,
+  getWatch,
+  getWatchAuditImport,
+  WATCH_SETUP,
 } from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
 import {
@@ -64,6 +67,8 @@ import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBus
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
 import { parseAuditConfig } from "@/lib/audit/config";
+import { cleanCity, cleanDomain, cleanKeyword, cleanNiche, cleanPosition } from "@/lib/watch/lists";
+import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue, WATCH_RESULTS_MAX_BYTES } from "@/lib/watch/rounds";
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
@@ -2919,4 +2924,342 @@ export async function saveScoutSettings(_prev: ScoutFormState, form: FormData): 
   if (error) return { error: MISSING_TABLE.has(error.code ?? "") ? SCOUT_SETUP : "Couldn't save the caps." };
   revalidatePath("/sales", "layout");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- SEO Watcher (0027, docs/SEO_WATCHER_PLAN.md Phase B)
+// Owner and managers only. The database checks the same rules again (roles, list limits,
+// the monthly cap, add-only history); these checks give a clear message first.
+
+export type WatchFormState = { error?: string; ok?: boolean; message?: string } | undefined;
+
+async function watchEditor(): Promise<{ userId: string; role: string } | { error: string }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner and managers can change the SEO Watcher." };
+  return me;
+}
+
+function watchFail(code: string | undefined, fallback: string): WatchFormState {
+  if (MISSING_TABLE.has(code ?? "")) return { error: WATCH_SETUP };
+  if (code === "23505") return { error: "That's already on the list." };
+  if (code === "23514") return { error: "That was refused: the list may be full, or a value isn't allowed." };
+  return { error: fallback };
+}
+
+function watchDone(message: string): WatchFormState {
+  revalidatePath("/growth/watcher", "layout");
+  return { ok: true, message };
+}
+
+/** Start (or resume) watching a client: website + what they do. */
+export async function watchClient(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Pick a client." };
+  const domain = cleanDomain(text(form, "domain", 200));
+  if (!domain.ok) return { error: domain.error };
+  const niche = cleanNiche(text(form, "niche", 60));
+  if (!niche.ok) return { error: niche.error };
+  const db = await createDatabaseClient();
+  const existing = await db.from("watch_clients").select("client_id").eq("client_id", clientId).maybeSingle();
+  if (existing.error) return watchFail(existing.error.code, "Couldn't check the watch list.");
+  const res = existing.data
+    ? await db.from("watch_clients").update({ domain: domain.domain, niche: niche.niche, active: true }).eq("client_id", clientId)
+    : await db.from("watch_clients").insert({ client_id: clientId, domain: domain.domain, niche: niche.niche, added_by: me.userId });
+  if (res.error) return watchFail(res.error.code, "Couldn't start watching that client.");
+  return watchDone("Watching. Add keywords and cities next.");
+}
+
+/** Pause or resume a watched client (nothing is deleted; history stays). */
+export async function setWatchClientActive(form: FormData): Promise<void> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_clients").update({ active: text(form, "active", 5) === "true" }).eq("client_id", clientId);
+  if (error) console.warn(`Watcher pause refused: ${error.code}`);
+  revalidatePath("/growth/watcher", "layout");
+}
+
+export async function addWatchKeyword(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const words = text(form, "keywords", 2000).split(/[\n,]+/).map((k) => k.trim()).filter(Boolean);
+  if (!words.length) return { error: "Type a keyword (one per line, or separated by commas)." };
+  if (words.length > 25) return { error: "Add up to 25 at a time." };
+  const cleaned: string[] = [];
+  for (const w of words) {
+    const k = cleanKeyword(w);
+    if (!k.ok) return { error: `"${w.slice(0, 40)}": ${k.error}` };
+    if (!cleaned.includes(k.keyword)) cleaned.push(k.keyword);
+  }
+  const money = text(form, "money", 5) === "on";
+  const db = await createDatabaseClient();
+  let added = 0;
+  for (const keyword of cleaned) {
+    const { error } = await db.from("watch_keywords").insert({ client_id: clientId, keyword, money });
+    if (error && error.code !== "23505") {
+      return added ? { ...watchFail(error.code, "Couldn't add the rest."), message: `${added} added before that.` } : watchFail(error.code, "Couldn't add that keyword.");
+    }
+    if (!error) added++;
+  }
+  return watchDone(added ? `${added} keyword${added === 1 ? "" : "s"} added.` : "Those are already on the list.");
+}
+
+/** Toggle a keyword's "money" mark or pause/resume it. */
+export async function setWatchKeyword(form: FormData): Promise<void> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return;
+  const id = text(form, "id", 40);
+  const field = text(form, "field", 10);
+  if (!isUuid(id) || (field !== "money" && field !== "active")) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_keywords").update({ [field]: text(form, "value", 5) === "true" }).eq("id", id);
+  if (error) console.warn(`Watcher keyword change refused: ${error.code}`);
+  revalidatePath("/growth/watcher", "layout");
+}
+
+export async function addWatchMarket(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const city = cleanCity(text(form, "city", 80), text(form, "state", 4));
+  if (!city.ok) return { error: city.error };
+  const pos = cleanPosition(text(form, "lat", 20), text(form, "lng", 20));
+  if (!pos.ok) return { error: pos.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_markets").insert({ client_id: clientId, city: city.city, state: city.state, lat: pos.lat, lng: pos.lng });
+  if (error) return watchFail(error.code, "Couldn't add that city.");
+  return watchDone(`${city.city}, ${city.state} added.`);
+}
+
+/** Pause/resume a city, or fill in its map position. */
+export async function setWatchMarket(form: FormData): Promise<void> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return;
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_markets").update({ active: text(form, "active", 5) === "true" }).eq("id", id);
+  if (error) console.warn(`Watcher city change refused: ${error.code}`);
+  revalidatePath("/growth/watcher", "layout");
+}
+
+export async function addWatchCompetitor(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const domain = cleanDomain(text(form, "domain", 200));
+  if (!domain.ok) return { error: domain.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_competitors").insert({ client_id: clientId, domain: domain.domain });
+  if (error) return watchFail(error.code, "Couldn't add that competitor.");
+  return watchDone(`${domain.domain} added.`);
+}
+
+export async function setWatchCompetitor(form: FormData): Promise<void> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return;
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("watch_competitors").update({ active: text(form, "active", 5) === "true" }).eq("id", id);
+  if (error) console.warn(`Watcher competitor change refused: ${error.code}`);
+  revalidatePath("/growth/watcher", "layout");
+}
+
+/** Copy a saved audit's towns, competitors, keywords and starting positions into a watched client's lists. */
+export async function importWatchFromAudit(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const clientId = text(form, "clientId", 40);
+  const auditId = text(form, "auditId", 40);
+  if (!isUuid(clientId) || !isUuid(auditId)) return { error: "Pick a saved audit." };
+  const imp = await getWatchAuditImport(auditId);
+  if (!imp) return { error: "That audit can't be read (or has no settings yet)." };
+  const watch = await getWatch();
+  if (!watch.ready || !watch.settings) return { error: WATCH_SETUP };
+  if (!watch.clients.some((c) => c.id === clientId)) return { error: "Start watching this client first." };
+  const lim = watch.settings;
+  const room = (used: number, max: number) => Math.max(0, max - used);
+  const kwUsed = watch.keywords.filter((k) => k.clientId === clientId && k.active);
+  const mkUsed = watch.markets.filter((m) => m.clientId === clientId && m.active);
+  const cpUsed = watch.competitors.filter((c) => c.clientId === clientId && c.active);
+  const newMarkets = imp.markets.filter((m) => !mkUsed.some((x) => x.city.toLowerCase() === m.city.toLowerCase() && x.state === m.state)).slice(0, room(mkUsed.length, lim.marketsPerClient));
+  const newComps = imp.competitors.filter((d) => !cpUsed.some((x) => x.domain === d)).slice(0, room(cpUsed.length, lim.competitorsPerClient));
+  const newKws = imp.keywords.filter((k) => !kwUsed.some((x) => x.keyword === k.keyword)).slice(0, room(kwUsed.length, lim.keywordsPerClient));
+  const db = await createDatabaseClient();
+  const opts = { ignoreDuplicates: true } as const;
+  if (newMarkets.length) {
+    const r = await db.from("watch_markets").upsert(newMarkets.map((m) => ({ client_id: clientId, city: m.city, state: m.state, lat: m.lat, lng: m.lng })), { ...opts, onConflict: "client_id,city,state" });
+    if (r.error) return watchFail(r.error.code, "Couldn't copy the audit's cities.");
+  }
+  if (newComps.length) {
+    const r = await db.from("watch_competitors").upsert(newComps.map((d) => ({ client_id: clientId, domain: d, source: "audit" })), { ...opts, onConflict: "client_id,domain" });
+    if (r.error) return watchFail(r.error.code, "Couldn't copy the audit's competitors.");
+  }
+  if (newKws.length) {
+    const r = await db.from("watch_keywords").upsert(newKws.map((k) => ({ client_id: clientId, keyword: k.keyword, money: k.money })), { ...opts, onConflict: "client_id,keyword" });
+    if (r.error) return watchFail(r.error.code, "Couldn't copy the audit's keywords.");
+  }
+  // Starting positions: the audit checked the whole region, so they go on the home city.
+  let baseline = 0;
+  if (imp.retrieved && imp.baseline.length && imp.markets[0]) {
+    const home = imp.markets[0];
+    const [mk, kw] = await Promise.all([
+      db.from("watch_markets").select("id").eq("client_id", clientId).eq("city", home.city).eq("state", home.state).maybeSingle(),
+      db.from("watch_keywords").select("id, keyword").eq("client_id", clientId).limit(500),
+    ]);
+    const ids = new Map((kw.data ?? []).map((k) => [k.keyword as string, k.id as string]));
+    if (mk.data) {
+      const rows = imp.baseline.flatMap((b) => {
+        const id = ids.get(b.keyword);
+        return id ? [{ client_id: clientId, keyword_id: id, market_id: mk.data!.id as string, checked_on: imp.retrieved!, organic: b.organic, source: "audit" }] : [];
+      });
+      if (rows.length) {
+        const r = await db.from("watch_rank_checks").upsert(rows, { ...opts, onConflict: "keyword_id,market_id,checked_on" }).select("id");
+        if (r.error) console.warn(`Watcher audit baseline refused: ${r.error.code}`);
+        baseline = r.data?.length ?? 0;
+      }
+    }
+  }
+  const left = imp.markets.length - newMarkets.length + imp.keywords.length - newKws.length + imp.competitors.length - newComps.length;
+  return watchDone(
+    `Copied ${newKws.length} keywords, ${newMarkets.length} cities, ${newComps.length} competitors${baseline ? ` and ${baseline} starting positions` : ""}.${left > 0 ? " Some were already listed or didn't fit the list limits." : ""}`,
+  );
+}
+
+/** Owner: the monthly cap and list limits. */
+export async function saveWatchSettings(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner sets the Watcher cap and limits." };
+  const num = (k: string) => Number(text(form, k, 10));
+  const monthly = num("capUsd");
+  const kw = num("keywords");
+  const mk = num("markets");
+  const cp = num("competitors");
+  if (!Number.isFinite(monthly) || monthly < 0 || monthly > 1000) return { error: "The monthly cap is $0 to $1,000." };
+  if (![kw, mk, cp].every((n) => Number.isInteger(n) && n >= 1) || kw > 200 || mk > 50 || cp > 50) return { error: "Limits: 1–200 keywords, 1–50 cities, 1–50 competitors." };
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("watch_settings")
+    .update({ monthly_usd: Math.round(monthly * 100) / 100, keywords_per_client: kw, markets_per_client: mk, competitors_per_client: cp, updated_by: me.userId, updated_at: new Date().toISOString() })
+    .eq("id", true);
+  if (error) return watchFail(error.code, "Couldn't save the settings.");
+  return watchDone("Saved.");
+}
+
+/** Start a round of checks: works out the pairs and the estimate, then records it under the cap. */
+export async function startWatchRound(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const watch = await getWatch();
+  if (!watch.ready || !watch.settings) return { error: WATCH_SETUP };
+  const picked = form.getAll("clientId").filter((v): v is string => typeof v === "string" && isUuid(v));
+  const clients = watch.clients.filter((c) => c.active && picked.includes(c.id));
+  if (!clients.length) return { error: "Pick at least one watched client." };
+  let pairs = 0;
+  let cities = 0;
+  for (const c of clients) {
+    const k = watch.keywords.filter((x) => x.clientId === c.id && x.active).length;
+    const m = watch.markets.filter((x) => x.clientId === c.id && x.active).length;
+    pairs += k * m;
+    cities += m;
+  }
+  if (!pairs) return { error: "Those clients need at least one keyword and one city first." };
+  const volumes = volumesDue(watch.latestVolumeMonth, nyToday());
+  const est = roundEstimate(pairs, volumes ? cities : 0);
+  const left = Math.max(0, watch.settings.capUsd - watch.spentThisMonthUsd);
+  if (est > left) {
+    return { error: `This round is estimated at $${est.toFixed(2)}, but only $${left.toFixed(2)} of the $${watch.settings.capUsd.toFixed(2)} monthly cap is left. Pick fewer clients, or the owner can raise the cap.` };
+  }
+  const db = await createDatabaseClient();
+  const run = await db.from("watch_runs").insert({ client_ids: clients.map((c) => c.id), pairs, volumes, est_usd: est, created_by: me.userId }).select("id").single();
+  if (run.error || !run.data) {
+    console.warn(`Watcher round refused: ${run.error?.code}`);
+    return run.error?.code === "23514" ? { error: "That would go over the monthly Watcher cap, so the round won't go ahead." } : watchFail(run.error?.code, "Couldn't start the round.");
+  }
+  revalidatePath("/growth/watcher", "layout");
+  redirect(`/growth/watcher/rounds/${run.data.id}`);
+}
+
+/** Attach a round's results file: checked strictly, then saved (history only grows). */
+export async function attachWatchResults(_prev: WatchFormState, form: FormData): Promise<WatchFormState> {
+  await notWhilePreviewing();
+  const me = await watchEditor();
+  if ("error" in me) return me;
+  const runId = text(form, "runId", 40);
+  if (!isUuid(runId)) return { error: "Unknown round." };
+  let raw = typeof form.get("results") === "string" ? String(form.get("results")) : "";
+  const file = form.get("file");
+  if (file instanceof File && file.size > 0) {
+    if (file.size > WATCH_RESULTS_MAX_BYTES) return { error: "That file is too big (over 2 MB)." };
+    raw = await file.text();
+  }
+  if (!raw.trim()) return { error: "Paste the results, or pick the results file." };
+  const watch = await getWatch();
+  if (!watch.ready) return { error: WATCH_SETUP };
+  const run = watch.runs.find((r) => r.id === runId);
+  if (!run) return { error: "That round can't be found." };
+  if (run.status === "attached") return { error: "Results are already attached to this round." };
+  const parsed = parseWatchResults(raw, buildRoundScope(runId, run.clientIds, watch.keywords, watch.markets, nyToday()));
+  if (!parsed.ok) return { error: parsed.error };
+  const { results } = parsed;
+  const db = await createDatabaseClient();
+  const opts = { ignoreDuplicates: true } as const;
+  let saved = 0;
+  if (results.ranks.length) {
+    const r = await db
+      .from("watch_rank_checks")
+      .upsert(
+        results.ranks.map((x) => ({ run_id: runId, client_id: x.clientId, keyword_id: x.keywordId, market_id: x.marketId, checked_on: results.checkedOn, organic: x.organic, pack: x.pack, url: x.url, others: x.others, source: "dataforseo" })),
+        { ...opts, onConflict: "keyword_id,market_id,checked_on" },
+      )
+      .select("id");
+    if (r.error) {
+      console.warn(`Watcher results refused: ${r.error.code}`);
+      return watchFail(r.error.code, "Couldn't save the rank checks.");
+    }
+    saved += r.data?.length ?? 0;
+  }
+  if (results.volumes.length) {
+    const r = await db
+      .from("watch_volumes")
+      .upsert(
+        results.volumes.map((v) => ({ run_id: runId, client_id: v.clientId, market_id: v.marketId, keyword: v.keyword, month: v.month, volume: v.volume, cpc_usd: v.cpcUsd, source: "dataforseo" })),
+        { ...opts, onConflict: "market_id,keyword,month" },
+      )
+      .select("id");
+    if (r.error) {
+      console.warn(`Watcher volumes refused: ${r.error.code}`);
+      return watchFail(r.error.code, "Couldn't save the search volumes.");
+    }
+  }
+  // Map positions: only fill in cities that don't have one yet.
+  for (const m of results.markets) {
+    const known = watch.markets.find((x) => x.id === m.marketId);
+    if (!known || known.lat !== null) continue;
+    const r = await db.from("watch_markets").update({ lat: m.lat, lng: m.lng, location_code: m.locationCode }).eq("id", m.marketId);
+    if (r.error) console.warn(`Watcher map position refused: ${r.error.code}`);
+  }
+  const done = await db.from("watch_runs").update({ status: "attached", actual_usd: results.costUsd, checks_saved: saved }).eq("id", runId);
+  if (done.error) console.warn(`Watcher round not marked attached: ${done.error.code}`);
+  return watchDone(`Saved ${saved} rank checks and ${results.volumes.length} search volumes${results.skipped ? ` (${results.skipped} rows didn't match and were left out)` : ""}.`);
 }
