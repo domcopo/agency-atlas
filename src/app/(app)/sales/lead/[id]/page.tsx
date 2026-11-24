@@ -4,7 +4,9 @@
 // back (salespeople: open leads in the sales pipelines only), so anything else is
 // "not found". Every button posts to an existing server action. GoHighLevel is never changed.
 
+import { FileSearch } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { LeadActionForm } from "@/components/forms/LeadActionForm";
@@ -88,6 +90,11 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
         </>
       )}
 
+      {lead.status === "open" && (
+        <Link href={`/sales/audits/new?lead=${encodeURIComponent(lead.ghlId)}`} className="pressable glass mt-2.5 flex min-h-12 items-center justify-center gap-2 rounded-2xl text-sm font-semibold text-violet">
+          <FileSearch aria-hidden className="size-4" /> Audit this lead
+        </Link>
+      )}
       </Column>
       <Column>
       <SectionTitle aside={`${d.followUps.length} open`}>Follow-ups</SectionTitle>

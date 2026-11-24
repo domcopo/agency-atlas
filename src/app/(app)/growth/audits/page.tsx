@@ -1,4 +1,4 @@
-// SEO audits list. Phase 1: only the template preview (fictional business, $0 dry run).
+// SEO audits on Growth: the template preview and a link to the saved audits in Sales.
 
 import { FileSearch } from "lucide-react";
 import type { Metadata } from "next";
@@ -29,8 +29,13 @@ export default async function AuditsPage() {
           <p className="text-[11px] text-faint">Fictional business, made-up numbers. Dry run: nothing fetched, $0.</p>
         </GlassCard>
       )}
+      <SectionTitle>Saved audits</SectionTitle>
+      <GlassCard href="/sales/audits" label="Open saved audits in Sales" className="space-y-1">
+        <p className="font-semibold">Sales → Audits</p>
+        <p className="text-sm text-muted">Build, save and reopen custom audits (every rep&apos;s, for the owner and managers), and set spending caps and plan prices.</p>
+      </GlassCard>
       <p className="mt-4 px-1 text-[12px] text-faint">
-        Coming next: an intake form (website, location, Google profile, average ticket, niche), live data from DataForSEO and LeadSnap with a cost estimate and budget cap, then a Google Ads audit.
+        Coming next: attach results to a saved audit, real-looking maps, then a Google Ads audit.
       </p>
     </div>
   );

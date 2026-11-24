@@ -1,7 +1,7 @@
 // Page 1: headline numbers, search-visit leaderboard, and the headline.
 
 import { adsEquivalent, avgMapsRank, packCityPresence, packPresence, clientSite, leaderboard, localDemand, revenueFromVisits, revenueScenarios, totalVisits, weightedCpc } from "@/lib/audit/compute";
-import type { AuditBundle } from "@/lib/audit/data";
+import type { AuditPageProps } from "../Slide";
 import { fmtDate, fmtNum, fmtPct, fmtUsd } from "@/lib/audit/format";
 import { BasisTag, FigValue, ModelTag } from "../Bits";
 import { GoalPanel, type GoalItem } from "../GoalPanel";
@@ -9,7 +9,7 @@ import { KpiCards } from "../KpiCards";
 import { Leaderboard } from "../Leaderboard";
 import { Slide } from "../Slide";
 
-export function SummaryPage({ bundle }: { bundle: AuditBundle }) {
+export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
   const base = revenueScenarios(config, demand)?.find((r) => r.baseline) ?? null;
@@ -40,7 +40,7 @@ export function SummaryPage({ bundle }: { bundle: AuditBundle }) {
   return (
     <Slide
       bundle={bundle}
-      page={1}
+      page={pageNo ?? 1} pageCount={pageCount}
       kicker="Custom SEO audit"
       title={config.company.domain}
       subtitle={`Who wins ${config.company.niche.toLowerCase()} searches in ${config.company.region}, and how ${config.company.name} closes the gap. Prepared by ${config.agency.name} · ${fmtDate(config.preparedOn)}`}

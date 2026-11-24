@@ -1,17 +1,17 @@
 // Page 6: keyword clusters with demand, cost per click, difficulty and who wins.
 
 import { clusterRows } from "@/lib/audit/compute";
-import type { AuditBundle } from "@/lib/audit/data";
+import type { AuditPageProps } from "../Slide";
 import { fmtNum, fmtUsd } from "@/lib/audit/format";
 import { Missing } from "../Bits";
 import { Slide } from "../Slide";
 
-export function KeywordsPage({ bundle }: { bundle: AuditBundle }) {
+export function KeywordsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const names = new Map([[config.company.domain, "You"], ...config.competitors.map((c) => [c.domain, c.name.replace(/\s*\(.*\)$/, "")] as const)]);
   const rows = clusterRows(data.keywords);
   return (
-    <Slide bundle={bundle} page={6} title={`Local ${config.company.niche.toLowerCase()} keywords & demand`} aside="by cluster">
+    <Slide bundle={bundle} page={pageNo ?? 6} pageCount={pageCount} title={`Local ${config.company.niche.toLowerCase()} keywords & demand`} aside="by cluster">
       <div className="audit-card">
         <table className="audit-table">
           <thead>

@@ -1,7 +1,7 @@
 // Page 7: modeled revenue opportunity with every assumption printed, plus growth chart.
 
 import { blendedJobValue, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
-import type { AuditBundle } from "@/lib/audit/data";
+import type { AuditPageProps } from "../Slide";
 import { fmtNum, fmtPct, fmtUsd, shortLabels } from "@/lib/audit/format";
 import { BasisTag, ModelTag } from "../Bits";
 import { GrowthChart } from "../GrowthChart";
@@ -9,7 +9,7 @@ import { PrizeCards } from "../PrizeCards";
 import { ScenarioTable } from "../ScenarioTable";
 import { Slide } from "../Slide";
 
-export function RevenuePage({ bundle }: { bundle: AuditBundle }) {
+export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
   const rows = revenueScenarios(config, demand);
@@ -31,7 +31,7 @@ export function RevenuePage({ bundle }: { bundle: AuditBundle }) {
   const { leadRate, closeRate } = config.funnel;
   const rec = config.plans.find((p) => p.recommended);
   return (
-    <Slide bundle={bundle} page={7} title="Revenue opportunity from Google" aside="modeled, with every assumption shown">
+    <Slide bundle={bundle} page={pageNo ?? 7} pageCount={pageCount} title="Revenue opportunity from Google" aside="modeled, with every assumption shown">
       <div className="audit-row" style={{ flex: 1 }}>
         <div className="audit-card" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
           <h3 style={{ marginBottom: 0 }}>

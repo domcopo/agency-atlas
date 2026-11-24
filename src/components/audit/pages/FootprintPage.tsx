@@ -1,14 +1,14 @@
 // Page 3: geo-grids around the office, the state map, and who holds pages where.
 
 import { bestPositionInMarket } from "@/lib/audit/compute";
-import type { AuditBundle } from "@/lib/audit/data";
-import { STATES } from "@/lib/audit/geo";
+import type { AuditPageProps } from "../Slide";
+import { stateName as nameOfState } from "@/lib/audit/geo";
 import { CompetitorFootprint } from "../CompetitorFootprint";
 import { HeatGrid, HeatLegend } from "../HeatGrid";
 import { MapLegend, StateMap } from "../StateMap";
 import { Slide } from "../Slide";
 
-export function FootprintPage({ bundle }: { bundle: AuditBundle }) {
+export function FootprintPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = new Map(data.demand.map((d) => [d.marketId, d.searches.value]));
   const points = config.markets.map((m) => ({ market: m, searches: demand.get(m.id) ?? null, position: bestPositionInMarket(data.keywords, config.company.domain, m.name) }));
@@ -19,9 +19,9 @@ export function FootprintPage({ bundle }: { bundle: AuditBundle }) {
   // Top three competitors by footprint, plus the client (always shown).
   const rows = [...sites.filter((s) => !s.isClient).slice(0, 3), ...sites.filter((s) => s.isClient)];
   const g = data.grids[0];
-  const stateName = STATES[config.map.state]?.name ?? config.map.state;
+  const stateName = nameOfState(config.map.state);
   return (
-    <Slide bundle={bundle} page={3} title="Competitor geographic footprint" aside={`${stateName} · ${g?.kind === "pack" ? "local 3-pack by city" : "Maps geo-grid"} + ranking pages`}>
+    <Slide bundle={bundle} page={pageNo ?? 3} pageCount={pageCount} title="Competitor geographic footprint" aside={`${stateName} · ${g?.kind === "pack" ? "local 3-pack by city" : "Maps geo-grid"} + ranking pages`}>
       <div className="audit-row" style={{ flex: 1 }}>
         <div className="audit-card" style={{ flex: 1.3, display: "flex", flexDirection: "column", gap: 10 }}>
           <h3 style={{ margin: 0 }}>

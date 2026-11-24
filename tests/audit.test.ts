@@ -76,7 +76,7 @@ describe("audit settings (config)", () => {
 
 describe("audit state map", () => {
   it("only known states are allowed, and every market dot must sit inside that state", () => {
-    expect(errorsFor((c) => ((c.map as { state: string }).state = "ZZ")).join()).toMatch(/Map state must be one of: OH/);
+    expect(errorsFor((c) => ((c.map as { state: string }).state = "ZZ")).join()).toMatch(/Map state must be a two-letter US state code/);
     // Pittsburgh is just across the Ohio line, in Pennsylvania.
     expect(errorsFor((c) => ((c.markets as { lat?: number; lng?: number }[])[1] = { ...(c.markets as object[])[1], lat: 40.44, lng: -79.99 })).join()).toMatch(/outside Ohio/);
     expect(errorsFor((c) => (((c.markets as { lat?: number }[])[1]!.lat = undefined))).join()).toMatch(/both latitude and longitude/);
