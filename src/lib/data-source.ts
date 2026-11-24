@@ -52,6 +52,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
+import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
@@ -2264,6 +2265,49 @@ export const getAudits = cache(async (): Promise<{ ready: boolean; audits: Saved
   const names = new Map((team.data ?? []).map((t) => [t.user_id as string, t.display_name as string]));
   const audits = (rows.data ?? []).map((r) => toSavedAudit(r, me.userId, names));
   return { ready: true, audits: [...audits.filter((a) => !a.archived), ...audits.filter((a) => a.archived)] };
+});
+
+/**
+ * Sales leaderboard (0026 view): names + this month's Won totals only. The database decides
+ * who may read it (owner, managers, sales, with two-factor) and adds up the deals; a
+ * salesperson never gets the deals themselves. Before 0026 is run: ready false.
+ * Demo mode: three fictional reps, labeled as samples.
+ */
+export const getLeaderboard = cache(async (): Promise<{ ready: boolean; sample: boolean; scope: "sales" | "all"; rows: BoardRow[] }> => {
+  if (!usesDatabase()) {
+    if (!showsSamples()) return { ready: false, sample: false, scope: "all", rows: [] };
+    return {
+      ready: true,
+      sample: true,
+      scope: "sales",
+      rows: [
+        { name: "Avery Sample (sample)", isMe: true, linked: true, wonUsd: 12400, wonDeals: 3 },
+        { name: "Blake Sample (sample)", isMe: false, linked: true, wonUsd: 4800, wonDeals: 1 },
+        { name: "Casey Sample (sample)", isMe: false, linked: true, wonUsd: 0, wonDeals: 0 },
+      ],
+    };
+  }
+  const none = { ready: false, sample: false, scope: "all" as const, rows: [] };
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return none;
+  const db = await createDatabaseClient();
+  const [board, pipes] = await Promise.all([
+    db.from("sales_leaderboard").select("name, is_me, linked, won_usd, won_deals").limit(100),
+    db.from("sales_pipelines").select("pipeline_id").eq("active", true).limit(1),
+  ]);
+  if (board.error) return none;
+  return {
+    ready: true,
+    sample: false,
+    scope: (pipes.data ?? []).length > 0 ? "sales" : "all",
+    rows: (board.data ?? []).map((r) => ({
+      name: String(r.name ?? ""),
+      isMe: r.is_me === true,
+      linked: r.linked === true,
+      wonUsd: Number(r.won_usd ?? 0) || 0,
+      wonDeals: Number(r.won_deals ?? 0) || 0,
+    })),
+  };
 });
 
 /** One saved audit (or null: not found, or not one the database lets this person read). */
