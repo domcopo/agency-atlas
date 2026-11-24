@@ -8,13 +8,14 @@
 // (through the GET-only module) and writes copies into this app's own database.
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
 import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
 import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
-import type { WorkOrderDrafts } from "@/lib/types";
+import type { RosterClient, WorkOrderDrafts } from "@/lib/types";
 import { findSecrets } from "@/lib/kit";
 import { matchClient } from "@/lib/billing";
 import {
@@ -58,6 +59,7 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
+import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
 import { parseAuditConfig } from "@/lib/audit/config";
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
@@ -1024,50 +1026,293 @@ export async function saveNoticeMutes(_prev: { error?: string; ok?: boolean } | 
 }
 
 /** "Set up clients" screen: owner and plan for one client in one save (owner only). */
-export async function saveClientSetup(form: FormData) {
+type CareState = { error?: string; ok?: boolean } | undefined;
+const SERVICE_NAMES: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
+
+/** Is 0025 (client care) run? Checked with a column only it adds. */
+async function careReady(db: Db): Promise<boolean> {
+  const { error } = await db.from("clients").select("vip").limit(1);
+  return !error;
+}
+
+/** Update a row if it exists, else add it (no upsert: the app may not change key columns). */
+async function updateOrInsert(db: Db, table: "client_plans" | "client_money", keys: Record<string, string>, values: Record<string, unknown>): Promise<string | null> {
+  let q = db.from(table).update(values);
+  for (const [k, v] of Object.entries(keys)) q = q.eq(k, v);
+  const { data, error } = await q.select(Object.keys(keys)[0]!);
+  if (error) return error.code ?? "?";
+  if (data && data.length) return null;
+  const ins = await db.from(table).insert({ ...keys, ...values });
+  return ins.error ? (ins.error.code ?? "?") : null;
+}
+
+/**
+ * Owner only: a client's main person, backup, services, tier per service, VIP and monthly
+ * amount. Only the fields the form sends are changed. The database enforces owner-only too.
+ * Amounts are never written to the history (managers can read it).
+ */
+export async function saveClientCare(_prev: CareState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can change a client's plan." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const db = await createDatabaseClient();
+  const ready = await careReady(db);
+  const { data: before } = await db.from("clients").select(ready ? "owner_staff_id, backup_staff_id, vip, services" : "owner_staff_id, services").eq("id", clientId).maybeSingle();
+  const prev = before as { owner_staff_id: string | null; backup_staff_id?: string | null; vip?: boolean; services: string[] | null } | null;
+  if (!prev) return { error: "Client not found." };
+
+  const update: Record<string, unknown> = {};
+  const history: string[] = [];
+  let ownerName: string | null = null;
+  if (form.has("ownerId")) {
+    const ownerId = text(form, "ownerId", 40);
+    ownerName = ownerId ? await staffExists(db, ownerId) : null;
+    if (ownerId && !ownerName) return { error: "Pick someone from the team." };
+    if ((prev.owner_staff_id ?? "") !== ownerId) {
+      update.owner_staff_id = ownerId || null;
+      history.push(ownerName ? `Main person set to ${ownerName}` : "Main person removed");
+    }
+  }
+  const mainId = (update.owner_staff_id as string | null | undefined) ?? prev.owner_staff_id ?? "";
+  if (ready && form.has("backupId")) {
+    const backupId = text(form, "backupId", 40);
+    const backupName = backupId ? await staffExists(db, backupId) : null;
+    if (backupId && !backupName) return { error: "Pick a backup from the team." };
+    if (backupId && backupId === mainId) return { error: "Pick a backup who isn't the main person." };
+    if ((prev.backup_staff_id ?? "") !== backupId) {
+      update.backup_staff_id = backupId || null;
+      history.push(backupName ? `Backup set to ${backupName}` : "Backup removed");
+    }
+  }
+  let services = (prev.services ?? []) as string[];
+  if (form.has("servicesSent")) services = SERVICES.filter((sv) => form.getAll("services").includes(sv));
+
+  // Tiers: each must be a tier of that service. Picking a tier also ticks the service.
+  const tierPicks: { service: string; planId: string | null }[] = [];
+  if (ready) {
+    for (const sv of SERVICES) if (form.has(`tier_${sv}`)) tierPicks.push({ service: sv, planId: text(form, `tier_${sv}`, 40) || null });
+  }
+  const current = ready ? ((await db.from("client_plans").select("service, plan_id").eq("client_id", clientId)).data ?? []) as { service: string; plan_id: string | null }[] : [];
+  const ids = tierPicks.map((t) => t.planId).filter((x): x is string => Boolean(x));
+  if (ids.some((id) => !isUuid(id))) return { error: "Unknown plan tier." };
+  const tierRows = ids.length ? (((await db.from("care_plans").select("id, service, name, archived").in("id", ids)).data ?? []) as { id: string; service: string; name: string; archived: boolean }[]) : [];
+  const changedTiers: { service: string; planId: string | null }[] = [];
+  for (const t of tierPicks) {
+    const was = current.find((c) => c.service === t.service)?.plan_id ?? null;
+    if (t.planId) {
+      const plan = tierRows.find((r) => r.id === t.planId);
+      if (!plan || plan.service !== t.service) return { error: "That tier doesn't belong to that service." };
+      if (plan.archived && plan.id !== was) return { error: `${plan.name} is archived. Pick another tier.` };
+      if (!services.includes(t.service)) services = [...services, t.service];
+    }
+    if (was !== t.planId) changedTiers.push(t);
+  }
+  const servicesChanged = [...(prev.services ?? [])].sort().join() !== [...services].sort().join();
+  if (servicesChanged) update.services = services;
+  if (ready && form.has("vipSent")) {
+    const vip = form.get("vip") === "on";
+    if (Boolean(prev.vip) !== vip) {
+      update.vip = vip;
+      history.push(vip ? "Marked VIP" : "VIP removed");
+    }
+  }
+  let monthly: number | null = null;
+  if (form.has("monthly")) {
+    monthly = parseMonthly(text(form, "monthly", 16));
+    if (Number.isNaN(monthly)) return { error: "Monthly amount should be a number like 500 or 499.99." };
+    if (monthly !== null && !ready) return { error: "Amounts move to their own owner-only table in setup step 0025. Run it first." };
+  }
+
+  if (Object.keys(update).length) {
+    const { error } = await db.from("clients").update(update).eq("id", clientId);
+    if (error) {
+      console.warn(`Client care change refused: ${error.code}`);
+      return { error: "Couldn't save that change." };
+    }
+  }
+  for (const t of changedTiers) {
+    const code = await updateOrInsert(db, "client_plans", { client_id: clientId, service: t.service }, { plan_id: t.planId });
+    if (code) {
+      console.warn(`Tier change refused: ${code}`);
+      return { error: "Saved the client, but the tier didn't save. Try again." };
+    }
+  }
+  if (monthly !== null) {
+    const code = await updateOrInsert(db, "client_money", { client_id: clientId }, { monthly_usd: monthly });
+    if (code) {
+      console.warn(`Amount change refused: ${code}`);
+      return { error: "Saved the rest, but the amount didn't save." };
+    }
+  }
+  if (servicesChanged || changedTiers.length) {
+    const tiers = new Map(current.map((c) => [c.service, c.plan_id]));
+    for (const t of changedTiers) tiers.set(t.service, t.planId);
+    const name = (id: string | null | undefined) => (id ? (tierRows.find((r) => r.id === id)?.name ?? null) : null);
+    const label = services.map((sv) => [SERVICE_NAMES[sv], name(tiers.get(sv))].filter(Boolean).join(" ")).join(" + ");
+    history.push(`Plan set to: ${label || "no services"}`);
+  }
+  for (const summary of history) await logActivity(db, { client_id: clientId, kind: "owner_changed", summary });
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Owner only: add or edit a plan tier (0025). Never deleted; see setCarePlanArchived. */
+export async function saveCarePlan(_prev: CareState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can change plan tiers." };
+  const id = text(form, "id", 40);
+  if (id && !isUuid(id)) return { error: "Unknown tier." };
+  const parsed = parseCarePlan({
+    service: text(form, "service", 10),
+    name: text(form, "name", 60),
+    rank: text(form, "rank", 4),
+    hours: text(form, "hours", 8),
+    includes: typeof form.get("includes") === "string" ? (form.get("includes") as string).slice(0, 2000) : "",
+    heatMaps: text(form, "heatMaps", 4),
+    reportEveryDays: text(form, "reportEveryDays", 4),
+    midMonth: form.get("midMonth") === "on",
+    competitorReviewMonths: text(form, "competitorReviewMonths", 4),
+    topTier: form.get("topTier") === "on",
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const secret = findSecrets(parsed.plan.includes.join("\n"));
+  if (secret) return { error: secret };
+  const p = parsed.plan;
+  const row = {
+    name: p.name,
+    rank: p.rank,
+    hours_per_month: p.hoursPerMonth,
+    includes: p.includes,
+    heat_maps_per_month: p.heatMapsPerMonth,
+    report_every_days: p.reportEveryDays,
+    mid_month_check_in: p.midMonthCheckIn,
+    competitor_review_months: p.competitorReviewMonths,
+    top_tier: p.topTier,
+  };
+  const db = await createDatabaseClient();
+  if (!id) {
+    const { count } = await db.from("care_plans").select("id", { count: "exact", head: true }).eq("service", p.service).eq("archived", false);
+    if ((count ?? 0) >= CARE_RULES.maxTiersPerService) return { error: `Up to ${CARE_RULES.maxTiersPerService} ${p.service} tiers. Archive one first.` };
+  }
+  const { error } = id ? await db.from("care_plans").update(row).eq("id", id) : await db.from("care_plans").insert({ ...row, service: p.service });
+  if (error) {
+    console.warn(`Tier not saved: ${error.code}`);
+    return {
+      error: MISSING_TABLE.has(error.code ?? "") ? "Plan tiers need one setup step first (0025 SQL)." : error.code === "23505" ? `There's already a ${p.service} tier called ${p.name}.` : "Couldn't save the tier.",
+    };
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** Owner only: archive a tier (clients already on it keep it) or bring it back. */
+export async function setCarePlanArchived(form: FormData) {
   await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
-  const clientId = text(form, "clientId", 40);
-  const ownerId = text(form, "ownerId", 40);
-  if (!isUuid(clientId)) return;
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return;
   const db = await createDatabaseClient();
-  const ownerName = ownerId ? await staffExists(db, ownerId) : null;
-  if (ownerId && !ownerName) return;
-  const picked = SERVICES.filter((sv) => form.getAll("services").includes(sv));
-  const { data: before } = await db.from("clients").select("owner_staff_id, services").eq("id", clientId).maybeSingle();
-  const prev = before as { owner_staff_id: string | null; services: string[] | null } | null;
-  if (!prev) return;
-  const { error } = await db.from("clients").update({ owner_staff_id: ownerId || null, services: picked }).eq("id", clientId);
-  if (error) {
-    console.warn(`Client setup refused: ${error.code}`);
-    return;
-  }
-  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
-  if ((prev.owner_staff_id ?? "") !== (ownerId || ""))
-    await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: ownerName ? `Owner set to ${ownerName}` : "Owner removed" });
-  if ([...(prev.services ?? [])].sort().join() !== [...picked].sort().join())
-    await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `Plan set to: ${picked.map((p) => names[p]).join(" + ") || "no services"}` });
+  const { error } = await db.from("care_plans").update({ archived: form.get("archived") === "true" }).eq("id", id);
+  if (error) console.warn(`Tier archive refused: ${error.code}`);
   revalidatePath("/", "layout");
 }
 
-/** Which services a client buys (owner only; the database enforces this too). */
-export async function setClientServices(form: FormData) {
+type AddClientResult = { error?: string; similar?: { name: string; slug: string }[]; values?: Record<string, string | string[]> };
+
+/**
+ * Owner or manager: add a client GoHighLevel didn't bring in. Managers can't set VIP or an
+ * amount (the database refuses it too). Warns about a similar existing name first.
+ * On a problem, the typed values come back so the form doesn't empty itself.
+ */
+export async function addClient(_prev: AddClientResult | undefined, form: FormData): Promise<AddClientResult> {
+  await notWhilePreviewing();
+  const result = await addClientNow(form);
+  const values: Record<string, string | string[]> = { services: form.getAll("services").filter((v): v is string => typeof v === "string").slice(0, 3) };
+  for (const k of ["name", "startDate", "ownerId", "backupId", "monthly", "vip", "tier_SEO", "tier_Ads", "tier_Website"]) values[k] = text(form, k, 100);
+  return { ...result, values };
+}
+
+async function addClientNow(form: FormData): Promise<AddClientResult> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || me.role !== "owner") return;
-  const clientId = text(form, "clientId", 40);
-  if (!isUuid(clientId)) return;
-  const picked = SERVICES.filter((sv) => form.getAll("services").includes(sv));
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can add clients." };
+  const isOwner = me.role === "owner";
+  const name = text(form, "name", 100).replace(/\s+/g, " ");
+  if (!name || name.length > 80) return { error: "Type the client's business name (up to 80 characters)." };
+  if (contactDetailsIn(name).length) return { error: "Just the business name, please: no emails or phone numbers." };
+  const startDate = anyDate(text(form, "startDate", 10));
+  if (!startDate) return { error: "Pick the day they started." };
+  const services = SERVICES.filter((sv) => form.getAll("services").includes(sv));
+  if (!services.length) return { error: "Tick at least one service." };
+  const ownerId = text(form, "ownerId", 40);
+  const backupId = text(form, "backupId", 40);
+  if (backupId && backupId === ownerId) return { error: "Pick a backup who isn't the main person." };
+  const monthly = isOwner ? parseMonthly(text(form, "monthly", 16)) : null;
+  if (Number.isNaN(monthly)) return { error: "Monthly amount should be a number like 500 or 499.99." };
+  const vip = isOwner && form.get("vip") === "on";
+
   const db = await createDatabaseClient();
-  const { error } = await db.from("clients").update({ services: picked }).eq("id", clientId);
-  if (error) {
-    console.warn(`Services change refused: ${error.code}`);
-    return;
+  const ready = await careReady(db);
+  if (!ready && !isOwner) return { error: "Adding clients needs one setup step first (0025 SQL). Ask the owner." };
+  if (ownerId && !(await staffExists(db, ownerId))) return { error: "Pick a main person from the team." };
+  if (backupId && !(await staffExists(db, backupId))) return { error: "Pick a backup from the team." };
+
+  // A tier is required for each ticked service that has tiers.
+  const tierRows = ready ? (((await db.from("care_plans").select("id, service, name, archived")).data ?? []) as { id: string; service: string; name: string; archived: boolean }[]) : [];
+  const tiers: { service: string; planId: string; name: string }[] = [];
+  for (const sv of services) {
+    const options = tierRows.filter((r) => r.service === sv && !r.archived);
+    const picked = text(form, `tier_${sv}`, 40);
+    if (!picked) {
+      if (options.length) return { error: `Pick a ${SERVICE_NAMES[sv]} tier.` };
+      continue;
+    }
+    const plan = options.find((r) => r.id === picked);
+    if (!plan) return { error: `Pick a ${SERVICE_NAMES[sv]} tier from the list.` };
+    tiers.push({ service: sv, planId: plan.id, name: plan.name });
   }
-  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
-  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `Plan set to: ${picked.map((p) => names[p]).join(" + ") || "no services"}` });
-  refreshOps(text(form, "slug", 90));
+
+  // Same client twice? Show the look-alikes until the person ticks "it's a different client".
+  const { data: all } = await db.from("clients").select("slug, name").limit(5000);
+  const existing = (all ?? []) as { slug: string; name: string }[];
+  const similar = similarClients(name, existing);
+  if (similar.length && form.get("notDuplicate") !== "on") {
+    return { error: "This looks like a client you already have. Open it, or tick \"It's a different client\" and add again.", similar: similar.slice(0, 5) };
+  }
+
+  let slug = uniqueSlug(name, existing.map((c) => c.slug));
+  const row: Record<string, unknown> = { name, start_date: startDate, status: "active", services, owner_staff_id: ownerId || null };
+  if (ready) Object.assign(row, { backup_staff_id: backupId || null, vip, care_started_on: startDate });
+  else row.monthly_usd = monthly ?? 0; // before 0025 the amount still lives on the client row
+  let added = await db.from("clients").insert({ ...row, slug }).select("id").single();
+  if (added.error?.code === "23505") {
+    // Someone added the same address a moment ago: try the next free one.
+    slug = uniqueSlug(name, [...existing.map((c) => c.slug), slug]);
+    added = await db.from("clients").insert({ ...row, slug }).select("id").single();
+  }
+  if (added.error || !added.data) {
+    console.warn(`Client not added: ${added.error?.code}`);
+    return { error: "Couldn't add the client." };
+  }
+  const clientId = (added.data as { id: string }).id;
+  const problems: string[] = [];
+  for (const t of tiers) {
+    const { error } = await db.from("client_plans").insert({ client_id: clientId, service: t.service, plan_id: t.planId, started_on: startDate });
+    if (error) problems.push("tier");
+  }
+  if (ready && isOwner && monthly !== null) {
+    const { error } = await db.from("client_money").insert({ client_id: clientId, monthly_usd: monthly });
+    if (error) problems.push("amount");
+  }
+  const label = services.map((sv) => [SERVICE_NAMES[sv], tiers.find((t) => t.service === sv)?.name].filter(Boolean).join(" ")).join(" + ");
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: `Added by hand. Plan: ${label}` });
+  revalidatePath("/", "layout");
+  if (problems.length) return { error: `Client added, but the ${problems.join(" and ")} didn't save. Open the client to fix it.`, similar: [{ name, slug }] };
+  redirect(`/clients/${slug}`);
 }
 
 /** Who owns a client (owner only; the database enforces this too). */
@@ -1172,10 +1417,12 @@ export async function importPrivateData(): Promise<{ error?: string; message?: s
   if (!roster) return { error: "No private client file found on this Mac." };
   const db = await createDatabaseClient();
 
+  // After 0025 amounts live in client_money (owner only), not on the client row.
+  const ready = await careReady(db);
   const rows = roster.clients.map((c) => ({
     slug: c.id,
     name: c.name,
-    monthly_usd: c.monthlyUsd,
+    ...(ready ? {} : { monthly_usd: c.monthlyUsd ?? 0 }),
     start_date: c.startDate,
     status: c.status,
     services: c.services,
@@ -1190,6 +1437,14 @@ export async function importPrivateData(): Promise<{ error?: string; message?: s
     // Code + short message only (this Mac's log). Never the details, which can contain client data.
     console.warn(`Import refused: ${error.code} ${error.message}`);
     return { error: `Import failed and nothing was saved (code ${error.code ?? "?"}).` };
+  }
+  if (ready) {
+    const { data: ids } = await db.from("clients").select("id, slug");
+    const idBySlug = new Map(((ids ?? []) as { id: string; slug: string }[]).map((r) => [r.slug, r.id]));
+    for (const c of roster.clients) {
+      const id = idBySlug.get(c.id);
+      if (id) await updateOrInsert(db, "client_money", { client_id: id }, { monthly_usd: c.monthlyUsd ?? 0 });
+    }
   }
 
   const team = loadPrivateTeam() ?? [];
@@ -1220,7 +1475,38 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return { error: "Only the owner can sync." };
   if (!isGhlConfigured()) return { error: "GoHighLevel isn't set up on this Mac yet." };
+  const db = await createDatabaseClient();
+  const result = await runGhlSync(db, await getRoster());
+  if (result.error) return result;
+  // Billing (0015): refreshed along with the sync when connected (the 10-minute limit still applies).
+  const billing = isGhlBillingConfigured() ? await syncBilling() : null;
+  const billingNote = billing ? ` Billing: ${billing.error ?? billing.message}` : "";
+  revalidatePath("/", "layout");
+  return { message: `${result.message}${billingNote} Nothing in GoHighLevel was changed.` };
+}
 
+/**
+ * Owner's Home: if the last GoHighLevel sync is over a day old, run one in the background
+ * after the page is sent (read-only, same allowlisted GETs as the Sync button; no billing).
+ * The next visit shows the fresh call/message times. Nobody has to press Sync.
+ */
+export async function autoSyncGhl(): Promise<void> {
+  await notWhilePreviewing(); // callers catch this; a preview never syncs anything
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner" || !isGhlConfigured()) return;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("ghl_syncs").select("ran_at").order("ran_at", { ascending: false }).limit(1);
+  if (error || !autoSyncDue((data?.[0]?.ran_at as string | undefined) ?? null, new Date())) return;
+  // Read everything that needs this request (sign-in, client list) now; after() can't.
+  const clients = await getRoster();
+  after(async () => {
+    const result = await runGhlSync(db, clients).catch(() => ({ error: "stopped" }));
+    if (result.error) console.warn("Daily GoHighLevel sync stopped; the Sync button still works.");
+  });
+}
+
+/** Reads from GoHighLevel and saves copies. No cookies or page refresh, so it can run after a page is sent. */
+async function runGhlSync(db: Db, clients: RosterClient[]): Promise<{ error?: string; message?: string }> {
   let locationName: string | null;
   let opportunities: GhlOpportunity[];
   let appointments: GhlAppointment[];
@@ -1235,7 +1521,6 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
     return { error: `${message} Nothing was changed.` };
   }
 
-  const db = await createDatabaseClient();
   const now = new Date().toISOString();
   const saved = await saveOpportunities(db, opportunities, now);
   if (saved) return { error: `Read from GoHighLevel, but saving failed (code ${saved}).` };
@@ -1261,13 +1546,9 @@ export async function syncFromGhl(): Promise<{ error?: string; message?: string 
   }
   await db.from("ghl_syncs").insert({ location_name: locationName, opportunities: opportunities.length, appointments: appointments.length });
   // Phase 6: call/message TIMES for clients. A problem here never undoes the pipeline sync.
-  const times = await syncContactTimes(db);
-  // Billing (0015): refreshed along with the sync when connected (the 10-minute limit still applies).
-  const billing = isGhlBillingConfigured() ? await syncBilling() : null;
-  const billingNote = billing ? ` Billing: ${billing.error ?? billing.message}` : "";
-  revalidatePath("/", "layout");
+  const times = await syncContactTimes(db, clients);
   return {
-    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times}${usersNote}${billingNote} Nothing in GoHighLevel was changed.`,
+    message: `Read ${opportunities.length} opportunities and ${appointments.length} appointments${locationName ? ` from ${locationName}` : ""}. ${times}${usersNote}`,
   };
 }
 
@@ -1525,10 +1806,10 @@ function nameQueries(name: string): string[] {
 }
 
 /** Reads times for confirmed matches and suggests matches for the rest. Returns a short summary. */
-async function syncContactTimes(db: Db): Promise<string> {
+async function syncContactTimes(db: Db, roster: RosterClient[]): Promise<string> {
   const links = await db.from("ghl_contact_links").select("client_id, ghl_contact_id, status");
   if (links.error) return "Call/message times: run the 0008 setup step to turn them on.";
-  const clients = (await getRoster()).filter((c) => (c.status === "active" || c.status === "paused") && c.dbId);
+  const clients = roster.filter((c) => (c.status === "active" || c.status === "paused") && c.dbId);
   const rows = (links.data ?? []) as { client_id: string; ghl_contact_id: string; status: string }[];
   let read = 0;
   let suggested = 0;

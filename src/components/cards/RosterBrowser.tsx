@@ -6,17 +6,19 @@ import type { BillingChip as BillingChipKind } from "@/lib/billing";
 // Search and group the client roster. The server already decided what this page
 // may show; this only narrows it down on screen.
 
-import { AlertCircle, ChevronRight, SearchX } from "lucide-react";
+import { AlertCircle, ChevronRight, SearchX, Star } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { cn, formatDate, formatUsdExact } from "@/lib/format";
+import { servicesLabel } from "@/lib/ops";
 import type { HealthLevel, RosterClient, SubscriptionStatus } from "@/lib/types";
 import { EmptyState, HealthBadge, StatusPill } from "@/components/labels/labels";
 import { Chip, ChipRow, SearchBox } from "./Filters";
 
 export interface RosterRow extends RosterClient {
   tenure: string;
-  tier: "high" | "mid" | "low";
+  /** Price band (owner only); null for everyone else, who never see amounts. */
+  tier: "high" | "mid" | "low" | null;
   /** Missing for past clients. */
   health?: HealthLevel;
   /** Owner only: payment status from billing (0015). */
@@ -28,13 +30,15 @@ const groups: { id: string; title: string; hint: string; match: (c: RosterRow) =
   { id: "high", title: "$500+ high tier", hint: "Active, $500 or more a month", match: (c) => c.status === "active" && c.tier === "high" },
   { id: "mid", title: "$150–499 mid tier", hint: "Active, $150–$499 a month", match: (c) => c.status === "active" && c.tier === "mid" },
   { id: "low", title: "Under $150 low tier", hint: "Active, under $150 a month", match: (c) => c.status === "active" && c.tier === "low" },
+  // Everyone but the owner: no price bands, one Active list (VIP and top tiers first).
+  { id: "active", title: "Active", hint: "VIP and top tiers first", match: (c) => c.status === "active" && c.tier === null },
   { id: "paused", title: "Paused or unpaid", hint: "Win-back opportunities", match: (c) => c.status === "paused" },
   { id: "canceled", title: "Canceled & expired", hint: "Past clients", match: (c) => c.status === "canceled" || c.status === "incomplete_expired" },
 ];
 
 type Filter = "all" | SubscriptionStatus | "check" | "at_risk" | "watch";
 
-export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
+export function RosterBrowser({ clients, showMoney }: { clients: RosterRow[]; showMoney: boolean }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
 
@@ -95,16 +99,18 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
       {groups.map((g) => {
         const rows = results.filter(g.match);
         if (rows.length === 0) return null;
-        const total = rows.reduce((n, c) => n + c.monthlyUsd, 0);
+        const total = rows.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0);
         return (
           <section key={g.id} id={g.id} aria-labelledby={`h-${g.id}`} className="mt-6 scroll-mt-16">
             <div className="mb-2 flex items-baseline justify-between px-1">
               <h2 id={`h-${g.id}`} className="text-[13px] font-semibold uppercase tracking-[0.08em] text-muted">
                 {g.title} <span className="text-faint">· {rows.length}</span>
               </h2>
-              <span className={cn("text-xs font-semibold", g.id === "canceled" ? "text-faint" : "text-ink")}>
-                {formatUsdExact(Math.round(total * 100) / 100)}/mo
-              </span>
+              {showMoney && (
+                <span className={cn("text-xs font-semibold", g.id === "canceled" ? "text-faint" : "text-ink")}>
+                  {formatUsdExact(Math.round(total * 100) / 100)}/mo
+                </span>
+              )}
             </div>
             {/* Wide screens: the list flows into 2 (then 3) columns, reading down each column. */}
             <ul className="glass divide-y divide-line overflow-hidden rounded-3xl lg:columns-2 lg:gap-0 xl:columns-3 lg:[&>li]:break-inside-avoid">
@@ -114,19 +120,26 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
                     <div className="min-w-0 flex-1">
                       <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
                         <span className="truncate">{c.name}</span>
+                        {c.vip && <Star aria-label="VIP" className="size-3.5 shrink-0 fill-amber text-amber" />}
                         {c.check && <AlertCircle aria-label="Needs checking" className="size-3.5 shrink-0 text-amber" />}
                         {c.billing && <BillingChip chip={c.billing} title={c.billingDetail ?? undefined} />}
                       </p>
                       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
                         {c.health && <HealthBadge level={c.health} />}
                         {c.health && <span aria-hidden>·</span>}
+                        {c.services.length > 0 && (
+                          <>
+                            <span>{servicesLabel(c)}</span>
+                            <span aria-hidden>·</span>
+                          </>
+                        )}
                         <span>
                           {c.tenure} · since {formatDate(c.startDate)}
                         </span>
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <span className="text-sm font-semibold">{formatUsdExact(c.monthlyUsd)}</span>
+                      {c.monthlyUsd !== null && <span className="text-sm font-semibold">{formatUsdExact(c.monthlyUsd)}</span>}
                       <StatusPill status={c.status} />
                     </div>
                     <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" />

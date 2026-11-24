@@ -28,10 +28,13 @@ export function WinLossChart({
   months,
   lostWithoutDate,
   hasRealData,
+  showMoney = true,
 }: {
   months: WinLossMonthView[];
   lostWithoutDate: number;
   hasRealData: boolean;
+  /** False for everyone but the owner (amounts are owner-only). */
+  showMoney?: boolean;
 }) {
   const [view, setView] = useState<View>("won");
   const value = (m: WinLossMonthView) => (view === "won" ? m.won : view === "lost" ? m.lost : m.won - m.lost);
@@ -103,14 +106,19 @@ export function WinLossChart({
       <p className="mt-3 border-t border-line pt-2 text-xs text-muted">
         {view === "won" && last && (
           <>
-            {last.label}: <span className="font-semibold text-ink">{last.won} won</span>, adding{" "}
-            <span className="font-semibold text-ink">{formatUsdExact(last.wonMrr)}/mo</span>. Counted by start date.
+            {last.label}: <span className="font-semibold text-ink">{last.won} won</span>
+            {showMoney && (
+              <>
+                , adding <span className="font-semibold text-ink">{formatUsdExact(last.wonMrr)}/mo</span>
+              </>
+            )}
+            . Counted by start date.
           </>
         )}
         {view === "lost" && (
           <>
-            <span className="font-semibold text-ink">{sum((m) => m.lost)} lost</span> in these 6 months (
-            {formatUsdExact(Math.round(sum((m) => m.lostMrr) * 100) / 100)}/mo). Counted by cancel date.
+            <span className="font-semibold text-ink">{sum((m) => m.lost)} lost</span> in these 6 months
+            {showMoney && ` (${formatUsdExact(Math.round(sum((m) => m.lostMrr) * 100) / 100)}/mo)`}. Counted by cancel date.
           </>
         )}
         {view === "net" && (

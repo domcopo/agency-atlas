@@ -189,16 +189,16 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     add("leads", w, opportunities ? opportunities.filter((o) => o.createdAt && inWeek(nyDate(o.createdAt), w)).length : null, "count", opportunities ? "new GoHighLevel opportunities (as of the last sync)" : "GoHighLevel not synced");
     for (const [key, svc] of [["sales_ads", "Ads"], ["sales_seo", "SEO"], ["sales_web", "Website"]] as const)
       add(key, w, started.filter((c) => c.services.includes(svc)).length, "count", `new clients with ${svc} (client start dates)`);
-    add("sales_value_monthly", w, started.reduce((n, c) => n + c.monthlyUsd, 0), "usd", "monthly plans of new clients");
+    add("sales_value_monthly", w, started.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0), "usd", "monthly plans of new clients");
     add("sales_value_onetime", w, null, "usd", "one-time fees aren't tracked in Atlas");
     add("onboarded", w, started.length, "count");
     add("clients_lost", w, ended.length, "count", "clients with an end date this week");
-    add("lost_value_monthly", w, ended.reduce((n, c) => n + c.monthlyUsd, 0), "usd");
+    add("lost_value_monthly", w, ended.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0), "usd");
     // MRR at the end of the week. Today's plan amounts (past prices aren't recorded);
     // paused clients without an end date are left out (when they stopped is unknown).
     const mrr = clients
       .filter((c) => c.startDate <= asOf && (c.endDate ? c.endDate > asOf : c.status === "active"))
-      .reduce((n, c) => n + c.monthlyUsd, 0);
+      .reduce((n, c) => n + (c.monthlyUsd ?? 0), 0);
     add("mrr", w, Math.round(mrr * 100) / 100, "usd", "estimated from current plan amounts");
     add("clients_with_leads", w, null, "count", "Atlas doesn't know which leads belong to which client");
     const known = trackedSince !== null && w.end >= trackedSince;
@@ -247,7 +247,7 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
       else bits.push("no contact logged");
       if (c.ghl?.lastInboundAt && (!c.ghl.lastOutboundAt || c.ghl.lastInboundAt > c.ghl.lastOutboundAt))
         bits.push(`waiting ${daysBetween(nyDate(c.ghl.lastInboundAt), today)} days for our reply`);
-      bits.push(`${usd(c.monthlyUsd)}/mo`);
+      if (c.monthlyUsd !== null) bits.push(`${usd(c.monthlyUsd)}/mo`);
       atRisk.items.push({ name: c.name, detail: bits.join(", ") });
     }
   }
@@ -256,8 +256,8 @@ export function buildOwnerSummary(input: OwnerSummaryInput): OwnerSummary {
     label: "Win-back list (paused clients)",
     items: clients
       .filter((c) => c.status === "paused")
-      .sort((a, b) => b.monthlyUsd - a.monthlyUsd)
-      .map((c) => ({ name: c.name, detail: `${usd(c.monthlyUsd)}/mo plan, paused${c.endDate ? ` since ${c.endDate}` : ""}` })),
+      .sort((a, b) => (b.monthlyUsd ?? 0) - (a.monthlyUsd ?? 0))
+      .map((c) => ({ name: c.name, detail: `${c.monthlyUsd === null ? "Plan" : `${usd(c.monthlyUsd)}/mo plan`}, paused${c.endDate ? ` since ${c.endDate}` : ""}` })),
   };
   const byOwner: SummaryList = { key: "overdue_or_blocked_by_owner", label: "Overdue or blocked work, by person", items: [] };
   if (!actions) byOwner.note = "work items not set up yet";
