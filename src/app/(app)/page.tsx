@@ -14,8 +14,9 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { autoPublishOwnerSummary, autoRefreshLeads, recordHealthSnapshot } from "@/app/actions";
+import { autoPublishOwnerSummary, autoRefreshLeads, autoSyncGhl, recordHealthSnapshot } from "@/app/actions";
 import { TodayPlan } from "@/components/sales/TodayPlan";
+import { WalkInsToday } from "@/components/scout/WalkInsToday";
 import { isLead } from "@/lib/roles";
 import { lastTouchByLead, nyDay, splitLeadFollowUps, targetProgress, todaysPlan, touchesOn } from "@/lib/sales";
 import { AiMeter } from "@/components/cards/AiMeter";
@@ -136,6 +137,7 @@ export default async function MissionControlPage() {
         ) : (
           <TodayPlan items={plan} progress={progress} lastByLead={lastTouchByLead(sales.touches)} today={day} />
         )}
+        <WalkInsToday />
         {sales.ready && !me.ghlUserId && (
           <p className="mt-3 px-1 text-[11px] text-faint">Your login isn&apos;t linked to your GoHighLevel user yet, so this plan covers everyone&apos;s leads. Ask the owner to link it.</p>
         )}
@@ -148,8 +150,10 @@ export default async function MissionControlPage() {
   }
   // Saves today's health scores once a day (owner/manager only; checked on the server).
   // Then (owner only, at most hourly) refreshes the summary your personal dashboard reads.
-  // Alongside: keeps the sales leads fresh (at most hourly; owner and managers).
+  // Alongside: keeps the sales leads fresh (at most hourly; owner and managers), and
+  // (owner only) re-reads GoHighLevel call/message times in the background once a day.
   const snapshot = Promise.all([
+    me?.role === "owner" ? autoSyncGhl().catch(() => undefined) : undefined,
     recordHealthSnapshot()
       .catch(() => undefined)
       .then(() => autoPublishOwnerSummary())
@@ -230,8 +234,9 @@ export default async function MissionControlPage() {
     id: "results",
     label: "Results",
     icon: <BadgeDollarSign aria-hidden />,
-    stat: `$${(summary.activeMrr / 1000).toFixed(1)}k`,
-    statLabel: `a month from ${summary.activeCount} active clients`,
+    // Amounts are owner-only (0025): everyone else sees counts.
+    stat: summary.moneyShown ? `$${(summary.activeMrr / 1000).toFixed(1)}k` : String(summary.activeCount),
+    statLabel: summary.moneyShown ? `a month from ${summary.activeCount} active clients` : "active clients",
     panel: (
       <div className="space-y-3">
         <GlassCard className="space-y-3">
@@ -239,6 +244,7 @@ export default async function MissionControlPage() {
             <p className="text-sm font-semibold">Your clients</p>
             <Provenance kind={real ? "real" : "demo"} />
           </div>
+          {summary.moneyShown && (
           <div className="grid grid-cols-3 gap-2 text-center">
             {(["high", "mid", "low"] as const).map((t) => (
               <Link key={t} href={`/clients#${t}`} className="pressable rounded-2xl bg-white/[0.04] px-1 py-2">
@@ -250,8 +256,9 @@ export default async function MissionControlPage() {
               </Link>
             ))}
           </div>
+          )}
           <p className="text-xs text-muted">
-            {summary.pausedCount} paused ({formatUsdExact(summary.pausedMrr)}/mo on hold) · avg{" "}
+            {summary.activeCount} active · {summary.pausedCount} paused{summary.moneyShown ? ` (${formatUsdExact(summary.pausedMrr)}/mo on hold)` : ""} · avg{" "}
             {summary.avgMonthsActive} months with you
           </p>
         </GlassCard>
@@ -471,7 +478,9 @@ export default async function MissionControlPage() {
   const overdueItems = ops.actions.filter((a) => a.status !== "done" && a.dueOn !== null && a.dueOn < ops.today).length;
   const synced = Boolean(ghl.lastSync);
   const pulse: PulseTile[] = [
-    { label: "Monthly plans", value: `$${(summary.activeMrr / 1000).toFixed(1)}k`, source: "Client plans · not payments", href: "/clients", tone: "teal" },
+    summary.moneyShown
+      ? { label: "Monthly plans", value: `$${(summary.activeMrr / 1000).toFixed(1)}k`, source: "Client plans · not payments", href: "/clients", tone: "teal" }
+      : { label: "Paused clients", value: String(summary.pausedCount), source: "Client list", href: "/clients#paused", tone: "teal" },
     { label: "Active clients", value: String(summary.activeCount), source: "Client list", href: "/clients" },
     { label: "Overdue items", value: ops.ready ? String(overdueItems) : "–", source: "Follow-ups + issues", href: "/work", tone: overdueItems ? "rose" : "plain" },
     { label: "At-risk clients", value: String(ops.counts.at_risk), source: "Health rules", href: "/clients#risk", tone: ops.counts.at_risk ? "rose" : "plain" },

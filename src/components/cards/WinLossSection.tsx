@@ -16,18 +16,18 @@ export function WinLossSection({ winLoss, real }: { winLoss: Awaited<ReturnType<
   return (
     <Fold title="Clients won & lost" summary={`${winLoss.lostTotal} lost all-time · ${winLoss.lifetimeChurnPct}% lifetime churn`} badge={<Provenance kind={real ? "real" : "demo"} />} label="Clients won and lost">
       <GlassCard>
-        <WinLossChart months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))} lostWithoutDate={winLoss.lostWithoutDate} hasRealData={real} />
+        <WinLossChart months={winLoss.months.map((m) => ({ ...m, label: monthLabel(m.month) }))} lostWithoutDate={winLoss.lostWithoutDate} hasRealData={real} showMoney={winLoss.moneyShown} />
       </GlassCard>
       <div className="mt-2.5 grid grid-cols-3 gap-2.5 text-center">
         <GlassCard padding="tight">
           <p className="font-display text-xl font-bold text-rose">{winLoss.lostTotal}</p>
           <p className="text-[10px] leading-tight text-muted">Lost all-time</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>
+          {winLoss.moneyShown && <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.lostTotalMrr)}/mo</p>}
         </GlassCard>
         <GlassCard padding="tight">
           <p className="font-display text-xl font-bold text-amber">{winLoss.pausedCount}</p>
           <p className="text-[10px] leading-tight text-muted">Paused (at risk)</p>
-          <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>
+          {winLoss.moneyShown && <p className="text-[11px] font-semibold">{formatUsdExact(winLoss.pausedMrr)}/mo</p>}
         </GlassCard>
         <GlassCard padding="tight">
           <p className="font-display text-xl font-bold">{winLoss.lifetimeChurnPct}%</p>

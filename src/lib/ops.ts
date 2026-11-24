@@ -39,11 +39,40 @@ const WHEN_RANK = { overdue: 0, today: 1, upcoming: 2, none: 3 } as const;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const usd = (n: number) => `$${n.toLocaleString("en-US")}`;
 
-/** "SEO + Google Ads · $750/mo" (services + the client's total monthly). */
+const SERVICE_NAMES: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
+
+/** "SEO Starter + Google Ads" (each service with its tier, when one is set). */
+export function servicesLabel(c: Pick<RosterClient, "services" | "plans">): string {
+  if (!c.services.length) return "Services not set";
+  return c.services
+    .map((s) => {
+      const tier = c.plans?.find((p) => p.service === s);
+      return tier ? `${SERVICE_NAMES[s] ?? s} ${tier.name}` : (SERVICE_NAMES[s] ?? s);
+    })
+    .join(" + ");
+}
+
+/** "SEO Starter + Google Ads · $750/mo". The amount only when this person may see it (owner). */
 export function planLabel(c: RosterClient): string {
-  const names: Record<string, string> = { SEO: "SEO", Ads: "Google Ads", Website: "Website build" };
-  const services = c.services.length ? c.services.map((s) => names[s] ?? s).join(" + ") : "Services not set";
-  return `${services} · $${c.monthlyUsd.toLocaleString("en-US")}/mo`;
+  const services = servicesLabel(c);
+  return c.monthlyUsd === null ? services : `${services} · ${usd(c.monthlyUsd)}/mo`;
+}
+
+/** VIP (owner's switch) or on a top tier: goes to the owner sooner. */
+export function isImportant(c: Pick<RosterClient, "vip" | "plans">): boolean {
+  return Boolean(c.vip || c.plans?.some((p) => p.topTier));
+}
+
+type Ranked = Pick<RosterClient, "vip" | "plans" | "monthlyUsd">;
+
+/**
+ * "Biggest first" without needing the amount: VIP, then top tier, then the highest tier
+ * rank, then the amount (owner only; everyone else ties there). Sort with (a, b).
+ */
+export function byImportance(a: Ranked, b: Ranked): number {
+  const rank = (c: Ranked) => Math.max(0, ...(c.plans ?? []).map((p) => p.rank));
+  const top = (c: Ranked) => Number(Boolean(c.plans?.some((p) => p.topTier)));
+  return Number(Boolean(b.vip)) - Number(Boolean(a.vip)) || top(b) - top(a) || rank(b) - rank(a) || (b.monthlyUsd ?? 0) - (a.monthlyUsd ?? 0);
 }
 
 /** True when the client's imported follow-up note was already marked done (saved as a completed action). */
@@ -122,8 +151,9 @@ export const PRIORITY_POINTS = {
   promiseMissed: 15,
   promiseSoon: 8, // promised within promiseSoonDays
   promiseSoonDays: 3,
-  moneyPer: 60, // +1 point per $60/mo the client pays...
+  moneyPer: 60, // +1 point per $60/mo the client pays (owner's view only)...
   moneyMax: 12, // ...up to this
+  important: 10, // VIP or top-tier client (everyone's view)
   clientAtRisk: 12,
   clientNeedsAttention: 5,
   scoreDrop: 8, // health score fell by scoreDropPoints or more in 7 days
@@ -134,7 +164,7 @@ export const PRIORITY_POINTS = {
 /** Score one item and say why. ctx = facts about the client the item is for. */
 export function scorePriority(
   item: Pick<PriorityItem, "when" | "priority" | "dueOn" | "action">,
-  ctx: { today: string; monthlyUsd?: number; health?: HealthSummary | null; drop?: number | null },
+  ctx: { today: string; monthlyUsd?: number | null; important?: boolean; health?: HealthSummary | null; drop?: number | null },
 ): { score: number; why: string[] } {
   const P = PRIORITY_POINTS;
   const why: string[] = [];
@@ -168,6 +198,10 @@ export function scorePriority(
       if (m >= 5) why.push(`${usd(ctx.monthlyUsd)}/mo client`);
     }
   }
+  if (ctx.important) {
+    n += P.important;
+    why.push("important client");
+  }
   if (ctx.health?.state === "at_risk") {
     n += P.clientAtRisk;
     why.push("client at risk");
@@ -185,8 +219,9 @@ export function opportunities(c: RosterClient, today: string): string[] {
   const months = monthsBetween(c.startDate, today);
   if (months < OPS_RULES.upsellAfterMonths) return [];
   const out: string[] = [];
-  if (c.monthlyUsd < 150 && !c.services.includes("SEO"))
-    out.push(`SEO upsell: pays ${usd(c.monthlyUsd)}/mo, with you ${months} months`);
+  // The amount is owner-only; everyone else sees the idea without it.
+  if (!c.services.includes("SEO") && (c.monthlyUsd === null || c.monthlyUsd < 150))
+    out.push(c.monthlyUsd === null ? `SEO upsell: not on SEO yet, with you ${months} months` : `SEO upsell: pays ${usd(c.monthlyUsd)}/mo, with you ${months} months`);
   if (c.services.includes("SEO") && !c.services.includes("Ads")) out.push("Ads upsell: already trusts you with SEO");
   if (months >= 6 && c.lastMood?.mood === "better") out.push("Referral ask: long-term client who's doing better");
   return out;
@@ -204,7 +239,7 @@ export function healthSummary(c: RosterClient, checkIn: CheckIn, actions: Client
   const waiting = waitingDays(c, today);
 
   const risk: string[] = [];
-  if (c.status === "paused") risk.push(`Paused: ${usd(c.monthlyUsd)}/mo on hold`);
+  if (c.status === "paused") risk.push(c.monthlyUsd === null ? "Paused" : `Paused: ${usd(c.monthlyUsd)}/mo on hold`);
   if (c.lastMood?.mood === "worse") risk.push(`Last check-in (${c.lastMood.date}): things got worse`);
   if (daysSince !== null && daysSince > checkIn.cadenceDays * OPS_RULES.longGapMultiple)
     risk.push(`No contact in ${daysSince} days (check in every ${checkIn.cadenceDays})`);
@@ -411,7 +446,7 @@ export function buildPriorities(input: {
   for (const i of items) {
     const slug = i.clientSlug ?? i.action?.client?.slug;
     const c = slug ? byClient.get(slug) : undefined;
-    const r = scorePriority(i, { today, monthlyUsd: c?.monthlyUsd, health: slug ? health.get(slug) : null, drop: slug ? (drops?.get(slug) ?? null) : null });
+    const r = scorePriority(i, { today, monthlyUsd: c?.monthlyUsd, important: c ? isImportant(c) : false, health: slug ? health.get(slug) : null, drop: slug ? (drops?.get(slug) ?? null) : null });
     i.score = r.score;
     i.why = r.why;
   }
@@ -523,7 +558,8 @@ export function scoreTrend(history: { day: string; score: number }[], todayScore
 export interface RiskAlert {
   id: string;
   severity: "critical" | "high" | "medium";
-  client: { slug: string; name: string; monthlyUsd: number; ownerName: string | null };
+  /** monthlyUsd: owner only (null for everyone else). */
+  client: { slug: string; name: string; monthlyUsd: number | null; vip?: boolean; plans?: RosterClient["plans"]; ownerName: string | null };
   problem: string;
   /** The recorded facts behind it (each with its source). */
   evidence: { label: string; impact: number; source?: string }[];
@@ -575,7 +611,7 @@ export function riskAlerts(input: {
     const problem: string = h?.state === "at_risk" && h.reasons[0] ? h.reasons[0] : dropped ? `Health score down ${-trend!.change} points since ${shortDay(trend!.since)}` : (evidence[0]?.label ?? "Low health score");
     // Paused clients already stopped paying: a win-back, never above "high". Active clients come first.
     const severity =
-      c.status !== "paused" && (sc.score < 40 || (h?.state === "at_risk" && c.monthlyUsd >= 500))
+      c.status !== "paused" && (sc.score < 40 || (h?.state === "at_risk" && ((c.monthlyUsd ?? 0) >= 500 || isImportant(c))))
         ? "critical"
         : h?.state === "at_risk" || sc.level === "at_risk"
           ? "high"
@@ -589,7 +625,7 @@ export function riskAlerts(input: {
     out.push({
       id: `risk_${c.id}`,
       severity,
-      client: { slug: c.id, name: c.name, monthlyUsd: c.monthlyUsd, ownerName: c.ownerName ?? null },
+      client: { slug: c.id, name: c.name, monthlyUsd: c.monthlyUsd, vip: c.vip, plans: c.plans, ownerName: c.ownerName ?? null },
       problem,
       evidence,
       confidence: "Confirmed facts",
@@ -602,7 +638,7 @@ export function riskAlerts(input: {
   }
   const sev = { critical: 0, high: 1, medium: 2 } as const;
   const paused = new Set(clients.filter((c) => c.status === "paused").map((c) => c.id));
-  return out.sort((a, b) => Number(paused.has(a.client.slug)) - Number(paused.has(b.client.slug)) || sev[a.severity] - sev[b.severity] || b.client.monthlyUsd - a.client.monthlyUsd || a.score - b.score);
+  return out.sort((a, b) => Number(paused.has(a.client.slug)) - Number(paused.has(b.client.slug)) || sev[a.severity] - sev[b.severity] || byImportance(a.client, b.client) || a.score - b.score);
 }
 
 
@@ -1152,7 +1188,7 @@ export function suggestWorkOrders(input: {
   }
   const quiet = clients
     .filter((c) => c.status === "active" && svc(c).length && !recentWork.has(c.id) && daysBetween(c.startDate, today) > OPS_RULES.newClientDays)
-    .sort((x, y) => y.monthlyUsd - x.monthlyUsd || x.name.localeCompare(y.name));
+    .sort((x, y) => byImportance(x, y) || x.name.localeCompare(y.name));
   for (const c of quiet) {
     const minutes = svc(c).length * SUGGEST_RULES.checkMinutesPerService;
     const dev = pickDeveloper(minutes);
@@ -1160,7 +1196,7 @@ export function suggestWorkOrders(input: {
       ...base(c),
       rule: "routine",
       title: `Monthly check: ${svc(c).join(" + ")}`,
-      why: `No work order or issue for this client in ${SUGGEST_RULES.quietDays} days ($${c.monthlyUsd.toLocaleString("en-US")}/mo).`,
+      why: `No work order or issue for this client in ${SUGGEST_RULES.quietDays} days${c.monthlyUsd === null ? "" : ` ($${c.monthlyUsd.toLocaleString("en-US")}/mo)`}.`,
       steps: [...svc(c).flatMap((s) => SERVICE_CHECK[s] ?? []), "Write 2–3 lines of results for the client update"],
       priority: "normal",
       estMinutes: minutes,

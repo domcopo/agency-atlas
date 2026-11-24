@@ -1,6 +1,6 @@
 # Plan: custom audit builder in Sales
 
-Status: **approved 2026-11-24. Phase A built** on branch `audit-builder` (not merged; `0023` not run yet). Builds on and replaces "Part B" in `docs/SALES_SIMPLIFY_PLAN.md` (same migration `0023`, same roles and spending caps). Rules from `docs/SEO_AUDIT_PLAN.md` still apply to every page: no made-up numbers, every figure has a source and date, missing = "not found", money is a labeled model.
+Status: **approved 2026-11-24. Phase A built, merged, `0023` run.** Screens moved to the Audits area and Phase D replaced by `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`. Builds on and replaces "Part B" in `docs/SALES_SIMPLIFY_PLAN.md` (same migration `0023`, same roles and spending caps). Rules from `docs/SEO_AUDIT_PLAN.md` still apply to every page: no made-up numbers, every figure has a source and date, missing = "not found", money is a labeled model.
 
 ## What the owner asked for
 - A spot in **Sales** where a rep types in a business and the app builds our **custom SEO audit prompt** from it.

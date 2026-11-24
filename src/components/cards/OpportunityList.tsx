@@ -10,7 +10,7 @@ export function OpportunityList({
   items,
   canAdd,
 }: {
-  items: { slug: string; name: string; monthlyUsd: number; ownerName?: string; ideas: string[]; added: Set<string> }[];
+  items: { slug: string; name: string; monthlyUsd: number | null; ownerName?: string; ideas: string[]; added: Set<string> }[];
   canAdd: boolean;
 }) {
   if (!items.length)
@@ -24,7 +24,7 @@ export function OpportunityList({
               {o.name}
             </Link>
             <span className="shrink-0 text-xs text-muted">
-              ${o.monthlyUsd.toLocaleString("en-US")}/mo · {o.ownerName ?? <span className="text-amber">no owner</span>}
+              {o.monthlyUsd !== null && `$${o.monthlyUsd.toLocaleString("en-US")}/mo · `}{o.ownerName ?? <span className="text-amber">no owner</span>}
             </span>
           </div>
           {o.ideas.map((idea) => {

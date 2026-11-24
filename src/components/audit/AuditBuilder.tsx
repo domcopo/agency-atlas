@@ -1,6 +1,6 @@
 "use client";
 
-// The custom audit builder (Sales → Audits → New audit). Phones: one step per screen with
+// The SEO audit builder (Audits → SEO audit → New). Google Ads audits get their own builder. Phones: one step per screen with
 // Back / Next. Wide areas (container 48rem+): every step on one page and a sticky summary
 // on the right. Saving posts to saveAudit; nothing is fetched and nothing costs money.
 
@@ -214,20 +214,6 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
           <section className={show(2)} aria-label={STEPS[2]}>
             <div className="glass space-y-3 rounded-3xl p-4">
               <h2 className="font-display text-lg font-bold">3 · What to include</h2>
-              <fieldset>
-                <legend className="text-xs text-muted">Audit type</legend>
-                <div className="mt-1 grid grid-cols-2 gap-2">
-                  <label className="flex min-h-12 items-center gap-2 rounded-2xl border border-violet/50 bg-violet/10 px-3 text-sm font-semibold">
-                    <Check aria-hidden className="size-4 text-violet" /> SEO audit
-                  </label>
-                  <label className="flex min-h-12 items-center gap-2 rounded-2xl border border-line px-3 text-sm">
-                    <input type="checkbox" name="wantsAds" defaultChecked={i.wantsAds ?? false} className="size-5 accent-violet" />
-                    <span>
-                      Google Ads <span className="block text-[10.5px] text-faint">Coming soon: noted for now</span>
-                    </span>
-                  </label>
-                </div>
-              </fieldset>
               <div>
                 <p className="text-xs text-muted">Quick picks</p>
                 <div className="mt-1 flex flex-wrap gap-1.5">

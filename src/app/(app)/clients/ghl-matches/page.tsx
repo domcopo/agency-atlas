@@ -50,7 +50,7 @@ export default async function MatchesPage() {
                 <Link href={`/clients/${c.id}`} className="text-sm font-semibold hover:underline">
                   {c.name}
                 </Link>
-                <span className="text-xs text-muted">${c.monthlyUsd.toLocaleString("en-US")}/mo</span>
+                {c.monthlyUsd !== null && <span className="text-xs text-muted">${c.monthlyUsd.toLocaleString("en-US")}/mo</span>}
               </div>
               {confirmed ? (
                 <p className="flex items-center gap-1.5 text-xs text-lime">

@@ -9,7 +9,7 @@ import { ConfidenceMeter, Provenance } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getBusiness, getBusinesses, getInsights, getMember, getOps, getSurveyQuestions, getSurveyResponses, getTrends, showsSamples, usesDatabase } from "@/lib/data-source";
 import { OpportunityList } from "@/components/cards/OpportunityList";
-import { opportunities } from "@/lib/ops";
+import { byImportance, opportunities } from "@/lib/ops";
 
 export const metadata: Metadata = { title: "Growth Lab" };
 
@@ -23,12 +23,14 @@ export default async function GrowthPage() {
       slug: c.id,
       name: c.name,
       monthlyUsd: c.monthlyUsd,
+      vip: c.vip,
+      plans: c.plans,
       ownerName: c.ownerName,
       ideas: opportunities(c, ops.today),
       added: new Set(ops.actions.filter((a) => a.status !== "done" && a.client?.slug === c.id).map((a) => a.title.toLowerCase())),
     }))
     .filter((o) => o.ideas.length > 0)
-    .sort((a, b) => b.monthlyUsd - a.monthlyUsd);
+    .sort(byImportance);
   const trends = getTrends();
   const businesses = getBusinesses();
   const questions = getSurveyQuestions();

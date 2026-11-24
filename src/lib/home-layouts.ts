@@ -4,7 +4,7 @@
 // in tests/fixtures.test.ts.
 
 import { daysBetween } from "@/lib/format";
-import { promiseMissed, reviewQueue, waitingDays } from "@/lib/ops";
+import { byImportance, promiseMissed, reviewQueue, waitingDays } from "@/lib/ops";
 import type { LeadTouch, SalesLead } from "@/lib/sales";
 import type { CheckIn, ClientAction, HealthSummary, PriorityItem, RosterClient, TeamRole } from "@/lib/types";
 
@@ -72,7 +72,7 @@ export function clientCareView(input: {
       const h = health.get(c.id);
       return h && (h.state === "at_risk" || h.state === "needs_attention") ? [{ client: c, state: h.state, reason: h.reasons[0] ?? "" }] : [];
     })
-    .sort((a, b) => Number(b.state === "at_risk") - Number(a.state === "at_risk") || b.client.monthlyUsd - a.client.monthlyUsd);
+    .sort((a, b) => Number(b.state === "at_risk") - Number(a.state === "at_risk") || byImportance(a.client, b.client));
   const replyWaiting = mine
     .flatMap((c) => {
       const d = waitingDays(c, today);

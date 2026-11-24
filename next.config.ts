@@ -43,6 +43,16 @@ const nextConfig: NextConfig = {
   // Smart add: photos are shrunk on the phone; one PDF up to 3.5 MB (Vercel caps requests at 4.5 MB).
   experimental: { serverActions: { bodySizeLimit: "4mb" } },
   reactStrictMode: true,
+  // Audits moved from Sales → Audits to their own area (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md).
+  // Old links keep working; the query string (e.g. ?lead=) is carried over.
+  async redirects() {
+    return [
+      { source: "/sales/audits", destination: "/audits", permanent: false },
+      { source: "/sales/audits/new", destination: "/audits/seo/new", permanent: false },
+      { source: "/sales/audits/:id/edit", destination: "/audits/:id/edit", permanent: false },
+      { source: "/sales/audits/:id", destination: "/audits/:id", permanent: false },
+    ];
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
