@@ -40,7 +40,8 @@ import { DeveloperHome } from "@/components/cards/DeveloperHome";
 import { clientCareView, HOME_LAYOUT_LABEL, salesView, workLeadView } from "@/lib/home-layouts";
 import { HomeSwitcher } from "@/components/home/HomeSwitcher";
 import { ClientCareHome } from "@/components/home/ClientCareHome";
-import { getCareToday, getJourneys } from "@/lib/data-source";
+import { getCareToday, getJourneys, getOpenEscalations } from "@/lib/data-source";
+import { NeedsYou } from "@/components/cards/NeedsYou";
 import { touchesDue } from "@/lib/journey";
 import { WorkLeadHome } from "@/components/home/WorkLeadHome";
 import { SalesHome } from "@/components/home/SalesHome";
@@ -231,6 +232,7 @@ export default async function MissionControlPage() {
       <>
         <PageHeader title={HOME_LAYOUT_LABEL[homeLayout.layout]} subtitle={data.weekLabel} action={safetyLink} />
         <HomeSwitcher current={homeLayout.layout} />
+        {me?.role === "owner" && <NeedsYou items={await getOpenEscalations()} />}
         {body}
       </>
     );
@@ -528,6 +530,7 @@ export default async function MissionControlPage() {
       <Column>
       <PageHeader title="Mission Control" subtitle={data.weekLabel} action={safetyLink} />
       {homeLayout && !samples && <HomeSwitcher current={homeLayout.layout} />}
+      {me?.role === "owner" && <NeedsYou items={await getOpenEscalations()} />}
 
       {ai.tablesReady && (ai.level === "warning" || ai.level === "blocked") && (
         <Link href="/safety#ai" className="mb-3 block rounded-2xl border border-rose/40 bg-rose/10 p-3 text-sm">

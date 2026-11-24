@@ -14,7 +14,10 @@ import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getJourneys, getStatusLog } from "@/lib/data-source";
+import { getClientCareInfo, getJourneys, getStatusLog } from "@/lib/data-source";
+import { setIntakeItem } from "@/app/actions";
+import { CareContactForm, NeedsOwnerForm } from "@/components/forms/ClientCareExtras";
+import { INTAKE_ITEMS, missingIntake } from "@/lib/journey";
 import { JourneyCard } from "@/components/cards/JourneyCard";
 import { ClientStatusForm } from "@/components/forms/ClientStatusForm";
 import { ClientMemoryForm } from "@/components/forms/ClientMemoryForm";
@@ -74,7 +77,10 @@ export default async function ClientPage({ params }: Props) {
   const care = await getCarePlans();
   const myTiers = (c.plans ?? []).map((p) => care.plans.find((t) => t.id === p.planId)).filter((t) => t !== undefined);
   // Journey, status log and memory (0028). journeys.ready is false before 0028 runs.
-  const [journeys, statusLog] = await Promise.all([getJourneys(), getStatusLog(c.dbId)]);
+  const [journeys, statusLog, careInfo] = await Promise.all([getJourneys(), getStatusLog(c.dbId), getClientCareInfo()]);
+  // Contact preferences + intake (0032): careInfo.ready is false before 0032 runs.
+  const info = c.dbId ? careInfo.byClient.get(c.dbId) : undefined;
+  const received = info?.intake ?? {};
   const journey = journeys.bySlug.get(c.id);
   const reasonLabel = (r: string | null) => STATUS_REASONS.find(([k]) => k === r)?.[1] ?? null;
   const statusWord = { active: "Active", paused: "Paused", canceled: "Lost" } as Record<string, string>;
@@ -141,7 +147,7 @@ export default async function ClientPage({ params }: Props) {
 
       {journey && c.dbId && (
         <div className="mb-3">
-          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} canUseAi={canUseAi} />
+          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} canUseAi={canUseAi} noTexts={Boolean(info?.noTexts)} missing={careInfo.ready ? missingIntake(received) : []} />
         </div>
       )}
 
@@ -303,6 +309,55 @@ export default async function ClientPage({ params }: Props) {
 
       {journeys.ready && c.dbId && (
         <>
+          {careInfo.ready && (
+            <>
+              <SectionTitle aside={info?.noTexts ? "No texts" : undefined}>Contact and week-1 intake</SectionTitle>
+              <GlassCard className="space-y-3">
+                <p className="text-xs text-muted">
+                  {info?.noTexts ? <span className="font-semibold text-rose">No texts (use email). </span> : null}
+                  Prefers {info?.preferredChannel ?? "not known yet"}
+                  {info?.bestTimes ? ` · best: ${info.bestTimes}` : ""}
+                </p>
+                <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {INTAKE_ITEMS.map(([key, label]) => {
+                    const on = Boolean(received[key]);
+                    return (
+                      <li key={key}>
+                        <form action={setIntakeItem}>
+                          <input type="hidden" name="clientId" value={c.dbId} />
+                          <input type="hidden" name="slug" value={c.id} />
+                          <input type="hidden" name="item" value={key} />
+                          <input type="hidden" name="on" value={on ? "false" : "true"} />
+                          <button
+                            type="submit"
+                            disabled={!canWork}
+                            aria-pressed={on}
+                            className={`pressable flex min-h-10 w-full items-center gap-2 rounded-xl border px-3 text-left text-xs ${on ? "border-lime/40 bg-lime/10" : "border-line bg-white/5"}`}
+                          >
+                            <span aria-hidden className={on ? "text-lime" : "text-faint"}>
+                              {on ? "✓" : "○"}
+                            </span>
+                            <span className="min-w-0 flex-1">{label}</span>
+                            {on && <span className="text-[10px] text-faint">{formatDate(received[key]!)}</span>}
+                          </button>
+                        </form>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-[11px] text-faint">Tick when it&apos;s received. Atlas never stores the logins or files themselves.</p>
+                {canWork && (
+                  <details>
+                    <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Contact preferences</summary>
+                    <div className="pt-1">
+                      <CareContactForm clientId={c.dbId} slug={c.id} noTexts={Boolean(info?.noTexts)} channel={info?.preferredChannel ?? null} bestTimes={info?.bestTimes ?? null} />
+                    </div>
+                  </details>
+                )}
+              </GlassCard>
+            </>
+          )}
+
           <SectionTitle>Client memory</SectionTitle>
           <GlassCard className="space-y-2">
             <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm">
@@ -325,6 +380,14 @@ export default async function ClientPage({ params }: Props) {
 
           <SectionTitle aside={statusWord[c.status] ?? c.status}>Status</SectionTitle>
           <GlassCard className="space-y-3">
+            {canWork && careInfo.ready && (
+              <details>
+                <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-amber">Needs the owner</summary>
+                <div className="pt-1">
+                  <NeedsOwnerForm clientId={c.dbId} slug={c.id} />
+                </div>
+              </details>
+            )}
             {canWork && c.status !== "incomplete_expired" && (
               <details>
                 <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">

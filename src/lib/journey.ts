@@ -318,3 +318,31 @@ export function restartSchedule<T extends { id: string }>(clients: T[], from: st
     return { client, start: day };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Week-1 intake (0032): what to keep asking for until it's in. Only "received" is stored.
+// Keys must match private.intake_keys_ok in 0032 (a test checks).
+// ---------------------------------------------------------------------------
+
+export const INTAKE_ITEMS = [
+  ["services", "Final service list"],
+  ["service_area", "Real service area"],
+  ["brand", "Logo, colors, brand phrases"],
+  ["photos", "Job and team photos (with permission)"],
+  ["gbp_access", "Google Business Profile access"],
+  ["site_access", "Website, domain, hosting access"],
+  ["email_dns", "Email or DNS issues checked"],
+  ["past_ads", "Past ads and keywords they care about"],
+  ["contact_pref", "Preferred channel and best times"],
+  ["contacts", "Others to keep in the loop"],
+] as const;
+export type IntakeKey = (typeof INTAKE_ITEMS)[number][0];
+
+export function asIntakeKey(v: unknown): IntakeKey | null {
+  return INTAKE_ITEMS.some(([k]) => k === v) ? (v as IntakeKey) : null;
+}
+
+/** Items still missing, as labels (shown on early touches: Kickoff and First results). */
+export function missingIntake(received: Partial<Record<string, string>>): string[] {
+  return INTAKE_ITEMS.filter(([k]) => !received[k]).map(([, label]) => label);
+}
