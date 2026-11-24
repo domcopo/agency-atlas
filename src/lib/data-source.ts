@@ -29,6 +29,7 @@ import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type R
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPerson, type SalesPipeline } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
+import { asOutcome, asVisitKind, PROSPECT_STATUSES, SCOUT_RULES, type Prospect as ScoutProspect, type ProspectStatus, type ScoutSignals, type ScoutSpendRow, type ScoutVisit } from "@/lib/scout";
 import {
   buildPriorities,
   developerClientScope,
@@ -2206,3 +2207,121 @@ export async function getSalespeople(): Promise<{ userId: string; name: string }
   const { data } = await db.from("team_members").select("user_id, display_name, role").eq("role", "sales").order("display_name");
   return (data ?? []).map((r) => ({ userId: r.user_id as string, name: r.display_name as string }));
 }
+
+// ---------------------------------------------------------------------------
+// Scout (0024, docs/SCOUT_PLAN.md): runs, prospects, visits, spend. Read as the signed-in
+// person: the database gives a salesperson only their own prospects + the unclaimed pool,
+// their own runs, visits and spend. Owner and managers read everything.
+// ---------------------------------------------------------------------------
+
+export interface ScoutRun {
+  id: string;
+  createdBy: string;
+  mine: boolean;
+  byName: string | null;
+  area: string;
+  kinds: string[];
+  size: number;
+  estUsd: number;
+  status: "planned" | "attached";
+  found: number | null;
+  createdAt: string;
+}
+
+export interface ScoutData {
+  /** false before 0024, or for roles that don't use Scout. */
+  ready: boolean;
+  me: string;
+  role: string;
+  settings: { monthlyUsd: number; perRepMonthlyUsd: number; revisitDays: number };
+  /** My own cap: the owner's override, else the per-rep cap for salespeople, else none. */
+  myCapUsd: number | null;
+  runs: ScoutRun[];
+  prospects: ScoutProspect[];
+  visits: (ScoutVisit & { note: string | null })[];
+  spend: ScoutSpendRow[];
+  /** Owner only: salespeople to assign to (managers can't read the team list). */
+  people: { userId: string; name: string }[];
+  /** Owner only: user id → name, for "assigned to" and "found by". */
+  names: Map<string, string>;
+}
+
+const PROSPECT_COLUMNS = "id, run_id, name, website, category, address, town, lat, lng, maps_url, rating, reviews, signals, score, reasons, angle, status, assigned_to, next_ok_on, created_at";
+
+function toProspect(r: Record<string, unknown>): ScoutProspect {
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  const angle = r.angle === "ads" || r.angle === "website" ? r.angle : "seo";
+  return {
+    id: String(r.id),
+    runId: (r.run_id as string | null) ?? null,
+    name: String(r.name),
+    website: (r.website as string | null) ?? null,
+    category: (r.category as string | null) ?? null,
+    address: (r.address as string | null) ?? null,
+    town: (r.town as string | null) ?? null,
+    lat: num(r.lat),
+    lng: num(r.lng),
+    mapsUrl: (r.maps_url as string | null) ?? null,
+    rating: num(r.rating),
+    reviews: num(r.reviews),
+    signals: (r.signals && typeof r.signals === "object" ? r.signals : {}) as ScoutSignals,
+    score: Number(r.score) || 0,
+    reasons: Array.isArray(r.reasons) ? (r.reasons as string[]) : [],
+    angle,
+    status: (PROSPECT_STATUSES as readonly string[]).includes(String(r.status)) ? (r.status as ProspectStatus) : "new",
+    assignedTo: (r.assigned_to as string | null) ?? null,
+    nextOkOn: (r.next_ok_on as string | null) ?? null,
+    createdAt: String(r.created_at),
+  };
+}
+
+export const getScout = cache(async (): Promise<ScoutData> => {
+  const none: ScoutData = { ready: false, me: "", role: "", settings: { monthlyUsd: SCOUT_RULES.monthlyUsd, perRepMonthlyUsd: SCOUT_RULES.perRepMonthlyUsd, revisitDays: SCOUT_RULES.revisitDays }, myCapUsd: null, runs: [], prospects: [], visits: [], spend: [], people: [], names: new Map() };
+  if (!usesDatabase()) return none;
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return none;
+  const db = await createDatabaseClient();
+  const settings = await db.from("scout_settings").select("monthly_usd, per_rep_monthly_usd, revisit_days").maybeSingle();
+  if (settings.error || !settings.data) return { ...none, me: me.userId, role: me.role }; // before 0024
+  const monthAgo = new Date(Date.now() - 40 * 86_400_000).toISOString();
+  const [runs, prospects, visits, spend, limit, team] = await Promise.all([
+    db.from("scout_runs").select("id, created_by, area, kinds, size, est_usd, status, found, created_at").order("created_at", { ascending: false }).limit(100),
+    db.from("scout_prospects").select(PROSPECT_COLUMNS).is("archived_at", null).order("score", { ascending: false }).limit(2000),
+    db.from("scout_visits").select("prospect_id, kind, outcome, note, at, user_id").order("at", { ascending: false }).limit(3000),
+    db.from("scout_spend").select("user_id, usd, at").gte("at", monthAgo).limit(5000),
+    db.from("scout_user_limits").select("monthly_usd").eq("user_id", me.userId).maybeSingle(),
+    me.role === "owner" ? db.from("team_members").select("user_id, display_name, role") : Promise.resolve({ data: [] as { user_id: string; display_name: string; role: string }[] }),
+  ]);
+  const names = new Map((team.data ?? []).map((t) => [t.user_id as string, t.display_name as string]));
+  const s = { monthlyUsd: Number(settings.data.monthly_usd), perRepMonthlyUsd: Number(settings.data.per_rep_monthly_usd), revisitDays: Number(settings.data.revisit_days) };
+  const myCapUsd = limit.data ? Number(limit.data.monthly_usd) : me.role === "sales" ? s.perRepMonthlyUsd : null;
+  return {
+    ready: true,
+    me: me.userId,
+    role: me.role,
+    settings: s,
+    myCapUsd,
+    runs: (runs.data ?? []).map((r) => ({
+      id: r.id as string,
+      createdBy: r.created_by as string,
+      mine: r.created_by === me.userId,
+      byName: names.get(r.created_by as string) ?? null,
+      area: r.area as string,
+      kinds: (r.kinds as string[]) ?? [],
+      size: Number(r.size),
+      estUsd: Number(r.est_usd),
+      status: r.status === "attached" ? "attached" : "planned",
+      found: r.found === null ? null : Number(r.found),
+      createdAt: r.created_at as string,
+    })),
+    prospects: ((prospects.data ?? []) as Record<string, unknown>[]).map(toProspect),
+    visits: (visits.data ?? []).flatMap((v) => {
+      const kind = asVisitKind(String(v.kind));
+      const outcome = asOutcome(String(v.outcome));
+      return kind && outcome ? [{ prospectId: v.prospect_id as string, kind, outcome, note: (v.note as string | null) ?? null, at: v.at as string, by: v.user_id as string }] : [];
+    }),
+    spend: (spend.data ?? []).map((r) => ({ userId: r.user_id as string, usd: Number(r.usd), at: r.at as string })),
+    people: (team.data ?? []).filter((t) => t.role === "sales").map((t) => ({ userId: t.user_id as string, name: t.display_name as string })),
+    names,
+  };
+});

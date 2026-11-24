@@ -32,6 +32,7 @@ import {
   getTeam,
   getRoster,
   getToday,
+  getScout,
 } from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
 import {
@@ -58,6 +59,8 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
+import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
+import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { parseAuditConfig } from "@/lib/audit/config";
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
@@ -2430,4 +2433,207 @@ export async function saveAuditUserCap(form: FormData) {
     .upsert({ user_id: userId, weekly_usd: Math.round(n * 100) / 100, updated_by: me.userId, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
   if (error) console.warn(`Audit cap refused: ${error.code}`);
   revalidatePath("/sales", "layout");
+}
+
+// ---------------------------------------------------------------------------
+// Scout (0024, docs/SCOUT_PLAN.md S1). The run itself happens in Claude Code (where
+// DataForSEO is connected); the app fetches nothing. Every write runs as the signed-in
+// person; the database decides who may see, claim and log what, enforces the caps and
+// refuses phone numbers and emails.
+// ---------------------------------------------------------------------------
+
+const SCOUT_SETUP = "Scout needs one setup step first (0024 SQL).";
+export type ScoutFormState = { error?: string; ok?: boolean; message?: string; refused?: { name: string; why: string }[] } | undefined;
+
+/** Start a run: checks the caps, saves the run and writes its estimate to the capped ledger BEFORE anything is spent. */
+export async function startScoutRun(_prev: ScoutFormState, form: FormData): Promise<ScoutFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can run Scout." };
+  const area = text(form, "area", 200);
+  if (!area) return { error: "Say where to look (towns, counties or a radius)." };
+  if (contactDetailsIn(area).length) return { error: "Leave phone numbers and emails out of the area." };
+  const picked = form.getAll("kind").filter((k): k is string => typeof k === "string" && (SCOUT_KINDS as readonly string[]).includes(k));
+  const extra = text(form, "otherKind", 60);
+  if (extra && contactDetailsIn(extra).length) return { error: "Leave phone numbers and emails out of the kinds of business." };
+  const kinds = [...new Set([...picked, ...(extra ? [extra.toLowerCase()] : [])])].slice(0, 12);
+  if (!kinds.length) return { error: "Pick at least one kind of business." };
+  const size = Number(text(form, "size", 4));
+  if (!Number.isInteger(size) || size < 1 || size > SCOUT_RULES.maxRunSize) return { error: `Pick 1 to ${SCOUT_RULES.maxRunSize} businesses.` };
+  const est = runEstimate(size);
+  const scout = await getScout();
+  if (!scout.ready) return { error: SCOUT_SETUP };
+  const left = scoutLeft({ rows: scout.spend, me: me.userId, monthlyUsd: scout.settings.monthlyUsd, myCapUsd: scout.myCapUsd, now: new Date() });
+  if (est > left.left) return { error: `This run is estimated at $${est.toFixed(2)}, but only $${left.left.toFixed(2)} is left this month. Try fewer businesses.` };
+  const db = await createDatabaseClient();
+  const run = await db.from("scout_runs").insert({ area, kinds, size, est_usd: est, created_by: me.userId }).select("id").single();
+  if (run.error || !run.data) {
+    console.warn(`Scout run refused: ${run.error?.code}`);
+    return { error: MISSING_TABLE.has(run.error?.code ?? "") ? SCOUT_SETUP : "Couldn't start the run." };
+  }
+  const spend = await db.from("scout_spend").insert({ run_id: run.data.id, provider: "dataforseo", usd: est, user_id: me.userId });
+  if (spend.error) {
+    console.warn(`Scout estimate refused: ${spend.error.code}`);
+    return { error: spend.error.code === "23514" ? "That would go over a Scout cap this month, so the run won't go ahead." : "Couldn't record the estimate, so the run won't go ahead." };
+  }
+  revalidatePath("/sales", "layout");
+  redirect(`/sales/scout/runs/${run.data.id}`);
+}
+
+/** Attach a run's results file: checked strictly, scored, saved. Our clients, existing leads and do-not-contact businesses are skipped by the database. */
+export async function attachScoutResults(_prev: ScoutFormState, form: FormData): Promise<ScoutFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can attach Scout results." };
+  const runId = text(form, "runId", 40);
+  if (!isUuid(runId)) return { error: "Unknown run." };
+  let raw = typeof form.get("results") === "string" ? String(form.get("results")) : "";
+  const file = form.get("file");
+  if (file instanceof File && file.size > 0) {
+    if (file.size > SCOUT_RESULTS_MAX_BYTES) return { error: "That file is too big (over 1.5 MB)." };
+    raw = await file.text();
+  }
+  if (!raw.trim()) return { error: "Paste the results, or pick the results file." };
+  if (raw.length > SCOUT_RESULTS_MAX_BYTES) return { error: "That's too big (over 1.5 MB)." };
+  const parsed = parseScoutResults(raw, runId);
+  if (!parsed.ok) return { error: parsed.error };
+  const db = await createDatabaseClient();
+  const run = await db.from("scout_runs").select("id, status, created_by").eq("id", runId).maybeSingle();
+  if (run.error || !run.data) return { error: MISSING_TABLE.has(run.error?.code ?? "") ? SCOUT_SETUP : "That run isn't one you can attach results to." };
+  if (run.data.status === "attached") return { error: "Results are already attached to this run." };
+  const paid = await db.from("scout_spend").select("id").eq("run_id", runId).limit(1);
+  if (!paid.data?.length) return { error: "This run has no recorded estimate, so it can't take results. Start a new run." };
+  // Salespeople's finds are theirs; the owner's and managers' go to the shared pool.
+  const assigned = me.role === "sales" ? me.userId : null;
+  const rows = parsed.results.businesses.map((b) => {
+    const s = scoreBusiness(b);
+    return {
+      run_id: runId,
+      created_by: me.userId,
+      business_key: s.key,
+      name: s.name,
+      website: s.website,
+      category: s.category,
+      address: s.address,
+      town: s.town,
+      lat: s.lat,
+      lng: s.lng,
+      maps_url: s.mapsUrl,
+      rating: s.rating,
+      reviews: s.reviews,
+      signals: s.signals,
+      score: s.score,
+      reasons: s.reasons,
+      angle: s.angle,
+      assigned_to: assigned,
+    };
+  });
+  // One row per business even if the file repeats one.
+  const unique = [...new Map(rows.map((r) => [r.business_key, r])).values()];
+  let saved = 0;
+  if (unique.length) {
+    const ins = await db.from("scout_prospects").upsert(unique, { onConflict: "business_key", ignoreDuplicates: true }).select("id");
+    if (ins.error) {
+      console.warn(`Scout results refused: ${ins.error.code}`);
+      return { error: ins.error.code === "23514" ? "Something in the results was refused (contact details or a bad value). Nothing was saved." : "Couldn't save the results." };
+    }
+    saved = ins.data?.length ?? 0;
+  }
+  const done = await db.from("scout_runs").update({ status: "attached", found: saved }).eq("id", runId);
+  if (done.error) console.warn(`Scout run not marked attached: ${done.error.code}`);
+  revalidatePath("/sales", "layout");
+  const skipped = parsed.results.businesses.length - saved;
+  return {
+    ok: true,
+    message: `Saved ${saved} prospect${saved === 1 ? "" : "s"}.${skipped > 0 ? ` ${skipped} skipped (already a client, already a lead, do not contact, or already found).` : ""}`,
+    refused: parsed.results.refused.slice(0, 20),
+  };
+}
+
+/** A salesperson takes an unclaimed prospect from the shared pool (the database allows only that). */
+export async function claimProspect(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return;
+  const id = text(form, "prospectId", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("scout_prospects").update({ assigned_to: me.userId }).eq("id", id).is("assigned_to", null);
+  if (error) console.warn(`Claim refused: ${error.code}`);
+  revalidatePath("/sales", "layout");
+}
+
+/** Owner: give prospects to a salesperson, or put them back in the pool. */
+export async function assignProspects(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const ids = form.getAll("prospectId").filter((v): v is string => typeof v === "string" && isUuid(v)).slice(0, 100);
+  const to = text(form, "to", 40);
+  if (!ids.length || (to && !isUuid(to))) return;
+  const db = await createDatabaseClient();
+  if (to) {
+    const { data } = await db.from("team_members").select("user_id").eq("user_id", to).in("role", ["sales", "owner", "manager"]).maybeSingle();
+    if (!data) return;
+  }
+  const { error } = await db.from("scout_prospects").update({ assigned_to: to || null }).in("id", ids);
+  if (error) console.warn(`Assign refused: ${error.code}`);
+  revalidatePath("/sales", "layout");
+}
+
+/** Owner/managers: hide a prospect (not a fit), with a short reason. */
+export async function skipProspect(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const id = text(form, "prospectId", 40);
+  const reason = text(form, "reason", 120);
+  if (!isUuid(id) || contactDetailsIn(reason).length) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("scout_prospects").update({ status: "skipped", skip_reason: reason || null }).eq("id", id);
+  if (error) console.warn(`Skip refused: ${error.code}`);
+  revalidatePath("/sales", "layout");
+}
+
+/** One tap after a walk-in or call. Add-only; the database stamps who/when and moves the status. */
+export async function logScoutVisit(_prev: ScoutFormState, form: FormData): Promise<ScoutFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can log visits." };
+  const id = text(form, "prospectId", 40);
+  const kind = asVisitKind(text(form, "kind", 10));
+  const outcome = asOutcome(text(form, "outcome", 20));
+  if (!isUuid(id)) return { error: "Unknown prospect." };
+  if (!kind || !outcome) return { error: "Pick what happened." };
+  const checked = checkTouchNote(typeof form.get("note") === "string" ? String(form.get("note")).slice(0, 400) : "");
+  if (checked.error) return { error: checked.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("scout_visits").insert({ prospect_id: id, kind, outcome, note: checked.note, user_id: me.userId });
+  if (error) {
+    console.warn(`Visit refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? SCOUT_SETUP : error.code === "42501" ? "That prospect isn't yours. Claim it first." : "Couldn't save it." };
+  }
+  revalidatePath("/sales", "layout");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+/** Owner: the Scout caps (monthly total, default per salesperson, "not interested" wait). */
+export async function saveScoutSettings(_prev: ScoutFormState, form: FormData): Promise<ScoutFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner changes the Scout caps." };
+  const monthly = Number(text(form, "monthlyUsd", 10));
+  const perRep = Number(text(form, "perRepMonthlyUsd", 10));
+  const wait = Number(text(form, "revisitDays", 4));
+  if (!(monthly >= 0 && monthly <= 1000) || !(perRep >= 0 && perRep <= 1000)) return { error: "Caps must be between $0 and $1,000." };
+  if (!Number.isInteger(wait) || wait < 7 || wait > 730) return { error: "The wait must be 7 to 730 days." };
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("scout_settings")
+    .update({ monthly_usd: Math.round(monthly * 100) / 100, per_rep_monthly_usd: Math.round(perRep * 100) / 100, revisit_days: wait, updated_by: me.userId, updated_at: new Date().toISOString() })
+    .eq("id", true);
+  if (error) return { error: MISSING_TABLE.has(error.code ?? "") ? SCOUT_SETUP : "Couldn't save the caps." };
+  revalidatePath("/sales", "layout");
+  return { ok: true };
 }

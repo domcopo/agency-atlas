@@ -10,6 +10,7 @@ import { ProspectCard, stageInfo } from "@/components/cards/ProspectCard";
 import { LeadActionForm } from "@/components/forms/LeadActionForm";
 import { Provenance } from "@/components/labels/labels";
 import { AuditsCard } from "@/components/sales/AuditsCard";
+import { ScoutCard } from "@/components/scout/ScoutCard";
 import { LeadRow } from "@/components/sales/LeadRow";
 import { PipelineHealthCard } from "@/components/sales/PipelineHealthCard";
 import { RefreshLeadsButton } from "@/components/sales/RefreshLeadsButton";
@@ -92,6 +93,7 @@ async function SalespersonSales({ who }: { who?: string }) {
         <>
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
           <AuditsCard mine />
+          <ScoutCard />
         </>
       ) : (
         <>
@@ -110,6 +112,7 @@ async function SalespersonSales({ who }: { who?: string }) {
             </details>
           )}
           <AuditsCard mine />
+          <ScoutCard />
           </Column>
           <Column>
           <SectionTitle aside={`${shown.length} open`}>Leads</SectionTitle>
@@ -152,6 +155,7 @@ async function LeadSales({ member }: { member: { role: string } }) {
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">The owner hasn&apos;t picked the sales pipelines yet.</p>
         )}
         <AuditsCard mine={false} />
+      <ScoutCard />
       </>
     );
   }
@@ -195,6 +199,7 @@ async function LeadSales({ member }: { member: { role: string } }) {
       </section>
 
       <AuditsCard mine={false} />
+      <ScoutCard />
       </Column>
       <Column>
       <SectionTitle aside={`${open.length} open`}>Sales leads</SectionTitle>
