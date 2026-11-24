@@ -1,7 +1,15 @@
 # BizToad plan: a friendly toad that is the face of the AI helper
 
-**Status:** plan only, waiting for the owner's approval (CLAUDE.md rule 8). No feature code, no migration, no new package.
+**Status:** plan approved by the owner 2026-11-24 with all recommended answers (see "Decisions" below). No feature code, migration or new package yet; each phase still needs its own go-ahead.
 **Written:** 2026-11-24.
+
+**Approved 2026-11-24:**
+1. Phones: a still 32 px toad face in the phone top bar (no animation).
+2. Roles: owner + managers first (Phase 2); developers and sales in Phase 3 after their break-in tests pass.
+3. Cap: $25/month total, $5 per person, inside the whole-app AI budget.
+4. Voice: $0 for now (free push-to-talk only); revisit a paid call after a month of use.
+5. Picture rights: **still open.** The owner must confirm the agency owns the rights to the "Biz Toad CEO" picture before the redraw copies its look.
+Defaults kept: no billing in BizToad (even for the owner), conversations not saved, per-device hide plus an owner switch for everyone.
 
 ## In one paragraph
 
