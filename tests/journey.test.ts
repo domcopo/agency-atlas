@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { asOutcome, dayProgress, nextWorkingDay, restartSchedule, touchPoints } from "@/lib/journey";
 import { asStatusReason, asTouchChannel, draftMessage, touchesDue, GROW_TOUCHES, JOURNEY_STAGES, JOURNEY_TOUCHES, journeyLabel, journeyState, touchByStep, type TouchLog } from "@/lib/journey";
 
 const ROOT = join(__dirname, "..");
@@ -103,7 +104,7 @@ describe("where a client is on the journey", () => {
 
 describe("touches due on Home", () => {
   const today = "2026-11-24";
-  const j = (due: string) => ({ mode: "onboarding" as const, stage: 0, ticks: [], handled: 0, startedOn: "2026-11-01", next: { step: 1, title: "Kickoff call", how: "Call", due, overdue: due < today } });
+  const j = (due: string) => ({ mode: "onboarding" as const, stage: 0, ticks: [], handled: 0, startedOn: "2026-11-01", next: { step: 1, title: "Kickoff call", how: "Call", due, overdue: due < today, attempts: 0 } });
   const journeys = new Map([
     ["a", j("2026-11-24")],
     ["b", j("2026-11-20")],
@@ -124,6 +125,49 @@ describe("touches due on Home", () => {
 
   it("someone not linked to a team profile sees everyone's", () => {
     expect(touchesDue(clients, journeys, null, today).map((d) => d.slug)).toEqual(["b", "c", "a"]);
+  });
+});
+
+describe("calls first (0031)", () => {
+  it("an unanswered call keeps the touch open and brings it back the next working day", () => {
+    const j = journeyState({ startedOn: "2026-11-20", touches: [{ step: 1, status: "attempt", happenedOn: "2026-11-20" }], today: "2026-11-24" });
+    // Fri Nov 20 → Mon Nov 23 (weekend skipped).
+    expect(j.next).toMatchObject({ step: 1, due: "2026-11-23", attempts: 1, overdue: true });
+    expect(j.ticks[0]).toBe("next");
+  });
+
+  it("points: a real conversation 3, voicemail + text 1, text or email 1, skip 0", () => {
+    expect(touchPoints({ step: 1, status: "done", channel: "call", outcome: "talked" })).toBe(3);
+    expect(touchPoints({ step: 1, status: "done", channel: "call", outcome: null })).toBe(3);
+    expect(touchPoints({ step: 1, status: "attempt", channel: "call", outcome: "voicemail" })).toBe(1);
+    expect(touchPoints({ step: 2, status: "done", channel: "text", outcome: "text_instead" })).toBe(1);
+    expect(touchPoints({ step: 2, status: "skipped", channel: null, outcome: null })).toBe(0);
+    const p = dayProgress(
+      [
+        { step: 1, status: "done", channel: "call", outcome: "talked" },
+        { step: 4, status: "done", channel: "text", outcome: null },
+        { step: 12, status: "attempt", channel: "call", outcome: "voicemail" },
+      ],
+      15,
+    );
+    expect(p).toEqual({ points: 5, goal: 15, calls: 1, moved: 1, pct: 33 });
+  });
+
+  it("restart: 4 a day, weekends skipped, in the order given", () => {
+    const clients = Array.from({ length: 9 }, (_, i) => ({ id: `c${i}` }));
+    const plan = restartSchedule(clients, "2026-11-27"); // a Friday
+    expect(plan.map((p) => p.start)).toEqual([
+      "2026-11-27", "2026-11-27", "2026-11-27", "2026-11-27",
+      "2026-11-30", "2026-11-30", "2026-11-30", "2026-11-30",
+      "2026-12-01",
+    ]);
+    expect(restartSchedule([{ id: "a" }], "2026-11-28")[0]!.start).toBe("2026-11-30"); // Saturday → Monday
+    expect(nextWorkingDay("2026-11-24")).toBe("2026-11-25");
+  });
+
+  it("only known outcomes", () => {
+    expect(asOutcome("voicemail")).toBe("voicemail");
+    expect(asOutcome("shouted")).toBeNull();
   });
 });
 
@@ -150,6 +194,31 @@ describe("journey guardrails", () => {
     expect(log).toBeGreaterThan(0);
     expect(update).toBeGreaterThan(log);
     expect(fn).not.toMatch(/\.delete\(/);
+  });
+
+  it("restart and goals are owner-only and delete nothing", () => {
+    const restart = slice("export async function restartAllJourneys", "export async function saveCareTarget");
+    expect(restart).toMatch(/me\.role !== "owner"\) return;/);
+    expect(restart).toMatch(/restartSchedule\(/);
+    expect(restart).not.toMatch(/\.delete\(/);
+    const goal = slice("export async function saveCareTarget", "type CareAiState");
+    expect(goal).toMatch(/me\.role !== "owner"\) return;/);
+  });
+
+  it("the AI helper: budget check first, names as codes, cost logged, nothing saved or sent", () => {
+    for (const [from, to, feature] of [
+      ["export async function suggestNextMoves", "export async function draftTouchMessage", "care_suggestions"],
+      ["export async function draftTouchMessage", "/** Who owns a client", "care_draft"],
+    ] as const) {
+      const fn = slice(from, to);
+      expect(fn).toMatch(/const pre = await aiPreflight\(\);/);
+      expect(fn).toMatch(/buildCodebook\(/);
+      expect(fn).toMatch(/redact\(/);
+      expect(fn).toMatch(new RegExp(`logAiUsage\\(db, "${feature}", result\\)`));
+      expect(fn).not.toMatch(/\.insert\(|\.update\(|\.delete\(|fetch\(/);
+      // Client names never go in the data: only codes and short, redacted notes.
+      expect(fn).not.toMatch(/name: c\.name|client\.name,/);
+    }
   });
 
   it("touches: Done also logs a check-in; nothing is sent", () => {

@@ -2344,6 +2344,52 @@ commit;
 update public.toad_settings set enabled = true, roles = '{owner,manager}';
 
 -- ---------------------------------------------------------------------------
+-- 7y. Calls first + daily goals (0031): an unanswered call is an "attempt" (call or video,
+--     voicemail only); "talked" only for calls; goals: owner sets, you read your own.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'attempt', current_date, 'call', 'voicemail' from public.clients where slug = 'care-new'$$, 1, 'manager logs a call nobody answered (voicemail + text)');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'attempt', current_date, 'text', 'voicemail' from public.clients where slug = 'care-new'$$, -2, 'an attempt is a call or video, not a text');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'attempt', current_date, 'call', 'talked' from public.clients where slug = 'care-new'$$, -2, 'an attempt means nobody answered');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'done', current_date, 'email', 'talked' from public.clients where slug = 'care-new'$$, -2, '"talked" only fits a call or video');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'done', current_date, 'call', 'talked' from public.clients where slug = 'care-new'$$, 1, 'manager logs a real conversation');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 3, 'done', current_date, 'call', 'shouted' from public.clients where slug = 'care-new'$$, -2, 'unknown outcomes are rejected');
+select test.expect('select * from public.care_targets', 0, 'manager has no goal row yet (the app uses the default)');
+select test.expect($$insert into public.care_targets (user_id, daily_points) values ('00000000-0000-0000-0000-0000000000a2', 100)$$, -1, 'managers cannot set their own goal');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.care_targets (user_id, daily_points) values ('00000000-0000-0000-0000-0000000000a2', 15)$$, 1, 'owner sets a manager''s daily goal');
+select test.expect($$update public.care_targets set daily_points = 20 where user_id = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'owner changes it');
+select test.expect($$update public.care_targets set daily_points = 0$$, -2, 'a goal is at least 1');
+select test.expect($$select * from public.care_targets where updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'the database records who set the goal');
+select test.expect($$delete from public.care_targets$$, -1, 'goals are never deleted through the app');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.care_targets where daily_points = 20', 1, 'the manager reads their own goal');
+select test.expect($$update public.care_targets set daily_points = 1$$, 0, 'and cannot change it');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.care_targets', 0, 'a salesperson cannot read anyone''s care goal');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.care_targets', 0, 'owner without two-factor reads no goals');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, pickableTiers, planRhythm, similarClients, slugFromName, uniqueSlug } from "@/lib/care";
+import { activeByMonth, autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, pickableTiers, planRhythm, similarClients, slugFromName, uniqueSlug } from "@/lib/care";
 import { byImportance, isImportant, opportunities, planLabel, scorePriority, servicesLabel } from "@/lib/ops";
 import type { CarePlan, RosterClient } from "@/lib/types";
 
@@ -169,6 +169,24 @@ describe("amounts are owner-only (null for everyone else)", () => {
   it("upsell ideas still show, without the amount", () => {
     const ideas = opportunities(client({ services: ["Ads"], startDate: "2026-01-05" }), "2026-11-24");
     expect(ideas.some((i) => i.startsWith("SEO upsell") && !i.includes("$"))).toBe(true);
+  });
+});
+
+describe("growth line", () => {
+  it("counts active clients at each month end, the current month from today's status", () => {
+    const clients = [
+      { startDate: "2025-12-10", status: "active" as const },
+      { startDate: "2026-06-01", status: "canceled" as const, endDate: "2026-09-15" },
+      { startDate: "2026-10-05", status: "active" as const },
+      { startDate: "2026-03-01", status: "paused" as const },
+    ];
+    const line = activeByMonth(clients, "2026-11-24", 12);
+    expect(line).toHaveLength(12);
+    expect(line[0]).toEqual({ month: "2025-12", active: 1 });
+    expect(line.find((m) => m.month === "2026-07")!.active).toBe(2);
+    expect(line.find((m) => m.month === "2026-09")!.active).toBe(1);
+    expect(line.find((m) => m.month === "2026-10")!.active).toBe(2);
+    expect(line[11]).toEqual({ month: "2026-11", active: 2 });
   });
 });
 

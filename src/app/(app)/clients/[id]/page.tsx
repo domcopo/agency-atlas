@@ -141,7 +141,7 @@ export default async function ClientPage({ params }: Props) {
 
       {journey && c.dbId && (
         <div className="mb-3">
-          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} />
+          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} canUseAi={canUseAi} />
         </div>
       )}
 

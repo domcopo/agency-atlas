@@ -164,6 +164,28 @@ export function parseMonthly(raw: string): number | null {
   return n <= 100000 ? Math.round(n * 100) / 100 : Number.NaN;
 }
 
+/**
+ * Active clients at the end of each of the last `months` months (oldest first), for the small
+ * growth line next to "Clients". Same rule as Clients won & lost: a client counts from their
+ * start date until their end date. Canceled or paused clients without an end date are left out
+ * of past months (when they stopped is unknown); the current month uses today's status.
+ */
+export function activeByMonth(clients: Pick<RosterClient, "startDate" | "endDate" | "status">[], today: string, months = 12): { month: string; active: number }[] {
+  const [y, m] = today.split("-").map(Number) as [number, number];
+  const out: { month: string; active: number }[] = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const first = new Date(Date.UTC(y, m - 1 - i, 1));
+    const month = first.toISOString().slice(0, 7);
+    const end = i === 0 ? today : new Date(Date.UTC(y, m - i, 0)).toISOString().slice(0, 10);
+    const active =
+      i === 0
+        ? clients.filter((c) => c.status === "active").length
+        : clients.filter((c) => c.startDate <= end && (c.endDate ? c.endDate > end : c.status === "active")).length;
+    out.push({ month, active });
+  }
+  return out;
+}
+
 /** Is a GoHighLevel times sync due? (Owner's view; runs in the background.) */
 export function autoSyncDue(lastIso: string | null, now: Date): boolean {
   if (!lastIso) return true;

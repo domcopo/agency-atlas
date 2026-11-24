@@ -10,8 +10,28 @@ import type { ClientCareView } from "@/lib/home-layouts";
 import { promiseMissed } from "@/lib/ops";
 import { formatDate } from "@/lib/format";
 import type { TouchDue } from "@/lib/journey";
+import { CareGoalCard } from "@/components/cards/CareWidgets";
+import { SuggestedMoves } from "@/components/forms/SuggestedMoves";
 
-export function ClientCareHome({ view, staff, canEdit, today, linked, touches }: { view: ClientCareView; staff: { id: string; name: string }[]; canEdit: boolean; today: string; linked: boolean; touches?: TouchDue[] | null }) {
+export function ClientCareHome({
+  view,
+  staff,
+  canEdit,
+  today,
+  linked,
+  touches,
+  goal,
+  canUseAi = false,
+}: {
+  view: ClientCareView;
+  staff: { id: string; name: string }[];
+  canEdit: boolean;
+  today: string;
+  linked: boolean;
+  touches?: TouchDue[] | null;
+  goal?: { points: number; goal: number; calls: number; moved: number; pct: number } | null;
+  canUseAi?: boolean;
+}) {
   const atRisk = view.attention.filter((a) => a.state === "at_risk").length;
   return (
     <>
@@ -24,6 +44,13 @@ export function ClientCareHome({ view, staff, canEdit, today, linked, touches }:
           { label: "Check-ins overdue", value: String(view.checkInsOverdue), source: "Check-in rhythm", href: "/clients", tone: view.checkInsOverdue ? "amber" : "plain" },
         ]}
       />
+
+      {(goal || (canUseAi && touches)) && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2 lg:gap-x-8 xl:gap-x-10">
+          {goal && <CareGoalCard {...goal} />}
+          {canUseAi && touches && <SuggestedMoves />}
+        </div>
+      )}
 
       {/* Wide screens: clients on the left, my follow-ups on the right. */}
       <Columns>

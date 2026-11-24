@@ -96,11 +96,25 @@ export function draftMessage(t: JourneyTouch, business: string): string {
   return base.replaceAll("[Business]", business);
 }
 
-/** Done/Skip as saved (care_touches). */
+/** Done / Skip / unanswered call as saved (care_touches; "attempt" from 0031). */
 export interface TouchLog {
   step: number;
-  status: "done" | "skipped";
+  status: "done" | "skipped" | "attempt";
   happenedOn: string;
+}
+
+/** After this many unanswered calls, suggest finishing the touch by text or email. */
+export const CALL_TRIES = 2;
+
+/** The next weekday after a day (an unanswered call comes back then). */
+export function nextWorkingDay(day: string): string {
+  let d = addDays(day, 1);
+  for (let i = 0; i < 3; i++) {
+    const w = new Date(`${d}T00:00:00Z`).getUTCDay();
+    if (w !== 0 && w !== 6) break;
+    d = addDays(d, 1);
+  }
+  return d;
 }
 
 export interface JourneyPlanRhythm {
@@ -118,11 +132,14 @@ export interface JourneyState {
   /** The 27 touches, in order (all "todo" for a client who never started onboarding). */
   ticks: Tick[];
   handled: number;
-  next: { step: number; title: string; how: string; due: string; overdue: boolean } | null;
+  /** attempts = unanswered calls on this touch so far (0031). */
+  next: { step: number; title: string; how: string; due: string; overdue: boolean; attempts: number } | null;
   startedOn: string | null;
 }
 
-const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+function addDays(day: string, n: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
 const latest = (xs: string[]) => [...xs].sort().pop() ?? null;
 
 /**
@@ -135,24 +152,30 @@ const latest = (xs: string[]) => [...xs].sort().pop() ?? null;
 export function journeyState(input: { startedOn?: string | null; touches: TouchLog[]; plan?: JourneyPlanRhythm | null; lastContact?: string | null; today: string }): JourneyState {
   const { today } = input;
   const startedOn = input.startedOn ?? null;
-  const logs = startedOn ? input.touches.filter((t) => t.happenedOn >= startedOn) : [];
+  const all = startedOn ? input.touches.filter((t) => t.happenedOn >= startedOn) : [];
+  // Unanswered calls keep a touch open; they only move its due date.
+  const logs = all.filter((t) => t.status !== "attempt");
+  const tries = all.filter((t) => t.status === "attempt");
   const byStep = new Map<number, TouchLog>();
   for (const t of logs) if (!byStep.has(t.step) || byStep.get(t.step)!.happenedOn < t.happenedOn) byStep.set(t.step, t);
   const firstOpen = startedOn ? JOURNEY_TOUCHES.find((t) => !byStep.has(t.step)) : undefined;
   const ticks: Tick[] = JOURNEY_TOUCHES.map((t) => {
     const l = byStep.get(t.step);
-    if (l) return l.status;
+    if (l) return l.status === "skipped" ? "skipped" : "done";
     return firstOpen && t.step === firstOpen.step ? "next" : "todo";
   });
   const handled = JOURNEY_TOUCHES.filter((t) => byStep.has(t.step)).length;
   if (startedOn && firstOpen) {
-    const due = addDays(startedOn, firstOpen.day);
-    return { mode: "onboarding", stage: firstOpen.stage, ticks, handled, next: { step: firstOpen.step, title: firstOpen.title, how: firstOpen.how, due, overdue: due < today }, startedOn };
+    const mine = tries.filter((t) => t.step === firstOpen.step);
+    const lastTry = latest(mine.map((t) => t.happenedOn));
+    const planned = addDays(startedOn, firstOpen.day);
+    const due = lastTry ? latest([planned, nextWorkingDay(lastTry)])! : planned;
+    return { mode: "onboarding", stage: firstOpen.stage, ticks, handled, next: { step: firstOpen.step, title: firstOpen.title, how: firstOpen.how, due, overdue: due < today, attempts: mine.length }, startedOn };
   }
 
   // Grow: the ongoing rhythm.
   const plan = input.plan ?? { reportEveryDays: 30, midMonthCheckIn: true, competitorReviewMonths: 0 };
-  const grow = input.touches.filter((t) => t.step > 100 && (!startedOn || t.happenedOn >= startedOn));
+  const grow = input.touches.filter((t) => t.step > 100 && t.status !== "attempt" && (!startedOn || t.happenedOn >= startedOn));
   const lastOf = (step: number) => latest(grow.filter((t) => t.step === step).map((t) => t.happenedOn));
   const journeyEnd = startedOn ? (latest([addDays(startedOn, JOURNEY_DAYS), ...logs.filter((l) => l.step <= 27).map((l) => l.happenedOn)]) as string) : null;
   // Existing clients: count from the last contact, so nobody starts with a pile of overdue reports.
@@ -170,7 +193,7 @@ export function journeyState(input: { startedOn?: string | null; touches: TouchL
     stage: GROW_STAGE,
     ticks: startedOn ? ticks : JOURNEY_TOUCHES.map(() => "todo"),
     handled,
-    next: { step: pick.step, title: touch.title, how: touch.how, due: pick.due, overdue: pick.due < today },
+    next: { step: pick.step, title: touch.title, how: touch.how, due: pick.due, overdue: pick.due < today, attempts: 0 },
     startedOn,
   };
 }
@@ -236,4 +259,62 @@ export function asStatusReason(v: unknown): StatusReason | null {
 
 export function asTouchChannel(v: unknown): TouchChannel | null {
   return v === "call" || v === "text" || v === "email" || v === "video" ? v : null;
+}
+
+// ---------------------------------------------------------------------------
+// Calls first: points toward the daily goal (0031)
+// ---------------------------------------------------------------------------
+
+/** A real conversation counts most; a voicemail + text or a text/email counts 1. Tune here. */
+export const CARE_POINTS = { talked: 3, voicemail: 1, message: 1 } as const;
+export const DEFAULT_DAILY_POINTS = 15;
+/** The last touch of each onboarding stage: finishing it moves the client to the next stage. */
+export const STAGE_LAST_STEP = [4, 9, 18, 23, 27] as const;
+
+export type TouchOutcome = "talked" | "voicemail" | "text_instead";
+
+export interface DayLog {
+  step: number;
+  status: "done" | "skipped" | "attempt";
+  channel: TouchChannel | null;
+  outcome: TouchOutcome | null;
+}
+
+export function touchPoints(l: DayLog): number {
+  if (l.status === "skipped") return 0;
+  if (l.status === "attempt") return CARE_POINTS.voicemail;
+  const spoke = l.outcome === "talked" || (!l.outcome && (l.channel === "call" || l.channel === "video"));
+  return spoke ? CARE_POINTS.talked : CARE_POINTS.message;
+}
+
+/** Today's progress for one person: points, real conversations, clients moved up a stage. */
+export function dayProgress(logs: DayLog[], goal: number): { points: number; goal: number; calls: number; moved: number; pct: number } {
+  const points = logs.reduce((n, l) => n + touchPoints(l), 0);
+  const calls = logs.filter((l) => l.status === "done" && touchPoints(l) === CARE_POINTS.talked).length;
+  const moved = logs.filter((l) => l.status !== "attempt" && (STAGE_LAST_STEP as readonly number[]).includes(l.step)).length;
+  return { points, goal, calls, moved, pct: Math.min(100, Math.round((points / Math.max(1, goal)) * 100)) };
+}
+
+export function asOutcome(v: unknown): TouchOutcome | null {
+  return v === "talked" || v === "voicemail" || v === "text_instead" ? v : null;
+}
+
+// ---------------------------------------------------------------------------
+// Restart everyone (owner): a few new kickoffs per working day, most important first
+// ---------------------------------------------------------------------------
+
+export const RESTART_PER_DAY = 4;
+
+/** Start days for each client, in the order given: perDay per weekday from `from` (weekends skipped). */
+export function restartSchedule<T extends { id: string }>(clients: T[], from: string, perDay = RESTART_PER_DAY): { client: T; start: string }[] {
+  let day = from;
+  const weekday = (d: string) => {
+    const w = new Date(`${d}T00:00:00Z`).getUTCDay();
+    return w !== 0 && w !== 6;
+  };
+  while (!weekday(day)) day = addDays(day, 1);
+  return clients.map((client, i) => {
+    if (i > 0 && i % perDay === 0) day = nextWorkingDay(day);
+    return { client, start: day };
+  });
 }

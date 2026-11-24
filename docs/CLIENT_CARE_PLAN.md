@@ -1,7 +1,69 @@
 # Client care plan
 
-**Status:** Phase 1 approved 2026-11-24. **Step 1A built** (pull request open, `0025` not run yet). Steps 1B and 1C not started.
-**Branch:** `claude/client-care-53178d` (own worktree). **Database change:** `0025_client_care.sql` covers Step 1A only. The owner set the order on 2026-11-24: 0024 Scout, 0025 Client care, 0026 sales leaderboard, 0027 SEO Watcher. Steps 1B/1C will need `0028`+ (confirm the number first).
+**Status (2026-11-24):** Steps 1A (`0025`) and 1B (`0028`) are built, merged and run on the live database. **Step 1D was approved and BUILT on 2026-11-24 (`0031_care_goals.sql` not run yet; Google Ads audits took 0029 and BizToad 0030).** Step 1C (VA logins) has not started.
+**Branch:** `claude/client-care-53178d` (own worktree). **Migration order** (owner, 2026-11-24): 0024 Scout, 0025 client care, 0026 sales leaderboard, 0027 SEO Watcher, 0028 client journey. 0029 Google Ads audits, 0030 BizToad, 0031 care goals (Step 1D); next free 0032.
+
+## Step 1D (built 2026-11-24): restart everyone, journey board, daily goal, AI helper
+
+As built:
+- **Restart and goals:** `/clients/restart` (owner) holds the restart preview and confirm (`restartAllJourneys`, `restartSchedule`) and the daily goals (`care_targets`).
+- **Logging a touch:** "How did it go?" on Next move (`logTouch`): talked, no answer (stays open; due the next working day), video, text or email.
+- **Points:** `CARE_POINTS` / `dayProgress` in `src/lib/journey.ts`.
+- **Clients page:** `GrowthLine` and `JourneyBoard` (`?stage=N` filters the list); the owner's setup links are one row; "Check-ins due" became "Touches due" once 0028 runs.
+- **Today's goal:** `CareGoalCard` on Clients and on the Client care Home.
+- **AI helper:** `SuggestedMoves` (Home) and "Draft with AI" (Next move), as `suggestNextMoves` / `draftTouchMessage` (features `care_suggestions` / `care_draft`). Names become codes, the budget is checked first, and nothing is saved or sent.
+- **Not checked with real data or the real AI:** the demo has no database or AI key.
+
+The owner's request: put every client back through month 1 in "an amazing system"; add a small growth line next to "Clients"; give the client communicator a daily goal that moves clients through the stages; review and organise the Clients page; and show where AI helps the communicator.
+
+**Owner decisions (2026-11-24):**
+- **Restart:** every active client goes back to touch 1, **4 new kickoffs a day**, biggest, VIP and top tier first. Calls matter most: try to get them on the phone.
+- **Daily goal:** 15 touches a day to start, changeable per person.
+- **Line graph:** active clients over 12 months.
+- **AI helper:** yes, now: suggestions plus drafts.
+
+**1. Restart everyone (owner only).** A "Restart all journeys" button on Plan tiers or Set up clients. It shows a preview first ("22 clients: 4 a day, Nov 25 to Dec 1") and saves nothing until Confirm. It sets each client's journey start to a staggered date. Touches logged before the restart stay in history but no longer count. Nothing is deleted.
+
+**2. Calls first: "No answer" is part of the journey.** On a call touch, Done offers **Talked**, **No answer (left voicemail + text)** or **Text/email instead**.
+- **No answer** keeps the touch open, records the attempt, and moves the due date to the next working day. The card says "Attempt 2: call again, or send the report/images by text".
+- After 2 tries without an answer, the card suggests finishing the touch by text or email.
+- **Points toward the goal:** a real conversation (call or video answered) counts 3, a voicemail + text counts 1, and a text or email counts 1. A day with 3 good calls is worth as much as 9 texts. The goal still reads in plain words: "9 of 15 today · 2 calls connected".
+
+**3. Journey board** at the top of Clients: 6 stage columns with counts (Kickoff 6, First results 5…). Tapping a stage filters the list below to those clients. Under it, one line: "7 touches overdue · 5 due today".
+
+**4. Small growth line** next to the "Clients" title: active clients month by month for 12 months, plus the 3-month change ("+4 in 3 mo"). It's worked out from start and end dates, the same as Clients won and lost. Small on phones, a bit bigger on computers.
+
+**5. Today's goal** on Client care Home and on Clients, for the person signed in: points so far versus their goal, calls connected, and clients moved to a new stage today. The owner sets each person's goal on Set up clients; the default is 15.
+
+**6. AI helper (suggestions only; nothing is sent).**
+- **"Suggested next moves"** on Client care Home: up to 5 clients, each with one line on why now and what to lead with. It's built from facts Atlas already has (stage, overdue touch, health, last mood, client memory, tier), with names swapped for codes, through the one AI module, inside the monthly budget, and logged.
+- **"Draft with AI"** on each Next move card: it rewrites the template using the client memory (goal, tone, next ask) and what was done recently. The person edits and copies it, then sends it from GoHighLevel.
+- Atlas never reads message text from GoHighLevel, so the AI only knows what's logged in Atlas.
+- Each suggestion run and each draft shows its cost against the budget, and the owner's existing AI budget cap applies.
+
+**7. Clients page clean-up (same information, better order).**
+- **Top:** title + growth line + Add client, then the journey board, then today's goal.
+- **Then:** risk alerts, owners and next steps, by service (with tier counts), the client list (with tracks), win-back, and Clients won and lost (folded).
+- **"Check-ins due"** is replaced by the journey's touches due, because the two said the same thing.
+- **The owner's setup links** (Set up clients, Plan tiers, Match GoHighLevel contacts, Restart journeys) go into one "Setup" row of small buttons.
+
+**Database change `0031_care_goals.sql`** (renumbered twice: Google Ads audits took 0029, BizToad 0030; it keeps BizToad's `ask_toad` AI feature in the cost-log rule):
+- `care_touches` gains an `attempt` status and an `outcome` (talked / voicemail / text instead).
+- `care_targets`: a daily goal per person (owner sets it; each person reads their own).
+- RLS, the two-factor rule and break-in tests, as always.
+- The restart itself needs no new table. It only sets `care_started_on`.
+
+**Risks:**
+- The restart changes every active client's journey at once. The preview step, the stagger, and keeping every old touch in history keep that safe and reversible: the owner can restart again any time.
+- The AI costs money. Each run is checked against the budget first, as today.
+
+**Done means:**
+- Restart preview and confirm work.
+- No answer reschedules the touch, and connected calls count 3.
+- The board filters the list, and the growth line matches Clients won and lost.
+- The goal shows on Home.
+- The AI suggestions and drafts work within budget, with no real names sent.
+- All tests, RLS tests and the build pass, checked at phone and desktop width.
 
 ### What Step 1A actually built (differs from the draft below in a few places)
 

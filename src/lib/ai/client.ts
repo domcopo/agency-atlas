@@ -177,6 +177,27 @@ const obj = (properties: Record<string, unknown>) => ({
   additionalProperties: false,
 });
 
+// Client care helper (0031, docs/CLIENT_CARE_PLAN.md Step 1D). Suggestions only.
+export const CARE_MOVES_SCHEMA = obj({
+  moves: { type: "array", items: obj({ client: str, why: str, lead_with: str }) },
+});
+
+export const CARE_MOVES_TASK = `You help a small marketing agency's client communicator plan today's outreach.
+Clients are coded like C7; use the codes exactly. The data lists clients with a journey touch due or overdue, their stage, health, last mood, short notes and how many calls went unanswered.
+- moves: up to 5 clients to contact first, most important first. Calls matter most: prefer clients where a real conversation would help.
+- why: one short sentence on why now, from the facts only.
+- lead_with: one short sentence on what to open with (a result to share, a question, or an ask such as reviews or photos).
+Never invent results, numbers or facts. If the data is thin, say so briefly.`;
+
+export const CARE_DRAFT_SCHEMA = obj({ message: str });
+
+export const CARE_DRAFT_TASK = `Write one short message for an agency rep to send a client, for the journey touch in the data.
+The client is coded C1; write [C1] where the business name goes. Keep [First name] and [Your name] as placeholders.
+- Follow the touch's purpose, what to say and what to ask for.
+- Match the tone note if there is one. Use the goal and next-ask notes if they fit.
+- For a text: under 60 words. For an email: under 120 words, no subject line.
+- Warm, plain words, no jargon, no exclamation marks. Never promise or invent results, rankings or numbers.`;
+
 export const BRIEFING_SCHEMA = obj({
   headline: str,
   priorities: { type: "array", items: obj({ title: str, why: str, clients: codes, when: { type: "string", enum: ["today", "this_week"] } }) },

@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { cn, formatDate, formatUsdExact } from "@/lib/format";
 import { servicesLabel } from "@/lib/ops";
 import { JourneyMini } from "@/components/cards/JourneyCard";
+import { JOURNEY_STAGES } from "@/lib/journey";
 import type { HealthLevel, RosterClient, SubscriptionStatus } from "@/lib/types";
 import { EmptyState, HealthBadge, StatusPill } from "@/components/labels/labels";
 import { Chip, ChipRow, SearchBox } from "./Filters";
@@ -41,13 +42,15 @@ const groups: { id: string; title: string; hint: string; match: (c: RosterRow) =
 
 type Filter = "all" | SubscriptionStatus | "check" | "at_risk" | "watch";
 
-export function RosterBrowser({ clients, showMoney }: { clients: RosterRow[]; showMoney: boolean }) {
+export function RosterBrowser({ clients, showMoney, stage = null }: { clients: RosterRow[]; showMoney: boolean; stage?: number | null }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     return clients.filter((c) => {
+      // Journey board: only clients in the tapped stage.
+      if (stage !== null && c.journey?.stage !== stage) return false;
       if (filter === "check") {
         if (!c.check) return false;
       } else if (filter === "at_risk" || filter === "watch") {
@@ -55,7 +58,7 @@ export function RosterBrowser({ clients, showMoney }: { clients: RosterRow[]; sh
       } else if (filter !== "all" && c.status !== filter) return false;
       return !q || c.name.toLowerCase().includes(q);
     });
-  }, [clients, query, filter]);
+  }, [clients, query, filter, stage]);
 
   const filters: { id: Filter; label: string }[] = [
     { id: "all", label: "All" },
@@ -69,6 +72,16 @@ export function RosterBrowser({ clients, showMoney }: { clients: RosterRow[]; sh
 
   return (
     <div>
+      {stage !== null && (
+        <p className="mb-2 flex items-center justify-between gap-2 rounded-2xl border border-violet/30 bg-violet/8 px-3 py-2 text-xs">
+          <span>
+            Showing the <span className="font-semibold">{JOURNEY_STAGES[stage]}</span> stage
+          </span>
+          <Link href="/clients#list" className="font-semibold text-violet">
+            Show all
+          </Link>
+        </p>
+      )}
       <SearchBox value={query} onChange={setQuery} label="Search clients" placeholder="Search client name…" />
       <div className="mt-3">
         <ChipRow label="Filter clients">

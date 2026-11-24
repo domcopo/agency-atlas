@@ -54,7 +54,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
-import { journeyState, type JourneyState, type TouchLog } from "@/lib/journey";
+import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, journeyState, type DayLog, type JourneyState, type TouchLog } from "@/lib/journey";
 import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
@@ -328,7 +328,7 @@ export const getCareTouches = cache(async (): Promise<{ ready: boolean; byClient
   if (error) return { ready: false, byClient };
   for (const r of data ?? []) {
     const list = byClient.get(r.client_id as string) ?? [];
-    list.push({ step: Number(r.step), status: r.status === "skipped" ? "skipped" : "done", happenedOn: r.happened_on as string });
+    list.push({ step: Number(r.step), status: r.status === "skipped" ? "skipped" : r.status === "attempt" ? "attempt" : "done", happenedOn: r.happened_on as string });
     byClient.set(r.client_id as string, list);
   }
   return { ready: true, byClient };
@@ -354,6 +354,48 @@ export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map
   }
   return { ready: true, bySlug };
 });
+
+/**
+ * Today's goal for the signed-in person (0031): points from the touches they logged today
+ * against their daily goal (default 15). null before 0028 or for people who can't log touches.
+ */
+export const getCareToday = cache(async (): Promise<ReturnType<typeof dayProgress> & { ready: boolean } | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me || !isLead(me.role)) return null;
+  const db = await createDatabaseClient();
+  const day = today();
+  const mine = (cols: string) => db.from("care_touches").select(cols).eq("logged_by", me.userId).eq("happened_on", day).limit(500);
+  let res = await mine("step, status, channel, outcome");
+  const ready = !res.error;
+  if (res.error) res = await mine("step, status, channel"); // before 0031
+  if (res.error) return null; // before 0028
+  const goalRow = ready ? await db.from("care_targets").select("daily_points").eq("user_id", me.userId).maybeSingle() : { data: null };
+  const goal = Number((goalRow.data as { daily_points?: number } | null)?.daily_points ?? DEFAULT_DAILY_POINTS);
+  const logs: DayLog[] = ((res.data ?? []) as unknown as { step: number; status: string; channel: string | null; outcome?: string | null }[]).map((r) => ({
+    step: Number(r.step),
+    status: r.status === "attempt" ? "attempt" : r.status === "skipped" ? "skipped" : "done",
+    channel: asTouchChannel(r.channel),
+    outcome: asTouchOutcome(r.outcome ?? null),
+  }));
+  return { ...dayProgress(logs, goal), ready };
+});
+
+/** Owner: every login and their daily care goal (0031). ready=false before 0031. */
+export async function getCareGoals(): Promise<{ ready: boolean; people: { userId: string; name: string; role: string; points: number }[] }> {
+  if (!usesDatabase() || (await getMember())?.role !== "owner") return { ready: false, people: [] };
+  const db = await createDatabaseClient();
+  const [team, goals] = await Promise.all([
+    db.from("team_members").select("user_id, display_name, role").in("role", ["owner", "manager"]).order("display_name"),
+    db.from("care_targets").select("user_id, daily_points"),
+  ]);
+  if (goals.error) return { ready: false, people: [] };
+  const byUser = new Map(((goals.data ?? []) as { user_id: string; daily_points: number }[]).map((g) => [g.user_id, Number(g.daily_points)]));
+  return {
+    ready: true,
+    people: ((team.data ?? []) as { user_id: string; display_name: string; role: string }[]).map((t) => ({ userId: t.user_id, name: t.display_name, role: t.role, points: byUser.get(t.user_id) ?? DEFAULT_DAILY_POINTS })),
+  };
+}
 
 export interface StatusChange {
   at: string;
