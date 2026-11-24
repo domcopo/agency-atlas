@@ -11,9 +11,11 @@ import { WorkOrdersButton } from "@/components/shell/WorkOrdersButton";
 import Link from "next/link";
 import { NoticePill } from "@/components/shell/NoticePill";
 import { BrandLogo } from "@/components/shell/BrandLogo";
-import { isSales } from "@/lib/roles";
+import { isLead, isSales } from "@/lib/roles";
 import { parseTheme, THEME_COOKIE } from "@/lib/theme";
-import { getCoachHints, getDeveloperViewer, getMember, getNotices, getWorkOrderBadge, usesDatabase } from "@/lib/data-source";
+import { parseToadMode, TOAD_COOKIE } from "@/lib/toad";
+import { BizToad } from "@/components/toad/BizToad";
+import { getCoachHints, getDeveloperViewer, getMember, getNotices, getToadStatus, getWorkOrderBadge, usesDatabase } from "@/lib/data-source";
 
 // AI briefings can take up to ~2 minutes; give server actions room on the host.
 export const maxDuration = 180;
@@ -29,6 +31,25 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const hints = developer || sales ? {} : (await getCoachHints()).tabs;
   const mode = developer ? "developer" : sales ? "sales" : "full";
   const ordersHref = developer ? "/work" : "/work/orders";
+  const cookieJar = await cookies();
+  // BizToad: shown, still, or hidden on this device; the owner can switch it off for everyone (0030).
+  const toad = await getToadStatus();
+  const toadMode = toad.ready && !toad.enabled ? "hidden" : parseToadMode(cookieJar.get(TOAD_COOKIE)?.value);
+  // Asking (Phase 2): owner and managers whose role is switched on, outside a preview.
+  const toadAsk = toad.canAsk && isLead(member?.role) && !viewer?.preview ? { usedUsd: toad.myUsedUsd, capUsd: toad.perPersonUsd } : null;
+  const toadNote = !usesDatabase()
+    ? "Asking me needs the real database (this is the demo)."
+    : !toad.ready && isLead(member?.role)
+      ? "Asking me needs database update 0030 first."
+      : undefined;
+  const toadLinks = developer
+    ? [{ label: "Your work", href: "/work" }]
+    : sales
+      ? [{ label: "Sales", href: "/sales" }]
+      : [
+          { label: "Today's briefing (Home)", href: "/" },
+          { label: "Smart add a work order", href: "/work/orders" },
+        ];
   // Phones and tablets: one narrow column with the bottom tab bar (unchanged).
   // From 1024 px (lg): a side menu on the left and a wide content area, capped at
   // 1600 px so lines don't stretch too far on big monitors.
@@ -43,20 +64,25 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         workOrders={badge !== null ? { count: badge, href: ordersHref } : null}
         notices={notices ? notices.unread : null}
         showSafety={!developer && !sales}
-        theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)}
+        theme={parseTheme(cookieJar.get(THEME_COOKIE)?.value)}
       />
       <div className="lg:pl-60">
-        <main id="main" className="wide mx-auto max-w-lg px-4 pb-44 lg:max-w-[100rem] lg:px-10 lg:pb-20 xl:px-14">
+        <main id="main" className="wide mx-auto max-w-lg px-4 pb-44 lg:max-w-[100rem] lg:px-10 lg:pb-28 xl:px-14">
           {/* Phones and tablets: small logo at the top (computers have it in the side menu). */}
-          <Link href="/" className="-mb-2 inline-block pt-4 lg:hidden">
-            <BrandLogo className="w-[88px]" priority />
-          </Link>
+          <div className="-mb-2 flex items-center justify-between pt-4 lg:hidden">
+            <Link href="/" className="inline-block">
+              <BrandLogo className="w-[88px]" priority />
+            </Link>
+            {toadMode !== "hidden" && <BizToad variant="bar" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
+          </div>
           {viewer?.preview && <PreviewBanner name={viewer.name} />}
           {notices && notices.unread > 0 && <NoticePill count={notices.unread} />}
           {children}
         </main>
       </div>
       {badge !== null && <WorkOrdersButton count={badge} href={ordersHref} />}
+      {/* Computers: bottom-right corner (main has extra bottom space so nothing ends up under it). */}
+      {toadMode !== "hidden" && <BizToad variant="corner" initialMode={toadMode} links={toadLinks} ask={toadAsk} note={toadNote} />}
       <BottomNav hints={hints} mode={mode} />
     </>
   );
