@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { PulseStrip } from "@/components/cards/PulseStrip";
 import { LeadRow } from "@/components/sales/LeadRow";
+import { Column, Columns } from "@/components/shell/Columns";
 import { SectionTitle } from "@/components/shell/PageHeader";
 import type { SalesAppointment, SalesView } from "@/lib/home-layouts";
 import type { LeadTouch, SalesPipeline } from "@/lib/sales";
@@ -71,9 +72,14 @@ export function SalesHome({
         ]}
       />
 
+      {/* Wide screens: follow-ups on the left, appointments and new leads on the right. */}
+      <Columns>
+      <Column>
       <SectionTitle aside={<Link href="/sales#follow-ups" className="text-xs text-violet">Sales</Link>}>Follow-ups</SectionTitle>
       <PriorityList items={leadItems} staff={staff} canEdit={canEdit} limit={6} empty="No lead follow-ups. Add one from a lead's page." />
 
+      </Column>
+      <Column>
       <SectionTitle aside="Times and calendar only">Appointments today</SectionTitle>
       {view.appointmentsToday.length ? <Appointments items={view.appointmentsToday} when={time} /> : <p className="glass rounded-2xl px-4 py-3 text-sm text-muted">None today.</p>}
 
@@ -97,6 +103,8 @@ export function SalesHome({
         <p className="glass rounded-2xl px-4 py-3 text-sm text-muted">No new sales leads in the last 7 days.</p>
       )}
       <p className="mt-2 px-1 text-[11px] text-faint">Read-only from GoHighLevel. Atlas never messages, books or changes anything there.</p>
+      </Column>
+      </Columns>
     </>
   );
 }

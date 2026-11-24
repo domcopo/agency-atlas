@@ -57,7 +57,7 @@ export default async function BillingPage() {
         {state.asOf ? ` · as of ${when(state.asOf)}` : ""}
       </p>
 
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4 lg:gap-4">
         <Tile label="Collected this month" value={money(totals.collectedThisMonthUsd)} tone="text-lime" />
         <Tile label="Still open" value={money(totals.openUsd)} />
         <Tile

@@ -26,11 +26,11 @@ function Tile({ t }: { t: PulseTile }) {
   return (
     <Link
       href={t.href}
-      className="pressable glass flex min-h-[76px] flex-col justify-between rounded-2xl px-2.5 py-2 hover:bg-white/[0.05]"
+      className="pressable glass flex min-h-[76px] flex-col justify-between rounded-2xl px-2.5 py-2 hover:bg-white/[0.05] lg:min-h-24 lg:px-4 lg:py-3"
     >
-      <span className="text-[11px] leading-tight text-muted">{t.label}</span>
-      <span className={cn("font-display text-lg font-bold leading-tight", toneText[t.tone ?? "plain"])}>{t.value}</span>
-      <span className="truncate text-[10px] leading-tight text-faint">{t.source}</span>
+      <span className="text-[11px] leading-tight text-muted lg:text-[13px]">{t.label}</span>
+      <span className={cn("font-display text-lg font-bold leading-tight lg:text-2xl", toneText[t.tone ?? "plain"])}>{t.value}</span>
+      <span className="truncate text-[10px] leading-tight text-faint lg:text-xs">{t.source}</span>
     </Link>
   );
 }
@@ -38,8 +38,8 @@ function Tile({ t }: { t: PulseTile }) {
 /** `hidden` tiles sit behind a "Show …" toggle, closed by default (no script needed). */
 export function PulseStrip({ tiles, hidden = [], hiddenLabel = "more" }: { tiles: PulseTile[]; hidden?: PulseTile[]; hiddenLabel?: string }) {
   return (
-    <section aria-label="Agency at a glance" className="mb-3">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <section aria-label="Agency at a glance" className="mb-3 lg:mb-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-4">
         {tiles.map((t) => (
           <Tile key={t.label} t={t} />
         ))}

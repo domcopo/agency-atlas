@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { PulseStrip } from "@/components/cards/PulseStrip";
+import { Column, Columns } from "@/components/shell/Columns";
 import { SectionTitle } from "@/components/shell/PageHeader";
 import { cn } from "@/lib/format";
 import type { ClientCareView } from "@/lib/home-layouts";
@@ -22,6 +23,9 @@ export function ClientCareHome({ view, staff, canEdit, today, linked }: { view: 
         ]}
       />
 
+      {/* Wide screens: clients on the left, my follow-ups on the right. */}
+      <Columns>
+      <Column>
       <SectionTitle aside={<Link href="/clients" className="text-xs text-violet">All clients</Link>}>Needs attention</SectionTitle>
       {view.attention.length ? (
         <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
@@ -77,8 +81,12 @@ export function ClientCareHome({ view, staff, canEdit, today, linked }: { view: 
         </>
       )}
 
+      </Column>
+      <Column>
       <SectionTitle aside={<Link href="/work" className="text-xs text-violet">Work</Link>}>{linked ? "My follow-ups and issues" : "Follow-ups and issues"}</SectionTitle>
       <PriorityList items={view.priorities} staff={staff} canEdit={canEdit} limit={6} empty="Nothing due. Nice." />
+      </Column>
+      </Columns>
     </>
   );
 }

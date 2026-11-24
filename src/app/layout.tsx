@@ -5,12 +5,12 @@ import { getMember, getRosterSource, usesDatabase } from "@/lib/data-source";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "Agency Atlas", template: "%s · Agency Atlas" },
+  title: { default: "YO Marketing Co", template: "%s · YO Marketing Co" },
   description: "Internal agency command center.",
   // Internal tool: ask search engines not to index it.
   robots: { index: false, follow: false },
-  icons: { icon: "/icon.svg" },
-  appleWebApp: { capable: true, title: "Atlas", statusBarStyle: "black-translucent" },
+  icons: { icon: "/brand/icon-512.png", apple: "/brand/apple-icon.png" },
+  appleWebApp: { capable: true, title: "YO Marketing", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {

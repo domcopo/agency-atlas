@@ -42,6 +42,7 @@ import { ClientCareHome } from "@/components/home/ClientCareHome";
 import { WorkLeadHome } from "@/components/home/WorkLeadHome";
 import { SalesHome } from "@/components/home/SalesHome";
 import { Pill, Provenance } from "@/components/labels/labels";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import {
   getAiStatus,
@@ -482,6 +483,10 @@ export default async function MissionControlPage() {
 
   return (
     <>
+      {/* Wide screens: the header, numbers and tabs on the left with the radar beside them at the
+          top; today's lists in two columns below. Phones: one column, same order as before. */}
+      <Columns layout="halves">
+      <Column>
       <PageHeader title="Mission Control" subtitle={data.weekLabel} action={safetyLink} />
       {homeLayout && !samples && <HomeSwitcher current={homeLayout.layout} />}
 
@@ -496,8 +501,9 @@ export default async function MissionControlPage() {
 
       {!samples && <PulseStrip tiles={pulse} hidden={pulseHidden} hiddenLabel="pipeline value" />}
 
+      <div className="lg:grid lg:grid-cols-2 lg:gap-x-8 lg:empty:hidden xl:gap-x-10">
       {billing && (
-        <Link href="/billing" className="pressable glass mb-3 block rounded-2xl p-3 text-sm">
+        <Link href="/billing" className="pressable glass mb-3 block rounded-2xl p-3 text-sm lg:p-4">
           <span className="flex items-center justify-between gap-2">
             <span className="font-semibold">Billing</span>
             <span className="text-[11px] text-faint">Owner only · read-only</span>
@@ -532,16 +538,23 @@ export default async function MissionControlPage() {
       )}
 
       {reviewWaiting > 0 && (
-        <Link href="/work/orders" className="mb-3 block rounded-2xl border border-violet/40 bg-violet/10 p-3 text-sm">
+        <Link href="/work/orders" className="mb-3 block self-start rounded-2xl border border-violet/40 bg-violet/10 p-3 text-sm lg:p-4">
           <span className="font-semibold text-violet">{reviewWaiting} waiting for your review.</span> <span className="text-muted">Approve or send back on Work orders.</span>
         </Link>
       )}
+      </div>
 
       <HomeTabs tabs={tabs} />
-
+      </Column>
+      <Column className="lg:pt-9">
       <div className="mt-3">
         <DetectionRadar detections={detections} coachSignature={coach.radar.signature} healthyCount={samples ? undefined : ops.counts.healthy} />
       </div>
+      </Column>
+      </Columns>
+
+      <Columns layout="halves" className="lg:mt-2">
+      <Column>
 
       {!samples && (
         <Fold
@@ -608,6 +621,8 @@ export default async function MissionControlPage() {
         </Fold>
       )}
 
+      </Column>
+      <Column>
       <AtlasAsks questions={atlasQuestions} today={data.today} />
 
       {data.followUps.length > 0 && (
@@ -663,6 +678,8 @@ export default async function MissionControlPage() {
           </p>
         </>
       )}
+      </Column>
+      </Columns>
     </>
   );
 }

@@ -32,8 +32,9 @@ export default async function MatchesPage() {
   if (me?.role !== "owner") return <RoleNotice title="Match contacts" />;
   const { ready, rows } = await getContactMatches();
   const todo = rows.filter((r) => !r.confirmed).length;
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="Match contacts" subtitle={`${rows.length - todo} of ${rows.length} clients matched`} backHref="/clients" backLabel="Clients" />
       <p className="mb-3 rounded-2xl border border-line bg-white/[0.03] p-3.5 text-xs text-muted">
         Confirm which GoHighLevel contact is each client. The app then reads <span className="text-ink">when</span> they were last
@@ -101,6 +102,6 @@ export default async function MatchesPage() {
           ))}
         </ul>
       )}
-    </>
+    </div>
   );
 }

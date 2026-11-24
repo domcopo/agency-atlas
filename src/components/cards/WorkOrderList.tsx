@@ -264,6 +264,7 @@ export function WorkOrderList({
   canUseAi = false,
   canCancel = false,
   empty = "Nothing here.",
+  wide = false,
 }: {
   groups: WorkOrderGroup[];
   today: string;
@@ -273,10 +274,12 @@ export function WorkOrderList({
   /** The owner only (after 0013); the database refuses everyone else anyway. */
   canCancel?: boolean;
   empty?: string;
+  /** Wide screens (1024 px and up): one person's group per column, 2 across. */
+  wide?: boolean;
 }) {
   if (!groups.length) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">{empty}</p>;
   return (
-    <div className="space-y-3">
+    <div className={cn("space-y-3", wide && "lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0")}>
       {groups.map((g) => (
         <section key={g.ownerId ?? "none"} aria-label={g.ownerName} className="glass rounded-3xl p-3">
           <h3 className="px-1">

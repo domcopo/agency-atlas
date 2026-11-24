@@ -9,8 +9,9 @@ export const metadata: Metadata = { title: "Account" };
 
 export default async function AccountPage() {
   const me = usesDatabase() ? await getMember() : null;
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="Account" subtitle={me ? `Signed in as ${me.name} (${me.role})` : undefined} backHref="/" backLabel="Home" />
       {me ? (
         <>
@@ -31,6 +32,6 @@ export default async function AccountPage() {
       ) : (
         <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Accounts arrive once the database is connected.</p>
       )}
-    </>
+    </div>
   );
 }

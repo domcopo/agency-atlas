@@ -7,6 +7,7 @@ import { KitDocForm } from "@/components/forms/KitDocForm";
 import { KitToolForm } from "@/components/forms/KitToolForm";
 import { KitText } from "@/components/kit/KitText";
 import { Fold } from "@/components/shell/Fold";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getKit, getDeveloperViewer, getMember, getTeam, getToday, usesDatabase } from "@/lib/data-source";
 import { KIT_RULES, kitKindLabel, plainText, renewsIn, reviewNote, searchKit, type KitDoc } from "@/lib/kit";
@@ -106,6 +107,9 @@ export default async function KitPage({ searchParams }: { searchParams: Promise<
         </>
       ) : (
         <>
+          {/* Wide screens: handbook, SOPs and FAQ on the left; templates and tools on the right. */}
+          <Columns>
+          <Column>
           <SectionTitle>
             <span className="inline-flex items-center gap-1.5">
               <BookOpen aria-hidden className="size-3.5" /> Start here
@@ -173,6 +177,8 @@ export default async function KitPage({ searchParams }: { searchParams: Promise<
             <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">No questions yet.</p>
           )}
 
+          </Column>
+          <Column>
           <SectionTitle aside={`${of("template").length}`}>
             <span className="inline-flex items-center gap-1.5">
               <FileText aria-hidden className="size-3.5" /> Templates
@@ -305,10 +311,12 @@ export default async function KitPage({ searchParams }: { searchParams: Promise<
             <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">No tools listed for you yet.</p>
           )}
           <p className="mt-1.5 px-1 text-[11px] text-faint">Never a password here: only where each login is kept. Atlas refuses anything that looks like a password or key.</p>
+          </Column>
+          </Columns>
 
           {editor && (
             <>
-              <div className="mt-6">
+              <div className="mt-6 lg:max-w-3xl">
                 <Fold label="Add a page" title="Add a page" summary="Paste an SOP, a FAQ answer, a template or a handbook page">
                   <div className="glass rounded-3xl p-4">
                     <KitDocForm />

@@ -827,6 +827,12 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
     }
   });
 
+  it("the desktop side menu uses the bottom bar's tab list, not its own copy", () => {
+    const side = readFileSync(join(ROOT, "src/components/shell/SideNav.tsx"), "utf8");
+    expect(side).toMatch(/import \{ MODE_TABS, tabs[^}]*\} from "\.\/BottomNav"/);
+    expect(side).not.toMatch(/sales: \[|developer: \[/);
+  });
+
   it("only the owner picks pipelines, links logins and sets targets", () => {
     for (const name of ["saveSalesPipeline", "linkGhlUser", "saveSalesTarget"]) expect(fn(name), name).toMatch(/me\.role !== "owner"/);
     // Pipeline names and hot stages come from our own copy, never from the form alone.

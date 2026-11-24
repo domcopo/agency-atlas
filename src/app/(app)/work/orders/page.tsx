@@ -9,6 +9,7 @@ import { WorkOrderDraftsButton } from "@/components/forms/AiButtons";
 import { QuickAddWorkOrders } from "@/components/forms/QuickAddWorkOrders";
 import { WorkOrderForm } from "@/components/forms/WorkOrderForm";
 import { Fold } from "@/components/shell/Fold";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getAiStatus, getMember, getOps, getTeam, getWorkOrderDrafts, usesDatabase } from "@/lib/data-source";
@@ -115,6 +116,9 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </p>
       )}
 
+      {/* Wide screens: Smart add on the left; totals and workload on the right. */}
+      <Columns layout="main">
+      <Column>
       {ops.orders && (
         <Fold
           label="Smart add"
@@ -135,7 +139,9 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </Fold>
       )}
 
-      <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      </Column>
+      <Column>
+      <section aria-label="Work order totals" className="grid grid-cols-2 gap-2 sm:grid-cols-5 lg:mt-7 lg:grid-cols-3 lg:gap-3">
         {[
           { label: "Open", value: String(total.open), tone: "" },
           { label: "Overdue", value: String(total.overdue), tone: total.overdue ? "text-rose" : "" },
@@ -143,9 +149,9 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           { label: "Waiting for review", value: String(review.waiting.length), tone: review.waiting.length ? "text-violet" : "" },
           { label: "Done this week", value: String(total.done7), tone: "text-lime" },
         ].map((t) => (
-          <div key={t.label} className="glass rounded-2xl px-3 py-2">
-            <p className="text-[11px] text-muted">{t.label}</p>
-            <p className={`font-display text-lg font-bold ${t.tone}`}>{t.value}</p>
+          <div key={t.label} className="glass rounded-2xl px-3 py-2 lg:px-4 lg:py-3">
+            <p className="text-[11px] text-muted lg:text-xs">{t.label}</p>
+            <p className={`font-display text-lg font-bold lg:text-2xl ${t.tone}`}>{t.value}</p>
           </div>
         ))}
       </section>
@@ -159,6 +165,12 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         <h2 className="mb-2 px-1 font-display text-base font-bold">Workload</h2>
         <WorkloadChips rows={workload} />
       </section>
+      </Column>
+      </Columns>
+
+      {/* Wide screens: suggestions and reviews on the left; people, adding and AI drafts on the right. */}
+      <Columns>
+      <Column>
 
       {ops.orders && (
         <Fold
@@ -226,6 +238,8 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
         </Fold>
       )}
 
+      </Column>
+      <Column>
       <Fold label="Breakdown by person" title="By person" summary={`${everyone.filter((g) => g.ownerId).length} people with work · ${everyone.find((g) => !g.ownerId)?.stats.open ?? 0} unassigned`}>
         <ul className="glass divide-y divide-line rounded-3xl">
           {everyone.map((g) => (
@@ -311,8 +325,10 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           {drafts && <p className="px-1 text-[11px] text-faint">AI suggestions from your records. Check each one before adding; the AI can be wrong.</p>}
         </div>
       </Fold>
+      </Column>
+      </Columns>
 
-      <div id="list" className="mt-5 flex flex-wrap items-center gap-1.5">
+      <div id="list" className="mt-5 flex flex-wrap items-center gap-1.5 lg:mt-10">
         {[
           { label: "List", href: query({ view: undefined }), on: view === "list" },
           { label: "Board", href: query({ view: "board" }), on: view === "board" },
@@ -395,10 +411,11 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           <p className="mt-1.5 px-1 text-[11px] text-faint">Work orders only (Person, Client and Due filters apply). Drag a card on a computer, or use “Move to” on a phone. Done shows the last 7 days.</p>
         </>
       ) : (
-        <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} canCancel={isOwner && ops.cancel} empty="No work orders match. Add one above, or change the filter." />
+        <WorkOrderList groups={groups} today={ops.today} mode="manage" staff={staff} canUseAi={aiReady && ops.orders} canCancel={isOwner && ops.cancel} empty="No work orders match. Add one above, or change the filter." wide />
       )}
       {listed > 0 && <p className="mt-2 px-1 text-[11px] text-faint">Copy gives plain text (titles, steps, due dates, links; no money) to paste into a GoHighLevel task yourself, or take a screenshot.</p>}
 
+      <Columns>
       {isOwner && archived.length > 0 && (
         <div className="mt-5">
           <Fold label="Archived work orders" title="Archived" summary={`${archived.length} archived · kept for history`}>
@@ -423,6 +440,7 @@ export default async function WorkOrdersPage({ searchParams }: { searchParams: P
           </Fold>
         </div>
       )}
+      </Columns>
 
       <p className="mt-5 px-1 text-center text-xs">
         <Link href="/trash" className="pressable inline-flex min-h-11 items-center font-semibold text-muted underline-offset-2 hover:underline">

@@ -2,7 +2,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/format";
 
-const paddings = { normal: "p-4", tight: "p-3.5", none: "p-0" } as const;
+// A little more room inside cards on wide screens (1024 px and up).
+const paddings = { normal: "p-4 lg:p-6", tight: "p-3.5 lg:p-5", none: "p-0" } as const;
 
 interface GlassCardProps {
   children: ReactNode;

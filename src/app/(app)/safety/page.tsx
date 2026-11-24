@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
 import { PublishSummaryButton } from "@/components/forms/PublishSummaryButton";
@@ -91,6 +92,9 @@ export default async function SafetyPage() {
         {db && member?.role === "owner" && ghl.configured && ghl.tablesReady && <SyncButton />}
       </GlassCard>
 
+      {/* Wide screens: two columns of safety facts. */}
+      <Columns>
+      <Column>
       <SectionTitle>Database</SectionTitle>
       <GlassCard className="space-y-3 text-sm">
         <div className="flex items-center justify-between gap-2">
@@ -215,6 +219,8 @@ export default async function SafetyPage() {
         )}
       </GlassCard>
 
+      </Column>
+      <Column>
       <SectionTitle>Source connections</SectionTitle>
       <div className="space-y-2.5">
         {s.connections.map((c) => {
@@ -341,6 +347,8 @@ export default async function SafetyPage() {
           Not yet
         </button>
       </GlassCard>
+      </Column>
+      </Columns>
     </>
   );
 }

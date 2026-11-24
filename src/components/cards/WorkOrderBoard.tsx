@@ -42,7 +42,7 @@ export function WorkOrderBoard({ cards }: { cards: BoardCard[] }) {
     });
 
   return (
-    <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2" aria-label="Work order board">
+    <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 lg:mx-0 lg:gap-4 lg:px-0" aria-label="Work order board">
       {COLUMNS.map((col) => {
         const items = shown.filter((c) => c.status === col);
         return (
@@ -55,7 +55,7 @@ export function WorkOrderBoard({ cards }: { cards: BoardCard[] }) {
               const id = e.dataTransfer.getData("text/plain");
               if (id && shown.some((c) => c.id === id && c.status !== col)) go(id, col);
             }}
-            className="glass w-64 shrink-0 snap-start rounded-3xl p-2.5"
+            className="glass w-64 shrink-0 snap-start rounded-3xl p-2.5 lg:w-auto lg:min-w-60 lg:flex-1 lg:p-3"
           >
             <h3 className="mb-2 flex items-baseline justify-between px-1 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">
               {STATUS_WORD[col]}

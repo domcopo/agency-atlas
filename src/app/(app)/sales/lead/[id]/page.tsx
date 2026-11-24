@@ -12,6 +12,7 @@ import { Pill } from "@/components/labels/labels";
 import { ago } from "@/components/sales/LeadRow";
 import { SalesFollowUps } from "@/components/sales/SalesFollowUps";
 import { TouchButtons } from "@/components/sales/TouchButtons";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { getMember, getOps, getSales, getTeam, usesDatabase } from "@/lib/data-source";
@@ -59,6 +60,9 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
     <>
       <PageHeader title={lead.name} subtitle={lead.pipelineName ?? "Sales lead"} backHref="/sales" backLabel="Sales" />
 
+      {/* Wide screens: the lead and reach-out buttons on the left; follow-ups and history on the right. */}
+      <Columns>
+      <Column>
       <div className="glass rounded-3xl p-4">
         <div className="mb-2 flex flex-wrap gap-1.5">
           {isHot(lead, sales.pipelines) && <Pill color="amber">Hot stage</Pill>}
@@ -84,6 +88,8 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
         </>
       )}
 
+      </Column>
+      <Column>
       <SectionTitle aside={`${d.followUps.length} open`}>Follow-ups</SectionTitle>
       {manage ? (
         <PriorityList items={leadItems} staff={staff} canEdit limit={10} empty="No follow-ups on this lead yet." />
@@ -116,6 +122,8 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
       ) : (
         <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">No reach-outs logged yet.</p>
       )}
+      </Column>
+      </Columns>
     </>
   );
 }

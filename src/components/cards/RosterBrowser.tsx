@@ -106,7 +106,8 @@ export function RosterBrowser({ clients }: { clients: RosterRow[] }) {
                 {formatUsdExact(Math.round(total * 100) / 100)}/mo
               </span>
             </div>
-            <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
+            {/* Wide screens: the list flows into 2 (then 3) columns, reading down each column. */}
+            <ul className="glass divide-y divide-line overflow-hidden rounded-3xl lg:columns-2 lg:gap-0 xl:columns-3 lg:[&>li]:break-inside-avoid">
               {rows.map((c) => (
                 <li key={c.id}>
                   <Link href={`/clients/${c.id}`} className="pressable flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03]">

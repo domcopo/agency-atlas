@@ -62,6 +62,6 @@ function redirectTo(path: string, request: NextRequest, from: NextResponse) {
 }
 
 export const config = {
-  // Everything except Next's own files and icons.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest|robots.txt).*)"],
+  // Everything except Next's own files, icons and the public logo files (needed on the sign-in page).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|brand/|manifest.webmanifest|robots.txt).*)"],
 };

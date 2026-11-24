@@ -12,9 +12,9 @@ export function KpiTile({ kpi }: { kpi: AgencyKpi }) {
 
   return (
     <GlassCard padding="tight" className="flex flex-col justify-between gap-2">
-      <p className="text-[11px] font-medium leading-tight text-muted">{kpi.label}</p>
+      <p className="text-[11px] font-medium leading-tight text-muted lg:text-[13px]">{kpi.label}</p>
       <div>
-        <p className="font-display text-xl font-bold leading-none tracking-tight">
+        <p className="font-display text-xl font-bold leading-none tracking-tight lg:text-[28px]">
           {formatValue(kpi.value, kpi.unit)}
         </p>
         <div className="mt-1.5 flex items-end justify-between gap-2">
@@ -22,7 +22,7 @@ export function KpiTile({ kpi }: { kpi: AgencyKpi }) {
           <Sparkline values={kpi.trend} color={color} width={48} height={18} />
         </div>
       </div>
-      {kpi.hint && <p className="text-[10px] leading-snug text-faint">{kpi.hint}</p>}
+      {kpi.hint && <p className="text-[10px] leading-snug text-faint lg:text-xs">{kpi.hint}</p>}
     </GlassCard>
   );
 }

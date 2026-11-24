@@ -4,12 +4,12 @@ import type { MetadataRoute } from "next";
 // service worker, so nothing private is ever stored offline on the phone.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Agency Atlas (Demo)",
-    short_name: "Atlas",
+    name: "YO Marketing Co",
+    short_name: "YO Marketing",
     start_url: "/",
     display: "standalone",
     background_color: "#07060d",
     theme_color: "#07060d",
-    icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml" }],
+    icons: [{ src: "/brand/icon-512.png", sizes: "512x512", type: "image/png" }],
   };
 }

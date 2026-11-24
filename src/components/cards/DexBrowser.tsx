@@ -86,7 +86,7 @@ export function DexBrowser({
         >
           Patterns across businesses
         </h2>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:px-0">
           {patterns.map((p) => {
             const active = tag === p.tag;
             return (
@@ -118,7 +118,7 @@ export function DexBrowser({
       </p>
 
       {results.length > 0 ? (
-        <ul className="grid grid-cols-2 gap-3">
+        <ul className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4 2xl:grid-cols-5">
           {results.map((b, i) => (
             <li key={b.id} className="animate-rise-in" style={{ animationDelay: `${i * 30}ms` }}>
               <DexCard business={b} />

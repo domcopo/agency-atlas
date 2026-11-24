@@ -59,6 +59,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |
 | Fixing titles and check-ins | `docs/EDIT_FIX_PLAN.md` |
+| Desktop layout (side menu, columns from 1024 px) | `docs/DESKTOP_LAYOUT_PLAN.md`, `src/components/shell/Columns.tsx` |
 | Work order channels (WhatsApp/email, paused) | `docs/WORK_ORDER_CHANNELS.md` |
 | Security | `docs/THREAT_MODEL.md`, `docs/SECURITY_TEST_PLAN.md`, `docs/PRIVACY_CHECKLIST.md` |
 | What's next | `docs/ROADMAP.md` |

@@ -13,8 +13,9 @@ export const metadata: Metadata = { title: "SEO audits" };
 export default async function AuditsPage() {
   if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="SEO audits" />;
   const sample = getAuditPreview(SAMPLE_AUDIT_ID);
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="SEO audits" subtitle="Eight-page audits for a client or prospect. Every number has a source; money is a labeled model." backHref="/growth" backLabel="Growth" />
       <SectionTitle>Template preview</SectionTitle>
       {sample && (
@@ -31,6 +32,6 @@ export default async function AuditsPage() {
       <p className="mt-4 px-1 text-[12px] text-faint">
         Coming next: an intake form (website, location, Google profile, average ticket, niche), live data from DataForSEO and LeadSnap with a cost estimate and budget cap, then a Google Ads audit.
       </p>
-    </>
+    </div>
   );
 }

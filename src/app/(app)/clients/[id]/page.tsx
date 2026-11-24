@@ -12,6 +12,7 @@ import { ProfileButton } from "@/components/forms/AiButtons";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getActions, getAiStatus, getBilling, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRemovedCheckIns, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
@@ -100,6 +101,9 @@ export default async function ClientPage({ params }: Props) {
         </div>
       )}
 
+      {/* Wide screens: actions and history on the left; account facts on the right. */}
+      <Columns layout="main" single={!usesDatabase()}>
+      <Column>
       {usesDatabase() && (
         <div className="mb-3">
           <ClientOpsCard
@@ -196,6 +200,8 @@ export default async function ClientPage({ params }: Props) {
         </>
       )}
 
+      </Column>
+      <Column>
       <SectionTitle>Account</SectionTitle>
       <GlassCard className="space-y-3">
         <div className="grid grid-cols-2 gap-4">
@@ -335,6 +341,8 @@ export default async function ClientPage({ params }: Props) {
           />
         </div>
       )}
+      </Column>
+      </Columns>
     </>
   );
 }

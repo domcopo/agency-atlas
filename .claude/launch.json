@@ -2,10 +2,55 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "atlas-dev",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "PATH=/Users/appdev/.local/node-v26.13.0-darwin-arm64/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "/Users/appdev/.local/node-v26.13.0-darwin-arm64/bin/node",
+        "node_modules/next/dist/bin/next",
+        "dev",
+        "-H",
+        "127.0.0.1",
+        "-p",
+        "3200"
+      ],
+      "port": 3200,
+      "autoPort": false
+    },
+    {
       "name": "atlas-prod",
       "runtimeExecutable": "/Users/appdev/.local/node-v26.13.0-darwin-arm64/bin/node",
-      "runtimeArgs": ["node_modules/next/dist/bin/next", "start", "-H", "127.0.0.1", "-p", "3200"],
+      "runtimeArgs": [
+        "node_modules/next/dist/bin/next",
+        "start",
+        "-H",
+        "127.0.0.1",
+        "-p",
+        "3200"
+      ],
       "port": 3200,
+      "autoPort": false
+    },
+    {
+      "name": "atlas-demo",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "PATH=/Users/appdev/.local/node-v26.13.0-darwin-arm64/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "SUPABASE_URL=",
+        "SUPABASE_PUBLISHABLE_KEY=",
+        "GHL_READONLY_TOKEN=",
+        "GHL_LOCATION_ID=",
+        "GHL_BILLING_READONLY_TOKEN=",
+        "ANTHROPIC_API_KEY=",
+        "/Users/appdev/.local/node-v26.13.0-darwin-arm64/bin/node",
+        "node_modules/next/dist/bin/next",
+        "dev",
+        "-H",
+        "127.0.0.1",
+        "-p",
+        "3210"
+      ],
+      "port": 3210,
       "autoPort": false
     }
   ]

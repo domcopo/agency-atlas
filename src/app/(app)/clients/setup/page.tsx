@@ -27,8 +27,9 @@ export default async function SetupPage() {
     // Unfinished first (no owner or no services), then biggest first.
     .sort((a, b) => Number(Boolean(a.ownerId && a.services.length)) - Number(Boolean(b.ownerId && b.services.length)) || b.monthlyUsd - a.monthlyUsd);
   const done = rows.filter((c) => c.ownerId && c.services.length).length;
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="Set up clients" subtitle={`${done} of ${rows.length} have an owner and a plan`} backHref="/clients" backLabel="Clients" />
       <p className="mb-3 px-1 text-xs text-muted">Pick an owner and tick the services, then Save on that row. Unfinished clients are at the top.</p>
       <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
@@ -76,6 +77,6 @@ export default async function SetupPage() {
           );
         })}
       </ul>
-    </>
+    </div>
   );
 }

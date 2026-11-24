@@ -32,8 +32,9 @@ export default async function NotificationsPage() {
     );
   }
   const kinds = NOTICE_KINDS.filter((k) => k.who === "everyone" || (k.who === "owner" && me?.role === "owner"));
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="Notices" subtitle="Changes to your work orders. In Atlas only; nothing is texted or emailed." />
       {notices.unread > 0 && (
         <form action={markNoticesRead} className="mb-3">
@@ -77,6 +78,6 @@ export default async function NotificationsPage() {
       )}
       <SectionTitle>Mute</SectionTitle>
       <NoticeMutesForm kinds={kinds} muted={notices.muted} />
-    </>
+    </div>
   );
 }

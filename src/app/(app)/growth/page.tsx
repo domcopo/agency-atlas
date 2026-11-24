@@ -47,7 +47,9 @@ export default async function GrowthPage() {
         </section>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* Wide screens: the three shortcuts sit in one row. */}
+      <div className="lg:grid lg:grid-cols-3 lg:gap-4">
+      <div className="grid grid-cols-2 gap-3 lg:contents">
         <GlassCard href="/growth/dex" label="Open case studies (Business Dex)" padding="tight" className="space-y-1">
           <p className="flex items-center justify-between text-[11px] text-muted">
             Case studies <Layers aria-hidden className="size-3.5 text-violet" />
@@ -64,18 +66,19 @@ export default async function GrowthPage() {
         </GlassCard>
       </div>
 
-      <GlassCard href="/growth/audits" label="Open SEO audits" padding="tight" className="mt-3 space-y-1">
+      <GlassCard href="/growth/audits" label="Open SEO audits" padding="tight" className="mt-3 space-y-1 lg:mt-0">
         <p className="flex items-center justify-between text-[11px] text-muted">
           SEO audits <FileSearch aria-hidden className="size-3.5 text-sky" />
         </p>
         <p className="text-sm font-semibold">Eight-page audit for a client or prospect</p>
         <p className="text-[11px] text-faint">Template preview ready; live data comes next</p>
       </GlassCard>
+      </div>
 
       {trends.length > 0 && (
         <>
           <SectionTitle aside={<Provenance kind="sample" />}>Trends across businesses</SectionTitle>
-          <div className="space-y-3">
+          <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
             {trends.map((t) => (
               <GlassCard key={t.id} className="scroll-mt-16 space-y-2.5">
                 <div id={t.id} className="flex items-start gap-2">
@@ -142,7 +145,7 @@ export default async function GrowthPage() {
               format. Later AI suggestions read data only, cite their evidence and wait for a person to review them.
             </p>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0">
             {getInsights().map((i) => (
               <InsightCard key={i.id} insight={i} />
             ))}

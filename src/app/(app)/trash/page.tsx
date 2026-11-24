@@ -27,8 +27,9 @@ export default async function TrashPage({ searchParams }: { searchParams: Promis
   }
   const clients = trash.entries.filter((e) => e.kind === "client");
   const items = trash.entries.filter((e) => e.kind === "item");
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader
         title="Trash"
         subtitle={trash.canDelete ? "Moved out of the way. Restore anything, or delete it forever after you've reviewed it." : "Moved out of the way. Restore anything; only the owner can delete forever."}
@@ -101,6 +102,6 @@ export default async function TrashPage({ searchParams }: { searchParams: Promis
           </p>
         </>
       )}
-    </>
+    </div>
   );
 }

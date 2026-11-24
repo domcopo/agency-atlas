@@ -3,6 +3,8 @@
 // Bottom tab bar. A tab glows slowly (with a small count) when something there is
 // worth checking, and stops once you've opened that tab, until something new
 // comes in. Which tabs glow is decided on the server (getCoachHints).
+// Phones and tablets only: from 1024 px wide the side menu (SideNav) takes over,
+// reading the same tab list and MODE_TABS below.
 
 import { Backpack, BriefcaseBusiness, Gauge, Sprout, TrendingUp, Users } from "lucide-react";
 import Link from "next/link";
@@ -11,7 +13,7 @@ import { useEffect } from "react";
 import { cn } from "@/lib/format";
 import { useSeen } from "@/lib/use-seen";
 
-const tabs = [
+export const tabs = [
   { href: "/", label: "Home", icon: Gauge },
   { href: "/clients", label: "Clients", icon: Users },
   { href: "/sales", label: "Sales", icon: TrendingUp },
@@ -28,7 +30,7 @@ export interface NavHint {
 
 export type NavMode = "full" | "developer" | "sales";
 
-const MODE_TABS: Record<NavMode, readonly string[] | null> = {
+export const MODE_TABS: Record<NavMode, readonly string[] | null> = {
   full: null,
   // Developers use Home, Work and Kit; salespeople Home, Sales and Kit.
   // (The database enforces what each role can read; this only picks the tabs.)
@@ -44,7 +46,7 @@ export function BottomNav({ hints = {}, mode = "full" }: { hints?: Record<string
   return (
     <nav
       aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-x-0 bottom-0 z-40 pb-[env(safe-area-inset-bottom)] lg:hidden"
     >
       <ul className={`mx-auto mb-3 grid max-w-md ${only ? "grid-cols-3" : "grid-cols-6"} rounded-[28px] border border-line bg-[#14111f]/95 px-1.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_12px_32px_-8px_rgb(0_0_0/0.8)] backdrop-blur-xl sm:mb-4`}>
         {shown.map((t) => (

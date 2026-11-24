@@ -34,8 +34,9 @@ export function TaskBoard({
   leadNames: Map<string, string>;
 }) {
   return (
-    <div className="-mx-4 snap-x overflow-x-auto px-4 pb-1" role="region" aria-label="Work board" tabIndex={0}>
-      <div className="grid w-max auto-cols-[min(78vw,270px)] grid-flow-col gap-2.5">
+    <div className="-mx-4 snap-x overflow-x-auto px-4 pb-1 lg:mx-0 lg:px-0" role="region" aria-label="Work board" tabIndex={0}>
+      {/* Wide screens: the columns share the full width (scrolls sideways only if they don't fit). */}
+      <div className="grid w-max auto-cols-[min(78vw,270px)] grid-flow-col gap-2.5 lg:w-full lg:auto-cols-[minmax(15rem,1fr)] lg:gap-4">
         {COLUMNS.map((col) => {
           const items = columns[col.id];
           return (

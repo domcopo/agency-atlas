@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
+import { CARD_GRID, Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getCompletions, getDeveloperViewer, getDeveloperWork, getMember, getMyClientContacts, getStepsReady, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
 import { MyWork } from "@/components/cards/MyWork";
@@ -43,7 +44,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       <>
         <PageHeader title="Work" subtitle={dev.preview ? `${dev.name}'s work orders, issues and follow-ups` : "Your work orders, issues and follow-ups"} action={dev.preview ? undefined : <a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
         {dev.staffId ? (
-          <>
+          <Columns layout="main">
+            <Column>
             <DeveloperWork items={mine} today={today} readOnly={dev.preview} stepsReady={stepsReady} />
             <p className="mt-2 px-1 text-[11px] text-faint">
               Stuck? Say on what, so a manager can help. Ask a manager to change steps or dates.{" "}
@@ -53,8 +55,11 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
                 </Link>
               )}
             </p>
+            </Column>
+            <Column>
             <DeveloperContacts contacts={contacts} today={today} />
-          </>
+            </Column>
+          </Columns>
         ) : (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
         )}
@@ -139,6 +144,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
         </details>
       )}
 
+      {/* Wide screens: the note and the Work orders link side by side. */}
+      <div className="lg:grid lg:grid-cols-2 lg:gap-x-8 xl:gap-x-10">
       <div className="flex gap-3 rounded-2xl border border-sky/30 bg-sky/8 p-3.5 text-xs text-muted">
         <Wrench aria-hidden className="mt-0.5 size-4 shrink-0 text-sky" />
         {samples ? (
@@ -156,7 +163,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       </div>
 
       {ops.ready && member && (
-        <Link href="/work/orders" className="pressable glass mt-3 flex min-h-14 items-center gap-3 rounded-3xl px-4 py-3 hover:bg-white/[0.05]">
+        <Link href="/work/orders" className="pressable glass mt-3 flex min-h-14 lg:mt-0 items-center gap-3 rounded-3xl px-4 py-3 hover:bg-white/[0.05]">
           <ClipboardList aria-hidden className="size-5 shrink-0 text-violet" />
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-semibold">Work orders</span>
@@ -169,6 +176,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           <span aria-hidden className="text-faint">›</span>
         </Link>
       )}
+      </div>
 
       {ops.ready && (
         <Fold
@@ -216,7 +224,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           <p className="mt-1.5 px-1 text-[11px] text-faint">Goal: every work order touched daily.</p>
 
           <SectionTitle>Needs attention</SectionTitle>
-          <ul className="space-y-2.5">
+          <ul className={CARD_GRID}>
             {needsAttention.map((o) => (
               <li key={o.id}>
                 <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
@@ -227,7 +235,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           {rest.length > 0 && (
             <>
               <SectionTitle>On track</SectionTitle>
-              <ul className="space-y-2.5">
+              <ul className={CARD_GRID}>
                 {rest.map((o) => (
                   <li key={o.id}>
                     <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
@@ -238,7 +246,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
           )}
 
           <SectionTitle aside={<Provenance kind="sample" />}>Developer load</SectionTitle>
-          <div className="space-y-2.5">
+          <div className={CARD_GRID}>
             {devs.map((d) => {
               const seo = d.load?.seoClients ?? 0;
               const successful = d.load?.successfulThisMonth ?? 0;
@@ -286,13 +294,13 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
         </>
       )}
 
-      <details className="mt-5 rounded-3xl border border-line" open={samples}>
-        <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold">
+      <details className="mt-5 rounded-3xl border border-line lg:mt-7" open={samples}>
+        <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold lg:min-h-14 lg:px-6">
           Team &amp; rules <span className="text-xs font-normal text-muted">who does what, daily order, priorities</span>
         </summary>
-        <div className="px-3 pb-4">
+        <div className="px-3 pb-4 lg:px-6 lg:pb-6">
           <SectionTitle aside={<Provenance kind={realTeam ? "real" : "demo"} what="your team" />}>Your team</SectionTitle>
-          <div className="space-y-2.5">
+          <div className={CARD_GRID}>
             {team.members.map((m) => {
               const r = roleInfo[m.role];
               const Icon = r.icon;
@@ -311,6 +319,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
             })}
           </div>
 
+          <Columns layout="thirds">
+          <Column>
           <SectionTitle>Who to go to</SectionTitle>
           <GlassCard padding="none">
             <ul className="divide-y divide-line">
@@ -323,6 +333,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
             </ul>
           </GlassCard>
 
+          </Column>
+          <Column>
           <SectionTitle>Daily order for developers</SectionTitle>
           <GlassCard padding="none">
             <ol className="divide-y divide-line">
@@ -345,6 +357,8 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
             </p>
           </GlassCard>
 
+          </Column>
+          <Column>
           <SectionTitle>Priority levels</SectionTitle>
           <div className="space-y-2">
             {(["urgent", "high", "normal", "low"] as WorkPriority[]).map((p) => (
@@ -359,13 +373,15 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
               </div>
             ))}
           </div>
+          </Column>
+          </Columns>
         </div>
       </details>
 
       {done.length > 0 && (
         <>
           <SectionTitle>Recently done</SectionTitle>
-          <ul className="space-y-2.5">
+          <ul className={CARD_GRID}>
             {done.map((o) => (
               <li key={o.id}>
                 <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />

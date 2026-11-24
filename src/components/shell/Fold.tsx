@@ -22,16 +22,16 @@ export function Fold({
   label: string;
 }) {
   return (
-    <details className="group mt-5" open={defaultOpen} aria-label={label}>
-      <summary className="pressable glass flex min-h-14 cursor-pointer list-none items-center gap-3 rounded-3xl px-4 py-3 [&::-webkit-details-marker]:hidden">
+    <details className="group mt-5 lg:mt-7" open={defaultOpen} aria-label={label}>
+      <summary className="pressable glass flex min-h-14 cursor-pointer list-none items-center gap-3 rounded-3xl px-4 py-3 lg:min-h-16 lg:hover:border-white/20 lg:px-6 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-semibold uppercase tracking-[0.08em] text-muted">{title}</span>
+          <span className="block text-[13px] font-semibold uppercase tracking-[0.08em] text-muted lg:text-sm">{title}</span>
           {summary && <span className="mt-0.5 line-clamp-1 text-sm">{summary}</span>}
         </span>
         {badge && <span className="shrink-0 text-xs text-faint">{badge}</span>}
         <ChevronDown aria-hidden className="size-4 shrink-0 text-faint transition-transform group-open:rotate-180 motion-reduce:transition-none" />
       </summary>
-      <div className="mt-2.5">{children}</div>
+      <div className="mt-2.5 lg:mt-4">{children}</div>
     </details>
   );
 }

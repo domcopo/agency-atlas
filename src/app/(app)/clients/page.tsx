@@ -8,6 +8,7 @@ import { CopyButton } from "@/components/cards/CopyButton";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { CHECK_IN_DAYS, getActions, getBilling, getClientHealth, getMember, getOps, getRoster, getRosterSource, getRosterSummary, getServiceGroups, getTeam, getToday, getWinBackList, getWinLoss, tierOf, usesDatabase } from "@/lib/data-source";
 import { OwnerGaps } from "@/components/cards/OwnerGaps";
@@ -58,34 +59,41 @@ export default async function ClientsPage() {
         action={<Provenance kind={summary.source !== "demo" ? "real" : "demo"} />}
       />
 
-      <GlassCard className="grid grid-cols-3 gap-2 text-center">
+      {/* Wide screens: the totals with the owner's setup links beside them. */}
+      <div className={member?.role === "owner" ? "lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-x-8 lg:gap-y-3 xl:gap-x-10" : undefined}>
+      <GlassCard className="grid grid-cols-3 gap-2 text-center lg:row-span-2 lg:items-center">
         <div>
-          <p className="font-display text-xl font-bold">{formatUsdExact(summary.activeMrr)}</p>
+          <p className="font-display text-xl font-bold lg:text-3xl">{formatUsdExact(summary.activeMrr)}</p>
           <p className="text-[11px] text-muted">Active / month</p>
         </div>
         <div>
-          <p className="font-display text-xl font-bold text-amber">{formatUsdExact(summary.pausedMrr)}</p>
+          <p className="font-display text-xl font-bold text-amber lg:text-3xl">{formatUsdExact(summary.pausedMrr)}</p>
           <p className="text-[11px] text-muted">{summary.pausedCount} paused</p>
         </div>
         <div>
-          <p className="font-display text-xl font-bold">{summary.avgMonthsActive}</p>
+          <p className="font-display text-xl font-bold lg:text-3xl">{summary.avgMonthsActive}</p>
           <p className="text-[11px] text-muted">Avg months</p>
         </div>
       </GlassCard>
 
       {member?.role === "owner" && (
-        <Link href="/clients/setup" className="pressable glass mt-3 flex min-h-11 items-center justify-between rounded-2xl border border-violet/30 px-4 text-sm">
+        <Link href="/clients/setup" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl border border-violet/30 px-4 text-sm">
           <span className="font-semibold">Set up clients</span>
           <span className="text-xs text-violet">Owners + plans, one screen →</span>
         </Link>
       )}
 
       {member?.role === "owner" && (
-        <Link href="/clients/ghl-matches" className="pressable glass mt-3 flex min-h-11 items-center justify-between rounded-2xl px-4 text-sm">
+        <Link href="/clients/ghl-matches" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl px-4 text-sm">
           <span>Match clients to GoHighLevel contacts</span>
           <span className="text-xs text-violet">For call &amp; message times →</span>
         </Link>
       )}
+      </div>
+
+      {/* Wide screens: risks and owners on the left; services, health, check-ins and win-backs on the right. */}
+      <Columns single={!usesDatabase() && !ops.ready}>
+      <Column>
 
       {usesDatabase() && (
         <section id="risk" className="scroll-mt-16">
@@ -101,6 +109,8 @@ export default async function ClientsPage() {
         </section>
       )}
 
+      </Column>
+      <Column>
       <SectionTitle aside={<Layers aria-hidden className="size-4 text-faint" />}>By service</SectionTitle>
       <div className="grid grid-cols-2 gap-2.5">
         {serviceGroups
@@ -196,6 +206,8 @@ export default async function ClientsPage() {
           </GlassCard>
         </section>
       )}
+      </Column>
+      </Columns>
 
       <div className="mt-4" />
       {summary.needsCheck > 0 && (

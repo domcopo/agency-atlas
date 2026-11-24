@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { GlassCard } from "@/components/cards/GlassCard";
 import { Monogram, industryGradient } from "@/components/cards/DexCard";
 import { ConfidenceMeter, Pill, RevenueLabel, SourceTag } from "@/components/labels/labels";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getBusiness, getBusinesses, getCaseStudyHistory, getSurveyQuestions, getSurveyResponses } from "@/lib/data-source";
 import { Sparkline } from "@/components/labels/charts";
@@ -52,6 +53,9 @@ export default async function DexDetailPage({ params }: Props) {
     <>
       <PageHeader title={b.name} subtitle={b.tagline} backHref="/growth/dex" backLabel="Business Dex" />
 
+      {/* Wide screens: the business and its revenue on the left; signals, ideas and sources on the right. */}
+      <Columns>
+      <Column>
       <GlassCard className="overflow-hidden">
         <div
           aria-hidden
@@ -132,6 +136,8 @@ export default async function DexDetailPage({ params }: Props) {
         )}
       </GlassCard>
 
+      </Column>
+      <Column>
       <SectionTitle aside={`${b.signals.length} observed`}>Signals</SectionTitle>
       <div className="space-y-2.5">
         {b.signals.map((s) => {
@@ -210,6 +216,9 @@ export default async function DexDetailPage({ params }: Props) {
           Sources are shown as text, not links. Real links will be checked before they become clickable.
         </p>
       </GlassCard>
+
+      </Column>
+      </Columns>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-faint">
         <span>Updated {formatDate(b.updatedAt)}</span>

@@ -14,6 +14,7 @@ import { PipelineHealthCard } from "@/components/sales/PipelineHealthCard";
 import { RefreshLeadsButton } from "@/components/sales/RefreshLeadsButton";
 import { SalesFollowUps } from "@/components/sales/SalesFollowUps";
 import { Fold } from "@/components/shell/Fold";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import {
@@ -91,6 +92,9 @@ async function SalespersonSales({ who }: { who?: string }) {
       ) : (
         <>
           <RefreshLeadsButton lastLabel={refreshedLabel(sales.lastRefresh)} />
+          {/* Wide screens: follow-ups on the left, leads on the right. */}
+          <Columns>
+          <Column>
           <SectionTitle aside={`${sales.followUps.filter((f) => f.status !== "done").length} open`}>Follow-ups</SectionTitle>
           <SalesFollowUps items={sales.followUps} leadNames={names} today={today} />
           {dealOptions.length > 0 && (
@@ -101,6 +105,8 @@ async function SalespersonSales({ who }: { who?: string }) {
               </div>
             </details>
           )}
+          </Column>
+          <Column>
           <SectionTitle aside={`${shown.length} open`}>Leads</SectionTitle>
           {me.ghlUserId ? (
             <div className="glass mb-2.5 flex gap-1 rounded-2xl p-1">
@@ -112,6 +118,8 @@ async function SalespersonSales({ who }: { who?: string }) {
           )}
           <LeadList leads={shown} sales={sales} today={today} canTouch />
           <p className="mt-1.5 px-1 text-[11px] text-faint">&quot;Mine&quot; includes unassigned leads. New leads are added in GoHighLevel; Atlas never changes GoHighLevel.</p>
+          </Column>
+          </Columns>
         </>
       )}
     </>
@@ -153,6 +161,9 @@ async function LeadSales({ member }: { member: { role: string } }) {
         people={owner ? personRows({ people: sales.people, leads: sales.leads, touches: sales.touches, followUps: sales.followUps, today }) : null}
       />
 
+      {/* Wide screens: follow-ups on the left, sales leads on the right. */}
+      <Columns>
+      <Column>
       <section id="follow-ups" className="scroll-mt-16">
         <SectionTitle aside={`${split.sales.length} open`}>Follow-ups</SectionTitle>
         <PriorityList items={split.sales} staff={staff} canEdit limit={8} empty="No lead follow-ups yet. Add one so no lead goes quiet." />
@@ -172,8 +183,12 @@ async function LeadSales({ member }: { member: { role: string } }) {
         <p className="mt-1.5 px-1 text-[11px] text-faint">Saved in this app only. GoHighLevel is never changed.</p>
       </section>
 
+      </Column>
+      <Column>
       <SectionTitle aside={`${open.length} open`}>Sales leads</SectionTitle>
       <LeadList leads={open} sales={sales} today={today} canTouch />
+      </Column>
+      </Columns>
     </>
   );
 }
@@ -193,12 +208,15 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const samples = (
     <>
       <SectionTitle aside={<Provenance kind="sample" />}>Agency sales numbers</SectionTitle>
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3 lg:gap-4 xl:grid-cols-6">
         {getAgencySalesKpis().map((k) => (
           <KpiTile key={k.id} kpi={k} />
         ))}
       </div>
 
+      {/* Wide screens: pipeline and prospects on the left, conversations on the right. */}
+      <Columns>
+      <Column>
       <SectionTitle aside={<Provenance kind="sample" />}>Pipeline</SectionTitle>
       <GlassCard className="space-y-3">
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -226,6 +244,8 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
         ))}
       </ul>
 
+      </Column>
+      <Column>
       <section id="conversations" className="scroll-mt-16">
         <SectionTitle aside={<Provenance kind="sample" />}>Conversations</SectionTitle>
         <div className="mb-3 flex gap-3 rounded-2xl border border-lime/30 bg-lime/8 p-3.5 text-xs">
@@ -244,6 +264,8 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
           </ul>
         </div>
       </section>
+      </Column>
+      </Columns>
     </>
   );
 

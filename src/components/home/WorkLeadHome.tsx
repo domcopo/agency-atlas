@@ -5,6 +5,7 @@ import { updateAction } from "@/app/actions";
 import { PulseStrip } from "@/components/cards/PulseStrip";
 import { WorkloadChips } from "@/components/cards/WorkloadChips";
 import { ReviewButtons } from "@/components/cards/WorkOrderList";
+import { Column, Columns } from "@/components/shell/Columns";
 import { SectionTitle } from "@/components/shell/PageHeader";
 import { lateBy, type WorkLeadView } from "@/lib/home-layouts";
 import { minutesLabel, type WorkloadRow } from "@/lib/ops";
@@ -39,6 +40,9 @@ export function WorkLeadHome({ view, workload, staff, today }: { view: WorkLeadV
         ]}
       />
 
+      {/* Wide screens: review and stuck on the left, load and the rest on the right. */}
+      <Columns>
+      <Column>
       <SectionTitle aside={<Link href="/work/orders" className="text-xs text-violet">Work orders</Link>}>Review queue</SectionTitle>
       {view.review.length ? (
         <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
@@ -65,6 +69,8 @@ export function WorkLeadHome({ view, workload, staff, today }: { view: WorkLeadV
         </>
       )}
 
+      </Column>
+      <Column>
       {workload.length > 0 && (
         <>
           <SectionTitle>Team load</SectionTitle>
@@ -103,6 +109,8 @@ export function WorkLeadHome({ view, workload, staff, today }: { view: WorkLeadV
         <span className="font-semibold text-violet">Work orders</span>
         <span className="text-xs text-muted">Suggestions, quick add, everyone&apos;s list</span>
       </Link>
+      </Column>
+      </Columns>
     </>
   );
 }

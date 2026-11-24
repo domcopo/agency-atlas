@@ -5,6 +5,7 @@
 
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { Column, Columns } from "@/components/shell/Columns";
 import { StatusButton } from "@/components/cards/DeveloperButtons";
 import { clientLabel } from "@/lib/agency";
 import { cn } from "@/lib/format";
@@ -24,8 +25,10 @@ export function DeveloperHome({ items, today, readOnly = false }: { items: Clien
   const { next, alerts, openCount } = developerFocus(items, today);
   if (!openCount) return <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Nothing assigned right now. New work shows up here as soon as a manager adds it.</p>;
   const progress = next ? stepProgress(next) : null;
+  // Wide screens: "Do this next" on the left, what needs attention on the right.
   return (
-    <div className="space-y-4">
+    <Columns className="space-y-4 lg:space-y-0">
+      <Column>
       {next ? (
         <section aria-label="Do this next" className="glass rounded-3xl p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{next.status === "in_progress" ? "You're working on" : "Do this next"}</p>
@@ -61,6 +64,8 @@ export function DeveloperHome({ items, today, readOnly = false }: { items: Clien
         <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Nothing new to start. Check what&apos;s waiting on Work.</p>
       )}
 
+      </Column>
+      <Column className="space-y-4">
       {alerts.length > 0 && (
         <section aria-label="Needs attention">
           <h2 className="mb-2 px-1 text-[13px] font-semibold uppercase tracking-[0.08em] text-muted">Needs attention</h2>
@@ -85,6 +90,7 @@ export function DeveloperHome({ items, today, readOnly = false }: { items: Clien
         All my work ({openCount}) <ArrowRight aria-hidden className="size-4" />
       </Link>
       {readOnly && <p className="px-1 text-[11px] text-faint">Preview: buttons are off.</p>}
-    </div>
+      </Column>
+    </Columns>
   );
 }

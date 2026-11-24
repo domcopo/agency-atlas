@@ -5,7 +5,7 @@ import { PREVIEW_MINUTES } from "@/lib/preview";
 
 export function PreviewBanner({ name }: { name: string }) {
   return (
-    <div role="status" className="sticky top-0 z-50 -mx-4 mb-1 flex items-center gap-2 border-b border-amber/50 bg-[#2a1f05]/95 px-4 py-2 text-xs backdrop-blur">
+    <div role="status" className="sticky top-0 z-50 -mx-4 mb-1 flex items-center gap-2 border-b border-amber/50 bg-[#2a1f05]/95 px-4 py-2 text-xs backdrop-blur lg:mx-0 lg:mt-3 lg:rounded-2xl lg:border lg:text-sm">
       <Eye aria-hidden className="size-4 shrink-0 text-amber" />
       <p className="min-w-0 flex-1 text-amber">
         <span className="font-semibold">Previewing as {name}</span> (developer view) · look only · ends after {PREVIEW_MINUTES} min

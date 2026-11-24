@@ -13,6 +13,7 @@ import { ReviewButtons } from "@/components/cards/WorkOrderList";
 import { CommentForm, HoursForm, InfoForm, ReassignRequestForm } from "@/components/forms/WorkOrderDetailForms";
 import { EditItemForm } from "@/components/forms/EditItemForm";
 import { MoveToTrashButton } from "@/components/forms/TrashForms";
+import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { getDeveloperViewer, getMember, getTeam, getToday, getWorkOrderDetail } from "@/lib/data-source";
 import { cn } from "@/lib/format";
@@ -92,6 +93,9 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
         </div>
       )}
 
+      {/* Wide screens: the facts, steps and links on the left; updates, comments and history on the right. */}
+      <Columns>
+      <Column>
       <dl className="glass grid grid-cols-2 gap-x-3 gap-y-2 rounded-3xl p-4 text-sm">
         <div>
           <dt className="text-[11px] text-muted">Assigned to</dt>
@@ -157,6 +161,8 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
         </>
       )}
 
+      </Column>
+      <Column>
       {!finished && (
         <>
           <SectionTitle>Update</SectionTitle>
@@ -311,6 +317,8 @@ export default async function WorkOrderPage({ params }: { params: Promise<{ id: 
           <History history={history} ready={ready} />
         </>
       )}
+      </Column>
+      </Columns>
     </>
   );
 }

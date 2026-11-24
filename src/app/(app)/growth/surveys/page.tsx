@@ -22,8 +22,9 @@ export default function SurveysPage() {
     .map((q, i) => `${i + 1}. ${q.question}${q.options ? ` (${q.options.join(" / ")})` : ""}`)
     .join("\n");
 
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader
         title="Survey questions"
         subtitle="What to ask businesses so we learn what makes them grow."
@@ -82,6 +83,6 @@ export default function SurveysPage() {
           </section>
         );
       })}
-    </>
+    </div>
   );
 }

@@ -31,8 +31,9 @@ export default async function SalesSetupPage() {
   const salespeople = setup.logins.filter((l) => l.role === "sales");
   const targets = new Map(sales.people.map((p) => [p.userId, p.target]));
 
+  // Wide screens: kept to a comfortable reading width.
   return (
-    <>
+    <div className="lg:max-w-4xl">
       <PageHeader title="Sales setup" subtitle="Only you can change this" backHref="/sales" backLabel="Sales" />
 
       <SectionTitle>1 · Sales pipelines</SectionTitle>
@@ -112,6 +113,6 @@ export default async function SalesSetupPage() {
         </div>
       )}
       <p className="mt-1.5 px-1 text-[11px] text-faint">Weekdays only, New York time. Each salesperson sees only their own number.</p>
-    </>
+    </div>
   );
 }

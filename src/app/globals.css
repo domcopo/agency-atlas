@@ -45,6 +45,12 @@ select option:disabled {
   color: var(--color-faint);
 }
 
+html {
+  /* Windows shows a real scrollbar that takes up width; keep its space reserved so
+     the layout doesn't jump sideways between short and long pages. */
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-ink);
@@ -208,6 +214,30 @@ body {
   /* Still highlighted (just not pulsing) when Reduce Motion is on. */
   box-shadow: 0 0 0 1px rgb(251 191 74 / 0.7);
   animation: coach-pulse 2.8s ease-in-out infinite;
+}
+
+/* Wide screens (1024 px and up, inside the app frame only): slightly larger text so it
+   reads well on a monitor further away. Tailwind's text-xs / text-sm / text-base read
+   these variables, so every screen grows a little without changing the phone layout.
+   Sign-in pages and the fixed-size SEO audit slides are outside .wide, so untouched. */
+@media (min-width: 64rem) {
+  .wide {
+    --text-xs: 0.8125rem;
+    --text-xs--line-height: calc(1.15 / 0.8125);
+    --text-sm: 0.9375rem;
+    --text-sm--line-height: calc(1.4 / 0.9375);
+    --text-base: 1.0625rem;
+  }
+
+  /* The top "where this data comes from" strip sits to the right of the side menu
+     and lines up with the wide content. */
+  body:has([data-side-nav]) [data-demo-banner] {
+    padding-left: 15rem;
+  }
+  body:has([data-side-nav]) [data-demo-banner] > * {
+    max-width: 100rem;
+    padding-inline: 2.5rem;
+  }
 }
 
 /* Visible keyboard focus everywhere. */

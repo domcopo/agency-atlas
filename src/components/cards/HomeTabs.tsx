@@ -35,7 +35,7 @@ export function HomeTabs({ tabs }: { tabs: HomeTab[] }) {
 
   return (
     <section aria-label="Dashboard buttons">
-      <div className={`grid gap-2 ${COLS[tabs.length] ?? "grid-cols-4"}`}>
+      <div className={`grid gap-2 lg:gap-3 ${COLS[tabs.length] ?? "grid-cols-4"}`}>
         {tabs.map((t) => (
           <CockpitButton
             key={t.id}
@@ -81,7 +81,7 @@ function CockpitButton({
         markSeen();
       }}
       className={cn(
-        "pressable relative flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl border px-1 py-2",
+        "pressable relative flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-2xl border px-1 py-2 lg:min-h-24 lg:gap-1.5",
         "bg-gradient-to-b from-white/[0.07] to-white/[0.02] shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]",
         isOpen ? "border-violet/70 bg-violet/15" : "border-line",
         isNew && !isOpen && "coach",
@@ -95,13 +95,13 @@ function CockpitButton({
           isOpen ? "bg-violet shadow-[0_0_6px_rgb(176_124_255)]" : t.attention ? "bg-amber shadow-[0_0_6px_rgb(251_191_74)]" : "bg-white/15",
         )}
       />
-      <span aria-hidden className={cn("[&>svg]:size-4", t.attention ? "text-amber" : "text-violet")}>
+      <span aria-hidden className={cn("[&>svg]:size-4 lg:[&>svg]:size-5", t.attention ? "text-amber" : "text-violet")}>
         {t.icon}
       </span>
-      <span aria-hidden className="font-display text-[15px] font-bold leading-none">
+      <span aria-hidden className="font-display text-[15px] font-bold leading-none lg:text-xl">
         {t.stat}
       </span>
-      <span aria-hidden className="text-[10px] font-semibold uppercase leading-none tracking-wide text-muted">
+      <span aria-hidden className="text-[10px] font-semibold uppercase leading-none tracking-wide text-muted lg:text-xs">
         {t.label}
       </span>
     </button>
