@@ -11,7 +11,8 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
+import { askAi, isAiConfigured, textRequestWorstCase, TOAD_SCHEMA, TOAD_TASK, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
+import { buildToadFacts, cleanHistory, cleanQuestion, pipelineCounts, restoreToadAnswer, TOAD_LIMITS, TOAD_SCREENS, type ToadAnswer } from "@/lib/ai/toad-snapshot";
 import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
 import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
@@ -34,6 +35,7 @@ import {
   getRoster,
   getToday,
   getScout,
+  getToadStatus,
   getWatch,
   getWatchAuditImport,
   WATCH_SETUP,
@@ -2031,7 +2033,7 @@ export async function decideContactMatch(form: FormData) {
 // log every request's exact cost, and save the answer for people to review.
 // ---------------------------------------------------------------------------
 
-async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add", r: AiResult) {
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add" | "ask_toad", r: AiResult) {
   if (!r.startedAt) return; // never sent (budget stop, not set up): not a run, nothing charged
   const known = r.usage !== undefined && r.costUsd !== undefined;
   const row = {
@@ -2059,6 +2061,133 @@ async function aiPreflight(): Promise<{ error: string } | { remaining: number }>
   if (!status.tablesReady) return { error: "The AI needs one setup step first (run 0005 in Supabase)." };
   if (status.level === "blocked") return { error: `This month's AI budget ($${status.budgetUsd.toFixed(2)}) is used up. It resets on the 1st.` };
   return { remaining: status.remainingUsd };
+}
+
+// ---------------------------------------------------------------------------
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10). One question, answered from what the
+// asker's login can read. The worst-case cost is reserved in the database first (it
+// refuses past the caps, the AI budget or the rate limit). Nothing is saved but the cost.
+// ---------------------------------------------------------------------------
+
+export type ToadReply = { error?: string; answer?: ToadAnswer; costUsd?: number };
+
+/** The database's refusal → plain words. */
+function toadRefusal(message: string | undefined, code: string | undefined): string {
+  const m = message ?? "";
+  if (m.includes("toad: too fast")) return "One moment, please: ask again in a few seconds.";
+  if (m.includes("toad: hourly limit")) return "That's 30 questions this hour. Take a breather and try again a bit later.";
+  if (m.includes("toad: over your monthly cap")) return "You've used your BizToad allowance for this month. It resets on the 1st.";
+  if (m.includes("toad: over the monthly total")) return "The team's BizToad allowance for this month is used up. It resets on the 1st.";
+  if (m.includes("toad: over the AI budget")) return "This month's AI budget is used up. It resets on the 1st.";
+  if (m.includes("toad: off")) return "BizToad is switched off right now.";
+  if (code === "42501") return "Asking BizToad isn't switched on for your role.";
+  if (MISSING_TABLE.has(code ?? "")) return "Asking BizToad needs database update 0030 first.";
+  return "BizToad couldn't check the budget just now. Nothing was spent. Try again in a minute.";
+}
+
+export async function askToad(question: unknown, history: unknown): Promise<ToadReply> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return { error: "Please sign in again." };
+  const status = await getToadStatus();
+  if (!status.ready) return { error: "Asking BizToad needs database update 0030 first." };
+  if (!status.enabled) return { error: "BizToad is switched off right now." };
+  if (!status.roles.includes(me.role)) return { error: "Asking BizToad isn't switched on for your role yet." };
+  if (!isAiConfigured()) return { error: "The AI isn't set up yet." };
+  // Phase 2 builds facts for the owner and managers only. Other roles come in Phase 3.
+  if (!isLead(me.role)) return { error: "Asking BizToad isn't ready for your role yet." };
+
+  const ops = await getOps();
+  const today = ops.today;
+  const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
+  // Most worrying first, so trimming keeps what matters.
+  current.sort((a, b) => (ops.scores.get(a.id)?.score ?? 101) - (ops.scores.get(b.id)?.score ?? 101));
+  const book = buildCodebook(current);
+  const team = (await getTeam()).members;
+  const staff = buildStaffBook(team.map((m) => ({ id: m.id, name: m.name })));
+
+  const q = cleanQuestion(question, book, staff);
+  if (!q) return { error: "Type a question first." };
+  const conversation = cleanHistory(history, book, staff);
+
+  const notes = await getRecentCheckInsByClient(2);
+  const open = ops.actions.filter((a) => a.status !== "done" && a.status !== "canceled" && !a.archivedAt);
+  const byUrgency = [...open].sort((a, b) => (a.dueOn ?? "9999").localeCompare(b.dueOn ?? "9999"));
+  const loads = personLoads(ops.actions, team.map((m) => m.id), today);
+  const ghl = pipelineFacts(await getGhlSummary());
+
+  const facts = buildToadFacts({
+    today,
+    askerRole: me.role,
+    askerCode: me.staffId ? (staff.codeOf.get(me.staffId) ?? null) : null,
+    screens: TOAD_SCREENS.full,
+    clients: current.map((c) =>
+      opsClientFacts({
+        c,
+        health: ops.health.get(c.id) ?? null,
+        checkIn: ops.checkIns.get(c.id)!,
+        open: open.filter((a) => a.client?.slug === c.id),
+        notes: (c.dbId && notes.get(c.dbId)) || [],
+        book,
+        staff,
+        today,
+        score: ops.scores.get(c.id) ? { value: ops.scores.get(c.id)!.score, change: ops.trends.get(c.id)?.change ?? null } : null,
+      }),
+    ),
+    workOrders: byUrgency.map((a) => ({
+      type: a.kind,
+      title: redactStaff(redact(a.title.slice(0, 120), book), staff),
+      client: a.internal ? "AGENCY" : a.client ? (book.codeOf.get(a.client.slug) ?? "other") : a.leadGhlId ? "sales lead" : "none",
+      owner: a.ownerId ? (staff.codeOf.get(a.ownerId) ?? "unknown") : "none",
+      priority: a.priority,
+      status: a.status,
+      due: a.dueOn,
+      overdue: a.dueOn !== null && a.dueOn < today,
+    })),
+    team: team.map((m) => {
+      const l = loads.get(m.id)!;
+      return { code: staff.codeOf.get(m.id), role: m.role, open_items: l.openItems, open_hours: Math.round(l.openMinutes / 6) / 10, overdue: l.overdue, due_next_7_days: l.dueNext7 };
+    }),
+    rankedPlan: ops.priorities.slice(0, 12).map((p, i) => {
+      const slug = p.clientSlug ?? p.action?.client?.slug;
+      return { rank: i + 1, why: p.why ?? [], client: slug ? (book.codeOf.get(slug) ?? null) : null, item: redactStaff(redact(p.action ? p.action.title : p.title, book), staff) };
+    }),
+    riskAlerts: ops.risks.slice(0, 8).map((r) => ({ client: book.codeOf.get(r.client.slug) ?? null, severity: r.severity, score: r.score, problem: redact(r.problem, book) })),
+    // Counts only: deal values are money and stay out.
+    pipeline: pipelineCounts(ghl),
+  });
+
+  const data = { question: q, conversation, facts };
+  const worst = Math.min(1, Math.max(0.01, Math.ceil(textRequestWorstCase({ task: TOAD_TASK, data, maxOutputTokens: TOAD_LIMITS.maxOutputTokens }) * 10_000) / 10_000));
+  const db = await createDatabaseClient();
+  const reserve = await db.from("toad_spend").insert({ usd: worst });
+  if (reserve.error) return { error: toadRefusal(reserve.error.message, reserve.error.code) };
+
+  const result = await askAi({ task: TOAD_TASK, data, schema: TOAD_SCHEMA, maxOutputTokens: TOAD_LIMITS.maxOutputTokens, remainingUsd: worst });
+  await logAiUsage(db, "ask_toad", result);
+  if (!result.ok) return { error: result.message };
+  return { answer: restoreToadAnswer(result.data, book, staff, TOAD_SCREENS.full), costUsd: result.costUsd };
+}
+
+/** Owner only: BizToad on/off for everyone and the two monthly caps (the database checks too). */
+export async function setToadSettings(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (me?.role !== "owner") return { error: "Only the owner can change BizToad's settings." };
+  const monthly = Number(form.get("monthly_usd"));
+  const perPerson = Number(form.get("per_person_usd"));
+  if (!Number.isFinite(monthly) || monthly < 0 || monthly > 200) return { error: "The team total must be between $0 and $200." };
+  if (!Number.isFinite(perPerson) || perPerson < 0 || perPerson > 50) return { error: "The per-person cap must be between $0 and $50." };
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("toad_settings")
+    .update({ enabled: form.get("enabled") === "on", monthly_usd: Math.round(monthly * 100) / 100, per_person_usd: Math.round(perPerson * 100) / 100 })
+    .eq("id", true)
+    .select("id");
+  if (error && MISSING_TABLE.has(error.code ?? "")) return { error: "This needs database update 0030 first." };
+  if (error || !data?.length) return { error: "Couldn't save. Nothing changed." };
+  revalidatePath("/", "layout");
+  return { ok: true };
 }
 
 export async function generateBriefing(): Promise<{ error?: string; message?: string }> {

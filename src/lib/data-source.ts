@@ -34,7 +34,7 @@ import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type RunLogRow } from "@/lib/bot-runs";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPerson, type SalesPipeline } from "@/lib/sales";
-import { isLead } from "@/lib/roles";
+import { asMemberRole, isLead, type MemberRole } from "@/lib/roles";
 import { asOutcome, asVisitKind, PROSPECT_STATUSES, SCOUT_RULES, type Prospect as ScoutProspect, type ProspectStatus, type ScoutSignals, type ScoutSpendRow, type ScoutVisit } from "@/lib/scout";
 import {
   buildPriorities,
@@ -1840,6 +1840,51 @@ const emptyAi = (configured: boolean, tablesReady: boolean): AiStatus => ({
   outputTokens: 0,
   requests: 0,
   recent: [],
+});
+
+// ---------------------------------------------------------------------------
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10): on/off, who may ask, caps, my spend.
+// ---------------------------------------------------------------------------
+
+export interface ToadStatus {
+  /** False before 0030 is run (or without a database). */
+  ready: boolean;
+  enabled: boolean;
+  roles: MemberRole[];
+  monthlyUsd: number;
+  perPersonUsd: number;
+  /** What I've spent on BizToad this month (real costs; null = unknown). */
+  myUsedUsd: number | null;
+  /** On, my role switched on, and the AI is set up. The database checks again on every question. */
+  canAsk: boolean;
+}
+
+const TOAD_DEFAULTS: ToadStatus = { ready: false, enabled: true, roles: ["owner", "manager"], monthlyUsd: 25, perPersonUsd: 5, myUsedUsd: null, canAsk: false };
+
+export const getToadStatus = cache(async (): Promise<ToadStatus> => {
+  if (!usesDatabase()) return TOAD_DEFAULTS;
+  const me = await getMember();
+  if (!me) return TOAD_DEFAULTS;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("toad_settings").select("enabled, roles, monthly_usd, per_person_usd").eq("id", true).maybeSingle();
+  if (error || !data) return TOAD_DEFAULTS;
+  const roles = (Array.isArray(data.roles) ? data.roles : []).map(asMemberRole).filter((r): r is MemberRole => r !== null);
+  // Owner and managers can read their own real costs; everyone else sees nothing here yet (Phase 3).
+  let myUsedUsd: number | null = null;
+  if (isLead(me.role)) {
+    const used = await db.from("ai_usage").select("cost_usd").eq("feature", "ask_toad").eq("requested_by", me.userId).gte("created_at", monthStartIso());
+    if (!used.error) myUsedUsd = Math.round((used.data ?? []).reduce((n, r) => n + Number(r.cost_usd ?? 0), 0) * 100) / 100;
+  }
+  const enabled = data.enabled === true;
+  return {
+    ready: true,
+    enabled,
+    roles,
+    monthlyUsd: Number(data.monthly_usd),
+    perPersonUsd: Number(data.per_person_usd),
+    myUsedUsd,
+    canAsk: enabled && roles.includes(me.role) && isAiConfigured(),
+  };
 });
 
 /** This month's AI usage and budget. Read as the signed-in person (security rules apply). */

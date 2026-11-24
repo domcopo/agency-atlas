@@ -15,7 +15,8 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, usesDatabase } from "@/lib/data-source";
+import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, getToadStatus, usesDatabase } from "@/lib/data-source";
+import { ToadSettingsForm } from "@/components/toad/ToadSettingsForm";
 import { PublishSummaryButton } from "@/components/forms/PublishSummaryButton";
 import { hasPrivateRoster } from "@/lib/private-data";
 import { ImportButton } from "@/components/forms/ImportButton";
@@ -43,6 +44,7 @@ export default async function SafetyPage() {
   const privateFile = hasPrivateRoster();
   const ghl = await getGhlSummary();
   const ai = await getAiStatus();
+  const toad = await getToadStatus();
   const ownerSummary = member?.role === "owner" ? await getOwnerSummaryStatus() : null;
   const nyTime = (at: string) => new Date(at).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const ghlStatus = !ghl.configured ? "Not connected" : !db ? "Needs the database" : !ghl.tablesReady ? "Run setup SQL (0003)" : ghl.lastSync ? "Connected · read-only" : "Ready to sync";
@@ -148,6 +150,12 @@ export default async function SafetyPage() {
                 </ul>
               )}
               {member?.role === "owner" && <BudgetForm current={ai.budgetUsd} />}
+              {member?.role === "owner" &&
+                (toad.ready ? (
+                  <ToadSettingsForm enabled={toad.enabled} monthlyUsd={toad.monthlyUsd} perPersonUsd={toad.perPersonUsd} />
+                ) : (
+                  <p className="text-xs text-faint">BizToad&apos;s on/off switch and caps appear here after database update 0030.</p>
+                ))}
             </>
           )}
           <ul className="space-y-1 text-xs text-muted">
