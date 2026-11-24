@@ -6,10 +6,10 @@
 // (useSeen), so opening a tab stops it glowing on both. Which tabs show is only a
 // convenience: the database decides what each role can actually read.
 
-import { Bell, ClipboardList, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, ClipboardList, FileSearch, ShieldCheck, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, type ComponentType } from "react";
+import { Fragment, useEffect, type ComponentType } from "react";
 import { cn } from "@/lib/format";
 import { useSeen } from "@/lib/use-seen";
 import type { Theme } from "@/lib/theme";
@@ -51,7 +51,11 @@ export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSa
 
       <ul className="space-y-1">
         {shown.map((t) => (
-          <TabItem key={t.href} tab={t} active={isActive(pathname, t.href)} hint={hints[t.href]} />
+          <Fragment key={t.href}>
+            <TabItem tab={t} active={isActive(pathname, t.href)} hint={hints[t.href]} />
+            {/* Audits sits under Sales (computers only; on phones it's a card at the top of Sales). */}
+            {t.href === "/sales" && <PlainItem href="/audits" label="Audits" icon={FileSearch} active={isActive(pathname, "/audits")} />}
+          </Fragment>
         ))}
       </ul>
 

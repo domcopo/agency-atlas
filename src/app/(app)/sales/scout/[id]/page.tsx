@@ -123,7 +123,7 @@ export default async function ProspectPage({ params }: { params: Promise<{ id: s
           <GlassCard className="mt-2.5 space-y-1.5 text-sm">
             <p className="font-semibold">Next: line up the audit</p>
             <p className="text-muted">Build it in Audits (business details aren&apos;t filled in from Scout yet; that&apos;s the next step). Then add them to GoHighLevel yourself so follow-ups and the deal are tracked there.</p>
-            <Link href="/sales/audits/new" className="pressable inline-flex min-h-11 items-center rounded-xl bg-violet-deep px-4 text-sm font-semibold">Build an audit</Link>
+            <Link href="/audits/seo/new" className="pressable inline-flex min-h-11 items-center rounded-xl bg-violet-deep px-4 text-sm font-semibold">Build an audit</Link>
           </GlassCard>
         )}
 

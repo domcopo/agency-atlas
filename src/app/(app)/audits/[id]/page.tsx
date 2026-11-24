@@ -51,7 +51,7 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="@container">
-      <PageHeader title={i?.company ?? audit.title} subtitle={i ? `${i.domain} · SEO audit` : "SEO audit"} backHref="/sales/audits" backLabel="Audits" />
+      <PageHeader title={i?.company ?? audit.title} subtitle={i ? `${i.domain} · SEO audit` : "SEO audit"} backHref={`/audits/${audit.kind}`} backLabel={audit.kind === "ads" ? "Google Ads audits" : "SEO audits"} />
 
       <div className="@3xl:grid @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @3xl:items-start @3xl:gap-6">
         <div className="min-w-0">
@@ -66,7 +66,7 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
               <ExternalLink aria-hidden className="size-4" /> Open the {pages} pages
             </Link>
             {canEdit ? (
-              <Link href={`/sales/audits/${audit.id}/edit`} className="pressable glass inline-flex min-h-12 items-center justify-center gap-1.5 rounded-xl text-sm font-semibold">
+              <Link href={`/audits/${audit.id}/edit`} className="pressable glass inline-flex min-h-12 items-center justify-center gap-1.5 rounded-xl text-sm font-semibold">
                 <Pencil aria-hidden className="size-4" /> Edit
               </Link>
             ) : (

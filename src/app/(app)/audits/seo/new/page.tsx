@@ -10,7 +10,7 @@ import { DEFAULT_SECTIONS } from "@/lib/audit/sections";
 import { getAuditSettings, getAuditSpend, getMember, getSales, usesDatabase } from "@/lib/data-source";
 import { isLead } from "@/lib/roles";
 
-export const metadata: Metadata = { title: "New audit" };
+export const metadata: Metadata = { title: "New SEO audit" };
 
 const LEAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -27,10 +27,10 @@ export default async function NewAuditPage({ searchParams }: { searchParams: Pro
   return (
     <>
       <PageHeader
-        title="New audit"
+        title="New SEO audit"
         subtitle="Our custom SEO audit: pick what goes in, save, then copy the prompt."
-        backHref={lead ? `/sales/lead/${encodeURIComponent(lead.id)}` : "/sales/audits"}
-        backLabel={lead ? lead.name : "Audits"}
+        backHref={lead ? `/sales/lead/${encodeURIComponent(lead.id)}` : "/audits/seo"}
+        backLabel={lead ? lead.name : "SEO audits"}
       />
       <AuditBuilder leadId={lead?.id} leadName={lead?.name} sections={DEFAULT_SECTIONS} capsLine={capsLine(settings, spend)} plansSet={settings.agency.plans.length > 0} ready={settings.ready} />
     </>
