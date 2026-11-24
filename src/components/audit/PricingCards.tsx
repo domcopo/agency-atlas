@@ -4,6 +4,7 @@ import type { AuditPlan } from "@/lib/audit/config";
 import { fmtUsd } from "@/lib/audit/format";
 
 export function PricingCards({ plans }: { plans: AuditPlan[] }) {
+  if (!plans.length) return <p className="audit-nf">Plan prices aren&apos;t set yet. The owner adds them in Sales → Audits → Settings.</p>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {plans.map((p) => (

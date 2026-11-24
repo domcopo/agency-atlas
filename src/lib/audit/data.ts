@@ -6,7 +6,7 @@
 
 import type { AuditConfig } from "./config";
 
-export type SourceId = "dataforseo" | "leadsnap" | "semrush" | "google" | "config" | "model" | "sample";
+export type SourceId = "dataforseo" | "leadsnap" | "semrush" | "google" | "config" | "model" | "sample" | "pending";
 
 export const SOURCE_LABELS: Record<SourceId, string> = {
   dataforseo: "DataForSEO",
@@ -16,6 +16,7 @@ export const SOURCE_LABELS: Record<SourceId, string> = {
   config: "Audit settings",
   model: "Model (calculated)",
   sample: "Sample (fictional)",
+  pending: "Not pulled yet",
 };
 
 /** One sourced figure. `value: null` = looked for and not found. */

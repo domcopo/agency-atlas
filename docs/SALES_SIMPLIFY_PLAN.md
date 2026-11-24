@@ -4,7 +4,7 @@ Status: **approved 2026-11-17. Part A built** (not committed). Part B waits for 
 
 Two parts, built in this order, each checked by the owner before the next:
 - **Part A: the Sales screen cleanup.** Small to medium. **No database change.**
-- **Part B: saved SEO audits for Sales, with spending caps** (audit Phase 3). **Migration `0023`.** See "Part B" at the end.
+- **Part B: saved SEO audits for Sales, with spending caps** (audit Phase 3). **Migration `0023`.** See "Part B" at the end. **Replaced 2026-11-24 by `docs/AUDIT_BUILDER_PLAN.md` Phase A** (same roles and caps, plus checkpoints and the custom prompt; caps and plan prices live on Sales → Audits → Settings).
 
 ## What the owner picked (2026-11-17)
 1. **One follow-up list:** the older all-pipelines "Lead follow-ups" on the Sales tab merges into the sales follow-ups.

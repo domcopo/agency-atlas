@@ -1,12 +1,12 @@
 // Page 4: top competitors (traffic, rankings, authority, reviews) + keyword matrix.
 
-import type { AuditBundle } from "@/lib/audit/data";
+import type { AuditPageProps } from "../Slide";
 import { shortLabels } from "@/lib/audit/format";
 import { CompetitorTable } from "../CompetitorTable";
 import { PositionMatrix } from "../PositionMatrix";
 import { Slide } from "../Slide";
 
-export function CompetitorsPage({ bundle }: { bundle: AuditBundle }) {
+export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const byDomain = new Map(data.sites.map((s) => [s.domain, s]));
   const rows = [
@@ -22,7 +22,7 @@ export function CompetitorsPage({ bundle }: { bundle: AuditBundle }) {
     ...config.competitors.map((c, i) => ({ domain: c.domain, label: short[i] ?? c.name })),
   ];
   return (
-    <Slide bundle={bundle} page={4} title={`Top ${config.competitors.length} competitors`} aside="traffic · rankings · authority · reviews">
+    <Slide bundle={bundle} page={pageNo ?? 4} pageCount={pageCount} title={`Top ${config.competitors.length} competitors`} aside="traffic · rankings · authority · reviews">
       <div className="audit-card">
         <CompetitorTable rows={rows} showSemrush={config.modules.semrush} />
         <p className="audit-note">Pack: — = checked, not in the local 3-pack. Visits are search-only estimates, not total website traffic. {data.narrative.pageNotes.competitors ?? ""}</p>

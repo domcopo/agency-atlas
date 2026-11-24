@@ -34,7 +34,7 @@ interface Props {
 
 export function StateMap({ points, state, ringsMiles, view = "state" }: Props) {
   const shape = STATES[state];
-  if (!shape) return <p className="audit-nf">Map not available for this state.</p>;
+  if (!shape) return <p className="audit-nf">The {state} map outline isn&apos;t added yet (coming with the real-map update).</p>;
   const placed = points.filter((p) => p.market.lat !== undefined && p.market.lng !== undefined);
   const hq = placed.find((p) => p.market.hq);
   const zoom = view === "markets" && placed.length > 0;

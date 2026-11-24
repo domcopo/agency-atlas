@@ -23,7 +23,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 - **Data:** screens read only through `src/lib/data-source.ts`. With Supabase configured, `showsSamples()` is false, so there are never made-up records next to real ones.
 - **Writes:** all database writes are in `src/app/actions.ts`. They are validated, run as the signed-in user, and every exported action starts with `await notWhilePreviewing();`. The only deletes are `deleteForever` (owner, from Trash).
 - **Database:**
-  - Schema and RLS live in `supabase/migrations/` (next number: 0023). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
+  - Schema and RLS live in `supabase/migrations/` (next number: 0024; `0023` saved audits is written but not run yet). The user runs migrations in the SQL Editor; never `supabase db push`/`link`.
   - Every new table needs RLS, a restrictive `aal2` policy and break-in tests in `supabase/tests/10_rls_break_in.sql` (`npm run test:rls`).
   - App code must keep working before a new migration is run (column fallbacks, "needs 00xx" messages).
 - **Sign-in:** `src/proxy.ts` sends any session below `aal2` to `/mfa`. Cookies are httpOnly (secure on Vercel); HSTS and noindex are on. No service worker or offline cache.
@@ -54,7 +54,8 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Smart add (type, talk, screenshots, PDF; Our agency) | `docs/SMART_ADD_PLAN.md`, `docs/PDF_AND_AGENCY_PLAN.md` |
 | Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md`, `docs/DEVELOPER_SIMPLIFY_PLAN.md` |
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
-| Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page, saved audits + caps = `0023`) |
+| Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
+| Audit builder in Sales (checkpoints, saved audits, caps, custom prompt) | `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |
@@ -86,7 +87,7 @@ src/app/(app)/      screens: Home · clients · sales · work (+ work/orders) ·
 src/app/actions.ts  every database write (server actions)
 src/components/     shell/, cards/, forms/, home/, sales/ — hand-written, shadcn-style
 src/lib/            data-source.ts (reads), types.ts, pure rule modules, ai/, ghl/, supabase/
-supabase/           migrations/ (0001–0022), tests/ (RLS break-in tests)
+supabase/           migrations/ (0001–0023), tests/ (RLS break-in tests)
 tests/              fixtures.test.ts (rules), guardrails.test.ts (security pins, name-leak test)
 docs/               plans, setup guides, PROJECT_HISTORY.md
 .claude/settings.json   deny rules for secret files and risky commands
@@ -107,4 +108,4 @@ docs/               plans, setup guides, PROJECT_HISTORY.md
 
 The user is beginner-to-intermediate. Explain in plain English, define unfamiliar terms briefly, give the "why" behind decisions. Be honest about what was and wasn't tested. Never call anything "secure" or "production-ready" from a quick check.
 - PDFs + Our agency (approved 2026-11-17, `docs/PDF_AND_AGENCY_PLAN.md`): Smart add takes one PDF (`isPdf` magic bytes + sizes in `src/lib/uploads.ts`), sent once as a `document` block ONLY from `src/lib/ai/client.ts` (`askAi({ pdf })`; worst case `PDF_TOKEN_ALLOWANCE` = 100 pages), never saved; screen warns PDFs aren't scrubbed. Drafts get a person picker + "Assign to me" (still nothing saved until Confirm). `0022`: `actions.internal` (work orders only, no update grant); rule = exactly one of client / lead / internal (`actions_one_owner_kind`); `my_work` adds `internal`. App: `AGENCY_SLUG` "_agency" (not a real slug) first in every work order client picker, `createWorkOrder` maps it to `internal: true`; AI uses code "AGENCY"; label via `clientLabel` (`src/lib/agency.ts`). Internal work counts toward load/deadlines, never toward a client's health/contacts. Code works before 0022 (save says "needs 0022").
-- SEO audit (Phase 1 approved 2026-11-17, `docs/SEO_AUDIT_PLAN.md`): eight 1280×720 pages from per-client settings (`src/lib/audit/config.ts`, `parseAuditConfig`) + sourced data (`src/lib/audit/data.ts`: every figure a `Fig` with source + date; null = "not found"). All math in `src/lib/audit/compute.ts` (pure, tested); money is labeled "model" with inputs, rates/job values marked "assumption" until client-supplied; prices only from settings; Semrush off by default, shown beside DataForSEO. Region map = real state outline from `src/lib/audit/geo.ts` (`map.state`, OH only so far; markets carry lat/lng and must sit inside the state). Only the fictional sample exists (fictional plumbing company in real Ohio cities; `src/fixtures/audit-sample.ts`, `getAuditPreview`, dry run $0). Screens `/growth/audits`, `/audit/[id]` (owner/manager). Reference PDFs in `docs/seo-audit-reference/` are real client audits: Git-ignored, never copy their data. No network, DB or AI yet; adapters (DataForSEO POST exception) need approval.
+- SEO audit (Phase 1 approved 2026-11-17, `docs/SEO_AUDIT_PLAN.md`): eight 1280×720 pages from per-client settings (`src/lib/audit/config.ts`, `parseAuditConfig`) + sourced data (`src/lib/audit/data.ts`: every figure a `Fig` with source + date; null = "not found"). All math in `src/lib/audit/compute.ts` (pure, tested); money is labeled "model" with inputs, rates/job values marked "assumption" until client-supplied; prices only from settings; Semrush off by default, shown beside DataForSEO. Region map = real state outline from `src/lib/audit/geo.ts` (`map.state`, OH only so far; markets carry lat/lng and must sit inside the state). Only the fictional sample exists (fictional plumbing company in real Ohio cities; `src/fixtures/audit-sample.ts`, `getAuditPreview`, dry run $0). Screens `/growth/audits`, `/audit/[id]`. Audit builder (Phase A 2026-11-24, `docs/AUDIT_BUILDER_PLAN.md`): Sales → Audits (`/sales/audits`, `new`, `[id]`, `[id]/edit`; owner/managers/sales), intake check `src/lib/audit/intake.ts` (any US state; no emails/phones), checkpoints `sections.ts` (id list must match the `0023` check rule, tested), custom prompt `prompt.ts` (copy-only), caps `spend.ts` (DB trigger enforces too). Pages before results: every figure "not found" (source "pending"). Reference PDFs in `docs/seo-audit-reference/` are real client audits: Git-ignored, never copy their data. No network, DB or AI yet; adapters (DataForSEO POST exception) need approval.

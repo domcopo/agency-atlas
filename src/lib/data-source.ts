@@ -13,6 +13,9 @@
 import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
 import type { AuditBundle } from "@/lib/audit/data";
+import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
+import { parseSections, type AuditSectionId } from "@/lib/audit/sections";
+import { AUDIT_CAP_DEFAULTS, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
 import { demoRosterRaw, demoTeam } from "@/fixtures/demo-roster";
 import { caseStudyHistory, surveyQuestions, surveyResponses, trends } from "@/fixtures/growth";
 import { insights } from "@/fixtures/insights";
@@ -2044,13 +2047,162 @@ export const getBilling = cache(async (): Promise<BillingView | null> => {
 });
 
 // ---------------------------------------------------------------------------
-// SEO audits. Phase 1: only the template preview exists, a fictional business shown
-// with "SAMPLE" on every page (a dry run at $0). It is a template preview, not client
-// data, so it shows even with the database connected. Real audits come in a later phase.
+// SEO audits. The template preview is a fictional business shown with "SAMPLE" on every
+// page (a dry run at $0); it is not client data, so it shows even with the database on.
+// Saved audits (0023) are read AS the signed-in person: the database decides which come
+// back (owner/managers: all; a salesperson: only their own; developers: none).
 
 export const SAMPLE_AUDIT_ID = "sample";
 
 export function getAuditPreview(id: string): AuditBundle | null {
   if (id !== SAMPLE_AUDIT_ID) return null;
   return { id: SAMPLE_AUDIT_ID, sample: true, config: sampleAuditConfig, data: sampleAuditData };
+}
+
+
+export interface AuditSettingsView {
+  /** false = 0023 not run yet (or no database). */
+  ready: boolean;
+  caps: AuditCaps;
+  agency: AuditAgencySettings;
+  /** The owner's weekly cap for the signed-in person, when one is set. */
+  myWeeklyCap: number | null;
+  /** Owner only: per-salesperson weekly caps, by login. */
+  userCaps: Map<string, number>;
+}
+
+const NO_AUDIT_SETTINGS: AuditSettingsView = {
+  ready: false,
+  caps: AUDIT_CAP_DEFAULTS,
+  agency: { agencyName: null, agencyWebsite: null, plans: [], perAuditUsd: AUDIT_CAP_DEFAULTS.perAuditUsd },
+  myWeeklyCap: null,
+  userCaps: new Map(),
+};
+
+export const getAuditSettings = cache(async (): Promise<AuditSettingsView> => {
+  if (!usesDatabase()) return NO_AUDIT_SETTINGS;
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return NO_AUDIT_SETTINGS;
+  const db = await createDatabaseClient();
+  const [settings, limits] = await Promise.all([
+    db.from("audit_settings").select("per_audit_usd, weekly_usd, monthly_usd, agency_name, agency_website, plans").maybeSingle(),
+    db.from("audit_user_limits").select("user_id, weekly_usd"),
+  ]);
+  if (settings.error || !settings.data) return NO_AUDIT_SETTINGS;
+  const r = settings.data;
+  const caps = { perAuditUsd: Number(r.per_audit_usd), weeklyUsd: Number(r.weekly_usd), monthlyUsd: Number(r.monthly_usd) };
+  const userCaps = new Map((limits.data ?? []).map((l) => [l.user_id as string, Number(l.weekly_usd)]));
+  return {
+    ready: true,
+    caps,
+    agency: { agencyName: (r.agency_name as string | null) ?? null, agencyWebsite: (r.agency_website as string | null) ?? null, plans: parsePlans(r.plans), perAuditUsd: caps.perAuditUsd },
+    myWeeklyCap: userCaps.get(me.userId) ?? null,
+    userCaps,
+  };
+});
+
+export interface SavedAudit {
+  id: string;
+  title: string;
+  kind: "seo" | "ads";
+  leadGhlId: string | null;
+  createdBy: string;
+  /** Who made it ("you", or a name for the owner and managers). */
+  createdByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+  sections: AuditSectionId[];
+  /** null = the saved intake no longer passes the check (shown as "needs fixing"). */
+  intake: AuditIntake | null;
+  rawIntake: Record<string, unknown>;
+  hasResults: boolean;
+  dataRetrieved: string | null;
+}
+
+const AUDIT_COLUMNS = "id, title, kind, lead_ghl_id, created_by, created_at, updated_at, archived_at, sections, intake, data_retrieved";
+
+function toSavedAudit(r: Record<string, unknown>, me: string, names: Map<string, string>): SavedAudit {
+  const raw = r.intake && typeof r.intake === "object" && !Array.isArray(r.intake) ? (r.intake as Record<string, unknown>) : {};
+  const parsed = parseIntake(raw);
+  const by = r.created_by as string;
+  return {
+    id: r.id as string,
+    title: r.title as string,
+    kind: r.kind === "ads" ? "ads" : "seo",
+    leadGhlId: (r.lead_ghl_id as string | null) ?? null,
+    createdBy: by,
+    createdByName: by === me ? "you" : (names.get(by) ?? null),
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+    archived: Boolean(r.archived_at),
+    sections: parseSections(r.sections),
+    intake: parsed.ok ? parsed.intake : null,
+    rawIntake: raw,
+    hasResults: Boolean(r.data_retrieved),
+    dataRetrieved: (r.data_retrieved as string | null) ?? null,
+  };
+}
+
+/** Saved audits the signed-in person may see, newest first (archived ones last). */
+export const getAudits = cache(async (): Promise<{ ready: boolean; audits: SavedAudit[] }> => {
+  if (!usesDatabase()) return { ready: false, audits: [] };
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { ready: false, audits: [] };
+  const db = await createDatabaseClient();
+  const [rows, team] = await Promise.all([
+    db.from("audits").select(AUDIT_COLUMNS).order("created_at", { ascending: false }).limit(300),
+    isLead(me.role) ? db.from("team_members").select("user_id, display_name") : Promise.resolve({ data: [] as { user_id: string; display_name: string }[] }),
+  ]);
+  if (rows.error) return { ready: false, audits: [] };
+  const names = new Map((team.data ?? []).map((t) => [t.user_id as string, t.display_name as string]));
+  const audits = (rows.data ?? []).map((r) => toSavedAudit(r, me.userId, names));
+  return { ready: true, audits: [...audits.filter((a) => !a.archived), ...audits.filter((a) => a.archived)] };
+});
+
+/** One saved audit (or null: not found, or not one the database lets this person read). */
+export async function getSavedAudit(id: string): Promise<SavedAudit | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return null;
+  return (await getAudits()).audits.find((a) => a.id === id) ?? null;
+}
+
+/**
+ * The pages for a saved audit. Phase A: settings come from the intake + the owner's audit
+ * settings, and every figure is "not found" (nothing is pulled yet). Attached results
+ * come in Phase B, with their own strict check.
+ */
+export async function getSavedAuditBundle(audit: SavedAudit): Promise<AuditBundle | null> {
+  if (!audit.intake) return null;
+  const settings = await getAuditSettings();
+  const day = audit.createdAt.slice(0, 10);
+  const config = buildAuditConfig(audit.intake, settings.agency, day);
+  return { id: audit.id, sample: false, config, data: emptyAuditData(config, day) };
+}
+
+/** What the signed-in person has spent and has left (salespeople: their own week). */
+export const getAuditSpend = cache(async (): Promise<SpendSummary | null> => {
+  const settings = await getAuditSettings();
+  if (!settings.ready) return null;
+  const me = (await getMember())!;
+  const db = await createDatabaseClient();
+  const since = new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await db.from("audit_spend").select("audit_id, user_id, usd, at").gte("at", since).limit(5000);
+  if (error) return null;
+  return spendSummary({
+    rows: (data ?? []).map((r) => ({ auditId: r.audit_id as string, userId: r.user_id as string, usd: Number(r.usd), at: r.at as string })),
+    me: me.userId,
+    caps: settings.caps,
+    myWeeklyCap: settings.myWeeklyCap,
+    now: new Date(),
+  });
+});
+
+/** Owner: salespeople, for setting a weekly cap per person. */
+export async function getSalespeople(): Promise<{ userId: string; name: string }[]> {
+  if (!usesDatabase()) return [];
+  const me = await getMember();
+  if (me?.role !== "owner") return [];
+  const db = await createDatabaseClient();
+  const { data } = await db.from("team_members").select("user_id, display_name, role").eq("role", "sales").order("display_name");
+  return (data ?? []).map((r) => ({ userId: r.user_id as string, name: r.display_name as string }));
 }

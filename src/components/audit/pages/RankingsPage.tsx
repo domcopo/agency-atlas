@@ -1,12 +1,12 @@
 // Page 2: where the demand lives and where the client ranks on the money terms.
 
-import type { AuditBundle } from "@/lib/audit/data";
+import type { AuditPageProps } from "../Slide";
 import { shortLabels } from "@/lib/audit/format";
 import { DemandBars } from "../DemandBars";
 import { PositionMatrix } from "../PositionMatrix";
 import { Slide } from "../Slide";
 
-export function RankingsPage({ bundle }: { bundle: AuditBundle }) {
+export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const names = new Map(config.markets.map((m) => [m.id, m]));
   const all = data.demand.map((d) => ({ label: names.get(d.marketId)?.name ?? d.marketId, fig: d.searches, highlight: names.get(d.marketId)?.hq }));
@@ -36,7 +36,7 @@ export function RankingsPage({ bundle }: { bundle: AuditBundle }) {
     ...config.competitors.slice(0, 3).map((c, i) => ({ domain: c.domain, label: short[i] ?? c.name })),
   ];
   return (
-    <Slide bundle={bundle} page={2} title="Local rankings & search demand" aside={config.company.region}>
+    <Slide bundle={bundle} page={pageNo ?? 2} pageCount={pageCount} title="Local rankings & search demand" aside={config.company.region}>
       <div className="audit-row" style={{ flex: 1 }}>
         <div className="audit-card" style={{ flex: 1 }}>
           <h3>Where the demand lives (searches / month)</h3>

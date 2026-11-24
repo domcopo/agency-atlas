@@ -1429,7 +1429,11 @@ create temp table sales_scope_check as
   from pg_class c join pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'public' and c.relkind in ('r', 'v')
     and c.relname not in ('ghl_opportunities', 'ghl_users', 'sales_pipelines', 'lead_touches',
-                          'sales_targets', 'lead_refreshes', 'actions', 'team_members', 'kit_docs');
+                          'sales_targets', 'lead_refreshes', 'actions', 'team_members', 'kit_docs',
+                          -- 0023: one settings row salespeople read on purpose (caps + plan prices);
+                          -- tested explicitly in 7t. audits / audit_spend / audit_user_limits stay
+                          -- in this check AND get own-rows-only checks in 7t.
+                          'audit_settings');
 do $$
 declare r record; n bigint;
 begin
@@ -1577,6 +1581,116 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
 select test.expect($$select * from public.actions where internal$$, 0, 'salesperson sees no internal work');
 select test.expect($$insert into public.actions (internal, kind, title) values (true, 'work_order', 'Sales adds (test)')$$, -1, 'salesperson cannot add internal work');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7t. Saved audits (0023): owner and managers read all; a salesperson reads only the
+--     audits they made; developers read none. Never deleted. Spending caps are enforced
+--     by the database itself.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.audit_settings', 1, 'sales reads the one audit settings row (caps, plan prices)');
+select test.expect($$insert into public.audits (id, title, sections, intake) values ('00000000-0000-0000-0000-00000000ad01', 'Sample Plumbing audit (fictional)', '{summary,heatmap}', '{"domain":"plumbing.example"}')$$, 1, 'sales saves an audit for a business typed in by hand');
+select test.expect($$insert into public.audits (id, lead_ghl_id, title, intake) values ('00000000-0000-0000-0000-00000000ad02', 'slead1', 'Lead audit (fictional)', '{}')$$, 1, 'sales saves an audit tied to a sales lead');
+select test.expect($$insert into public.audits (lead_ghl_id, title, intake) values ('olead1', 'X', '{}')$$, -1, 'sales cannot tie an audit to a lead outside the sales pipelines');
+select test.expect($$insert into public.audits (lead_ghl_id, title, intake) values ('slead3', 'X', '{}')$$, -1, 'sales cannot tie an audit to a closed lead');
+select test.expect($$insert into public.audits (title, intake, created_by) values ('X', '{}', '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot save an audit as someone else');
+select test.expect($$insert into public.audits (title, intake, archived_at) values ('X', '{}', now())$$, -1, 'an audit cannot start archived');
+select test.expect($$insert into public.audits (title, sections, intake) values ('X', '{summary,hack}', '{}')$$, -2, 'unknown checkpoints are rejected');
+select test.expect($$insert into public.audits (title, intake) values ('Call pat@example.com', '{}')$$, -2, 'audit titles refuse email addresses');
+select test.expect($$insert into public.audits (title, intake) values ('X', '[1,2]')$$, -2, 'intake must be an object');
+select test.expect($$insert into public.audits (title, kind, intake) values ('X', 'other', '{}')$$, -2, 'unknown audit kinds are rejected');
+select test.expect($$update public.audits set title = 'Renamed (fictional)', sections = '{summary,competitors}' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'sales edits their own audit');
+select test.expect($$update public.audits set archived_at = now() where id = '00000000-0000-0000-0000-00000000ad01'$$, -1, 'sales cannot archive an audit');
+select test.expect($$update public.audits set created_by = '00000000-0000-0000-0000-0000000000a7'$$, -1, 'nobody can change who made an audit');
+select test.expect($$update public.audits set lead_ghl_id = 'olead1'$$, -1, 'the lead on an audit cannot be changed');
+select test.expect($$delete from public.audits$$, -1, 'sales cannot delete audits');
+select test.expect($$update public.audit_settings set weekly_usd = 500$$, 0, 'sales cannot raise the caps');
+select test.expect($$insert into public.audit_user_limits (user_id, weekly_usd) values ('00000000-0000-0000-0000-0000000000a6', 500)$$, -1, 'sales cannot set their own cap');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect('select * from public.audits', 0, 'a salesperson cannot read another salesperson''s audits');
+select test.expect($$update public.audits set title = 'x'$$, 0, 'a salesperson cannot edit another salesperson''s audit');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad01', 'dataforseo', 0.5)$$, -1, 'a salesperson cannot spend on someone else''s audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect('select * from public.audits', 2, 'owner reads every audit');
+select test.expect($$insert into public.audits (id, title, intake) values ('00000000-0000-0000-0000-00000000ad03', 'Owner audit (fictional)', '{}')$$, 1, 'owner saves an audit');
+select test.expect($$insert into public.audits (lead_ghl_id, title, intake) values ('olead1', 'Owner lead audit (fictional)', '{}')$$, 1, 'owner may tie an audit to any lead');
+select test.expect($$insert into public.audits (id, title, intake) values ('00000000-0000-0000-0000-00000000ad04', 'Owner second audit (fictional)', '{}')$$, 1, 'owner saves a second audit');
+select test.expect($$update public.audit_settings set weekly_usd = 1, per_audit_usd = 0.75, monthly_usd = 2, agency_name = 'Sample Agency (fictional)', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner sets the caps (small, for the tests below)');
+select test.expect($$update public.audit_settings set per_audit_usd = 999, updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'absurd per-audit caps are rejected');
+select test.expect($$insert into public.audit_settings (id) values (true)$$, -1, 'there is only ever one settings row');
+select test.expect($$insert into public.audit_user_limits (user_id, weekly_usd) values ('00000000-0000-0000-0000-0000000000a7', 3)$$, 1, 'owner sets a weekly cap for one salesperson');
+select test.expect($$insert into public.audit_user_limits (user_id, weekly_usd) values ('00000000-0000-0000-0000-0000000000a1', 10)$$, 1, 'owner sets their own weekly cap (so the monthly test below is the one that bites)');
+select test.expect($$delete from public.audits$$, -1, 'even the owner cannot delete audits');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.audits', 5, 'a manager reads every audit');
+select test.expect($$update public.audit_settings set weekly_usd = 400, updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 0, 'managers cannot change the caps');
+select test.expect($$insert into public.audit_user_limits (user_id, weekly_usd) values ('00000000-0000-0000-0000-0000000000a6', 9)$$, -1, 'managers cannot set a salesperson''s cap');
+select test.expect($$update public.audits set archived_at = now() where id = '00000000-0000-0000-0000-00000000ad03'$$, 1, 'a manager archives an audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+-- Caps now: $0.75 per audit, $1 a week (this salesperson), $2 a month for everyone.
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd, at) values ('00000000-0000-0000-0000-00000000ad01', 'dataforseo', 0.5, '2020-01-01')$$, 1, 'sales records spend on their own audit (the database stamps the time)');
+select test.expect($$select * from public.audit_spend where at > now() - interval '1 minute'$$, 1, 'a back-dated spend row is stamped with now');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad01', 'dataforseo', 0.5)$$, -2, 'the per-audit cap stops a second pull on the same audit');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad02', 'semrush', 0.6)$$, -2, 'the weekly cap stops spend past $1 this week');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad02', 'semrush', 0.4)$$, 1, 'spend up to the weekly cap is allowed');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad02', 'other', 0.1)$$, -2, 'unknown data providers are rejected');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd, user_id) values ('00000000-0000-0000-0000-00000000ad02', 'dataforseo', 0.01, '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot record spend as someone else');
+select test.expect($$update public.audit_spend set usd = 0.01$$, -1, 'spend rows cannot be changed');
+select test.expect($$delete from public.audit_spend$$, -1, 'spend rows cannot be deleted');
+select test.expect('select * from public.audit_spend', 2, 'sales reads their own spend');
+select test.expect('select * from public.audit_user_limits', 0, 'sales cannot read anyone else''s cap');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad03', 'dataforseo', 0.5)$$, -1, 'nobody can spend on an archived audit');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ((select id from public.audits where lead_ghl_id = 'olead1'), 'dataforseo', 0.75)$$, 1, 'owner spends up to the per-audit cap');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad04', 'dataforseo', 0.5)$$, -2, 'the monthly cap ($2) stops spend for everyone');
+select test.expect('select * from public.audit_spend', 3, 'owner reads all spend');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.audits', 0, 'developers read no audits');
+select test.expect('select * from public.audit_settings', 0, 'developers read no audit settings');
+select test.expect('select * from public.audit_spend', 0, 'developers read no audit spend');
+select test.expect('select * from public.audit_user_limits', 0, 'developers read no audit caps');
+select test.expect($$insert into public.audits (title, intake) values ('X', '{}')$$, -1, 'developers cannot save audits');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal1"}';
+select test.expect('select * from public.audits', 0, 'sales without two-factor reads no audits');
+select test.expect($$insert into public.audits (title, intake) values ('X', '{}')$$, -1, 'sales without two-factor cannot save audits');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.audits', 0, 'someone not on the team reads no audits');
+select test.expect('select * from public.audit_settings', 0, 'someone not on the team reads no audit settings');
 commit;
 
 -- ---------------------------------------------------------------------------

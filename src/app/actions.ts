@@ -19,6 +19,7 @@ import { findSecrets } from "@/lib/kit";
 import { matchClient } from "@/lib/billing";
 import {
   getAiStatus,
+  getAuditSettings,
   getAtlasQuestions,
   getCheckInHistory,
   getActions,
@@ -57,6 +58,9 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
+import { parseAuditConfig } from "@/lib/audit/config";
+import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
+import { parseSections } from "@/lib/audit/sections";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -2280,4 +2284,150 @@ export async function matchBillingContact(_prev: { error?: string; message?: str
   if (error) return { error: `Matched, but the records didn't update (code ${error.code ?? "?"}). Refresh billing to finish.` };
   revalidatePath("/", "layout");
   return { message: `Matched to ${client.name}.` };
+}
+
+// ---------------------------------------------------------------------------
+// Saved audits (0023, docs/AUDIT_BUILDER_PLAN.md Phase A). Owner, managers and
+// salespeople save audits; the database decides who reads which. Nothing here fetches
+// data or costs money: an audit is its intake + checkpoints until results are attached.
+// ---------------------------------------------------------------------------
+
+export type AuditFormState = { error?: string; errors?: string[]; ok?: boolean } | undefined;
+
+const AUDITS_SETUP = "Saving audits needs one setup step first (0023 SQL).";
+
+export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<AuditFormState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can save audits." };
+  const id = text(form, "id", 40);
+  if (id && !isUuid(id)) return { error: "Unknown audit." };
+  const leadId = text(form, "leadId", 64);
+  if (leadId && !/^[A-Za-z0-9_-]{1,64}$/.test(leadId)) return { error: "Unknown lead." };
+  const competitors = [0, 1, 2, 3, 4].map((i) => ({ name: text(form, `comp_name_${i}`, 120), domain: text(form, `comp_domain_${i}`, 200), town: text(form, `comp_town_${i}`, 120) }));
+  const checked = parseIntake({
+    company: text(form, "company", 120),
+    domain: text(form, "domain", 300),
+    gbpUrl: text(form, "gbpUrl", 300),
+    niche: text(form, "niche", 120),
+    hqTown: text(form, "hqTown", 120),
+    state: text(form, "state", 2),
+    cities: text(form, "cities", 1200),
+    services: text(form, "services", 800),
+    avgJobUsd: text(form, "avgJobUsd", 20),
+    avgJobConfirmed: form.get("avgJobConfirmed") === "on",
+    visitToJobRate: text(form, "visitToJobRate", 10),
+    competitors,
+    modules: { dataforseo: form.get("mod_dataforseo") === "on", leadsnap: form.get("mod_leadsnap") === "on", semrush: form.get("mod_semrush") === "on" },
+    wantsAds: form.get("wantsAds") === "on",
+    notes: typeof form.get("notes") === "string" ? String(form.get("notes")).slice(0, INTAKE_LIMITS.notes + 50) : "",
+  });
+  if (!checked.ok) return { errors: checked.errors.slice(0, 8) };
+  const intake = checked.intake;
+  const sections = parseSections(form.getAll("section"));
+  // The pages must build from these settings before anything is saved.
+  const settings = await getAuditSettings();
+  const built = parseAuditConfig(buildAuditConfig(intake, settings.agency, localToday()));
+  if (!built.ok) return { errors: built.errors.slice(0, 8) };
+  const title = `${intake.company} SEO audit`.slice(0, 120);
+  const db = await createDatabaseClient();
+  let savedId = id;
+  if (id) {
+    const { data, error } = await db.from("audits").update({ title, intake, sections }).eq("id", id).select("id").maybeSingle();
+    if (error || !data) {
+      console.warn(`Audit not saved: ${error?.code ?? "no row"}`);
+      return { error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : "Couldn't save it (it may be archived, or not yours)." };
+    }
+  } else {
+    const { data, error } = await db
+      .from("audits")
+      .insert({ title, intake, sections, lead_ghl_id: leadId || null, created_by: me.userId })
+      .select("id")
+      .single();
+    if (error || !data) {
+      console.warn(`Audit not added: ${error?.code}`);
+      return {
+        error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : error?.code === "42501" ? "That lead isn't an open lead in a sales pipeline." : error?.code === "23514" ? "Something in the form was refused. Check for email addresses or phone numbers." : "Couldn't save it.",
+      };
+    }
+    savedId = data.id as string;
+  }
+  revalidatePath("/sales", "layout");
+  revalidatePath("/growth/audits");
+  redirect(`/sales/audits/${savedId}`);
+}
+
+/** Owner and managers: hide an audit (or bring it back). Never deleted. */
+export async function archiveAudit(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("audits").update({ archived_at: form.get("restore") === "1" ? null : new Date().toISOString() }).eq("id", id);
+  if (error) console.warn(`Audit archive refused: ${error.code}`);
+  revalidatePath("/sales", "layout");
+  revalidatePath("/growth/audits");
+}
+
+/** Owner: spending caps, the agency name on the pages, and the plan prices. */
+export async function saveAuditSettings(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return { error: "Only the owner can change audit settings." };
+  const money = (key: string, max: number): number | null => {
+    const n = Number(text(form, key, 12).replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) && n >= 0 && n <= max ? Math.round(n * 100) / 100 : null;
+  };
+  const perAudit = money("perAuditUsd", 50);
+  const weekly = money("weeklyUsd", 500);
+  const monthly = money("monthlyUsd", 2000);
+  if (perAudit === null) return { error: "Per-audit cap must be $0–$50." };
+  if (weekly === null) return { error: "Weekly cap must be $0–$500." };
+  if (monthly === null) return { error: "Monthly cap must be $0–$2,000." };
+  const agencyName = text(form, "agencyName", 80);
+  const agencyWebsite = text(form, "agencyWebsite", 120).replace(/^https?:\/\//i, "");
+  if (agencyWebsite && /\s/.test(agencyWebsite)) return { error: "Agency website can't contain spaces." };
+  const found = contactDetailsIn(`${agencyName} ${agencyWebsite}`);
+  if (found.length) return { error: `Leave out ${found.join(" and ")}.` };
+  const rec = text(form, "recommended", 2);
+  const rawPlans = [0, 1, 2, 3]
+    .map((i) => ({
+      name: text(form, `plan_name_${i}`, 40),
+      hoursPerMonth: Number(text(form, `plan_hours_${i}`, 6)),
+      priceUsd: Number(text(form, `plan_price_${i}`, 10).replace(/[$,\s]/g, "")),
+      summary: text(form, `plan_summary_${i}`, 120),
+      recommended: rec === String(i),
+    }))
+    .filter((p) => p.name);
+  const plans = parsePlans(rawPlans);
+  if (plans.length !== rawPlans.length) return { error: "Each plan needs a name, 1–400 hours and a price of $0–$100,000." };
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("audit_settings")
+    .update({ per_audit_usd: perAudit, weekly_usd: weekly, monthly_usd: monthly, agency_name: agencyName || null, agency_website: agencyWebsite || null, plans, updated_by: me.userId, updated_at: new Date().toISOString() })
+    .eq("id", true);
+  if (error) {
+    console.warn(`Audit settings refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? AUDITS_SETUP : "Couldn't save the settings." };
+  }
+  revalidatePath("/sales", "layout");
+  return { ok: true };
+}
+
+/** Owner: a weekly cap for one salesperson (overrides the weekly cap for everyone). */
+export async function saveAuditUserCap(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const userId = text(form, "userId", 40);
+  const n = Number(text(form, "weeklyUsd", 8).replace(/[$,\s]/g, ""));
+  if (!isUuid(userId) || !Number.isFinite(n) || n < 0 || n > 500) return;
+  const db = await createDatabaseClient();
+  const { error } = await db
+    .from("audit_user_limits")
+    .upsert({ user_id: userId, weekly_usd: Math.round(n * 100) / 100, updated_by: me.userId, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (error) console.warn(`Audit cap refused: ${error.code}`);
+  revalidatePath("/sales", "layout");
 }

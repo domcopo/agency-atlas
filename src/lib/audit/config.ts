@@ -7,7 +7,7 @@
 //
 // Pure: no database, no network, no AI.
 
-import { insidePolygon, STATES, STATE_CODES } from "./geo";
+import { insidePolygon, STATES, US_STATES } from "./geo";
 
 export type Basis = "assumption" | "client_supplied";
 
@@ -218,7 +218,7 @@ export function parseAuditConfig(raw: unknown): ConfigResult {
 
   const mp = obj(r.map) ?? {};
   const mapState = typeof mp.state === "string" ? mp.state.toUpperCase() : "";
-  if (!STATES[mapState]) errors.push(`Map state must be one of: ${STATE_CODES.join(", ")}.`);
+  if (!US_STATES[mapState]) errors.push("Map state must be a two-letter US state code, like OH.");
   const ringsMiles = (Array.isArray(mp.ringsMiles) ? mp.ringsMiles : []).slice(0, 3).map((v, i) => num(v, `Map ring ${i + 1} (miles)`, 1, 300));
   if (mp.view !== undefined && mp.view !== "state" && mp.view !== "markets") errors.push('Map view must be "state" or "markets".');
   const map: AuditConfig["map"] = { state: mapState, ringsMiles };
@@ -292,7 +292,8 @@ export function parseAuditConfig(raw: unknown): ConfigResult {
   }
   if (baselineScenario && !scenarios.some((s) => s.name === baselineScenario)) errors.push("Baseline scenario must be one of the scenarios.");
 
-  const plans = list(r.plans, "Plans", AUDIT_LIMITS.plans).map((p, i): AuditPlan => {
+  // Zero plans is allowed: the Investment section then says "prices not set" (never a made-up price).
+  const plans = list(r.plans, "Plans", AUDIT_LIMITS.plans, 0).map((p, i): AuditPlan => {
     const o = obj(p) ?? {};
     const out: AuditPlan = {
       name: text(o.name, `Plan ${i + 1} name`) ?? "",
