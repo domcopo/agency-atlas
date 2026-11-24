@@ -1,4 +1,4 @@
-// BizToad (0029, docs/BIZTOAD_PLAN.md section 10): what the AI is given for one question,
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10): what the AI is given for one question,
 // and how its answer is checked. Pure functions: no network, no database, no billing.
 // Tested in tests/toad.test.ts.
 //

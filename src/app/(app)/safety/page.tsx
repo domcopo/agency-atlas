@@ -154,7 +154,7 @@ export default async function SafetyPage() {
                 (toad.ready ? (
                   <ToadSettingsForm enabled={toad.enabled} monthlyUsd={toad.monthlyUsd} perPersonUsd={toad.perPersonUsd} />
                 ) : (
-                  <p className="text-xs text-faint">BizToad&apos;s on/off switch and caps appear here after database update 0029.</p>
+                  <p className="text-xs text-faint">BizToad&apos;s on/off switch and caps appear here after database update 0030.</p>
                 ))}
             </>
           )}

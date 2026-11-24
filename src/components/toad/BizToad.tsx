@@ -1,7 +1,7 @@
 "use client";
 
 // BizToad (docs/BIZTOAD_PLAN.md): the toad in the corner. Tapping it opens "Ask BizToad"
-// (Phase 2, 0029) for people allowed to ask, otherwise a short note with helpful links.
+// (Phase 2, 0030) for people allowed to ask, otherwise a short note with helpful links.
 // All timing and distances come from TOAD_RULES.
 //
 // - corner (computers): eyes follow a nearby mouse, a small idle move every 1–2 minutes,

@@ -1440,7 +1440,7 @@ create temp table sales_scope_check as
                           -- tested explicitly in 7u. Every other scout_ table stays in this check
                           -- AND gets own-rows / shared-pool checks in 7u.
                           'scout_settings',
-                          -- 0029: BizToad's on/off + caps row, read by everyone on the team on
+                          -- 0030: BizToad's on/off + caps row, read by everyone on the team on
                           -- purpose (tested in 7f). toad_spend stays in this check.
                           'toad_settings');
 do $$
@@ -1913,7 +1913,7 @@ select test.expect($$insert into public.care_plans (service, name) values ('SEO'
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7f. BizToad (0029): who may ask, the caps, the rate limit, add-only ledger.
+-- 7f. BizToad (0030): who may ask, the caps, the rate limit, add-only ledger.
 -- ---------------------------------------------------------------------------
 begin;
 set local role authenticated;

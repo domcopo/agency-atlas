@@ -334,7 +334,7 @@ Clients in the note are coded like [C7] and team members like [T2]; the clients 
 - Never mention codes, "client code" or that the client is unknown in the headline, titles or steps: write "the client" (the person picks the client when adding it). Use [C7] only where you would write that client's name.
 If nothing in the note, pictures or PDF describes work, return no orders and say so in the headline.`;
 
-// BizToad (0029, docs/BIZTOAD_PLAN.md section 10): one question from a team member, answered
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10): one question from a team member, answered
 // from the facts their login can read. Shown once in the chat panel; never saved.
 export const TOAD_SCHEMA = obj({
   answer: str,

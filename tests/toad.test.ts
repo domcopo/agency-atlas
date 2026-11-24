@@ -81,7 +81,7 @@ describe("when the toad may move", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 2: what the AI is given, and how its answer is checked (0029).
+// Phase 2: what the AI is given, and how its answer is checked (0030).
 // ---------------------------------------------------------------------------
 
 const roster = [

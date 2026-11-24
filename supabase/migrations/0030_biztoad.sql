@@ -1,8 +1,9 @@
 -- Agency Atlas: BizToad Phase 2, "Ask BizToad" (approved 2026-11-24, docs/BIZTOAD_PLAN.md
 -- section 10).
 --
--- Run ONCE in the Supabase SQL Editor (after 0001-0028; 0028 is client journey). Before
--- running it, check that today's daily backup exists (Supabase > Database > Backups).
+-- ALREADY RUN by the owner on 2026-11-24, under its first name 0029_biztoad.sql. Renamed
+-- 0030 when merging, because 0029 is Google Ads audits. Do NOT run it again. It doesn't
+-- depend on 0028 or 0029 (and they don't depend on it), so the order they ran in is fine.
 -- Undo steps are at the end.
 --
 -- What this adds:

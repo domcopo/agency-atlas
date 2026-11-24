@@ -1,6 +1,6 @@
 "use client";
 
-// Ask BizToad (0029, docs/BIZTOAD_PLAN.md section 10). The chat lives only in this panel:
+// Ask BizToad (0030, docs/BIZTOAD_PLAN.md section 10). The chat lives only in this panel:
 // closing it or the tab forgets everything. Answers are plain text (never HTML) and are
 // suggestions only. The server checks the role, the caps and the budget on every question.
 

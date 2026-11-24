@@ -1928,7 +1928,7 @@ async function aiPreflight(): Promise<{ error: string } | { remaining: number }>
 }
 
 // ---------------------------------------------------------------------------
-// BizToad (0029, docs/BIZTOAD_PLAN.md section 10). One question, answered from what the
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10). One question, answered from what the
 // asker's login can read. The worst-case cost is reserved in the database first (it
 // refuses past the caps, the AI budget or the rate limit). Nothing is saved but the cost.
 // ---------------------------------------------------------------------------
@@ -1945,7 +1945,7 @@ function toadRefusal(message: string | undefined, code: string | undefined): str
   if (m.includes("toad: over the AI budget")) return "This month's AI budget is used up. It resets on the 1st.";
   if (m.includes("toad: off")) return "BizToad is switched off right now.";
   if (code === "42501") return "Asking BizToad isn't switched on for your role.";
-  if (MISSING_TABLE.has(code ?? "")) return "Asking BizToad needs database update 0029 first.";
+  if (MISSING_TABLE.has(code ?? "")) return "Asking BizToad needs database update 0030 first.";
   return "BizToad couldn't check the budget just now. Nothing was spent. Try again in a minute.";
 }
 
@@ -1954,7 +1954,7 @@ export async function askToad(question: unknown, history: unknown): Promise<Toad
   const me = await getCurrentMember();
   if (!me) return { error: "Please sign in again." };
   const status = await getToadStatus();
-  if (!status.ready) return { error: "Asking BizToad needs database update 0029 first." };
+  if (!status.ready) return { error: "Asking BizToad needs database update 0030 first." };
   if (!status.enabled) return { error: "BizToad is switched off right now." };
   if (!status.roles.includes(me.role)) return { error: "Asking BizToad isn't switched on for your role yet." };
   if (!isAiConfigured()) return { error: "The AI isn't set up yet." };
@@ -2048,7 +2048,7 @@ export async function setToadSettings(_prev: { error?: string; ok?: boolean } | 
     .update({ enabled: form.get("enabled") === "on", monthly_usd: Math.round(monthly * 100) / 100, per_person_usd: Math.round(perPerson * 100) / 100 })
     .eq("id", true)
     .select("id");
-  if (error && MISSING_TABLE.has(error.code ?? "")) return { error: "This needs database update 0029 first." };
+  if (error && MISSING_TABLE.has(error.code ?? "")) return { error: "This needs database update 0030 first." };
   if (error || !data?.length) return { error: "Couldn't save. Nothing changed." };
   revalidatePath("/", "layout");
   return { ok: true };

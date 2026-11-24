@@ -85,7 +85,7 @@ Smaller choices with sensible defaults (say if you want them different): BizToad
 - **Conversation length:** the panel keeps the last 6 back-and-forths so follow-up questions work; older ones are dropped to keep each question cheap.
 - **Rate limit:** at most 1 question every 5 seconds and 30 per hour per person, enforced by the database (see below).
 
-### Database change (`0029_biztoad.sql`; `0028` is taken by client journey, see Phase 2 details)
+### Database change (`0030_biztoad.sql`; first written and run as 0029, renamed when merging because 0029 is Google Ads audits)
 
 Today the database only lets the owner and managers use the AI (the `ai_usage` insert rule from `0005`). So BizToad needs one migration, which the owner runs in the SQL Editor:
 
@@ -93,7 +93,7 @@ Today the database only lets the owner and managers use the AI (the `ai_usage` i
 - `toad_settings` (one row, owner edits): on/off for everyone, which roles may ask, the monthly total cap and the per-person cap.
 - `toad_spend`: an add-only ledger, copied from the Scout pattern. Before each question, the app writes the worst-case cost; a database trigger refuses it if it would pass the person's cap, the BizToad total, or the whole AI budget, or if it breaks the rate limit. Each person reads only their own rows, so the panel can show "you've used $1.20 of $5 this month". (The check uses real spending so far plus this question's worst case; see Phase 2 details.)
 - Every new table gets RLS, the two-factor (`aal2`) rule, no update/delete grants, and break-in tests in `supabase/tests/10_rls_break_in.sql`.
-- App code keeps working before `0029` is run: the toad shows "Asking needs database update 0029".
+- App code keeps working before `0030` is run: the toad shows "Asking needs database update 0030".
 
 ## 6. Voice
 
@@ -133,7 +133,7 @@ Prices from `src/lib/ai/budget.ts` (Claude Opus 5.5: $4 per million input tokens
 |---|---|---|---|
 | **0. This plan** | Decisions above. | $0 | Owner has answered decisions 1–5. |
 | **1. The toad (no AI)** | SVG drawing, eye-follow, blink/idle, reduce motion, tuck-away, hide switch, desktop corner (+ phone icon if chosen). Tapping it opens a panel that says "Ask BizToad is coming soon" with links to Smart add and the briefing. No database change. | $0 | Unit tests for the pure math in `src/lib/toad.ts` (eye offset stays within 4 px; no follow past 200 px; idle wait always 60–120 s; nothing moves when reduce motion is on). Checked by hand in Chrome and Safari: eyes follow, a blink happens, the toad tucks away over a button, hide sticks after reload. `npm run check` passes. No new package in `package.json`. |
-| **2. Ask BizToad (text), owner + managers** | Migration `0029`; `askToad` server action in `src/app/actions.ts` (starts with `notWhilePreviewing()`); role-aware fact builder `src/lib/ai/toad-snapshot.ts`; `TOAD_SCHEMA`/`TOAD_TASK` in `client.ts`; usage meter in the panel. | ~$10–35/mo, inside the cap | Break-in tests: a developer/sales login can't add `ask_toad` rows yet (until Phase 3), can't read others' spend; caps and rate limit refuse over-limit inserts. Guardrail tests: the toad builder imports no billing code; no tools sent; every answer link is an allowed in-app path. A manager's question never includes client money. Every question adds one `ai_usage` row. Works with "needs 0029" before the migration. |
+| **2. Ask BizToad (text), owner + managers** | Migration `0030`; `askToad` server action in `src/app/actions.ts` (starts with `notWhilePreviewing()`); role-aware fact builder `src/lib/ai/toad-snapshot.ts`; `TOAD_SCHEMA`/`TOAD_TASK` in `client.ts`; usage meter in the panel. | ~$10–35/mo, inside the cap | Break-in tests: a developer/sales login can't add `ask_toad` rows yet (until Phase 3), can't read others' spend; caps and rate limit refuse over-limit inserts. Guardrail tests: the toad builder imports no billing code; no tools sent; every answer link is an allowed in-app path. A manager's question never includes client money. Every question adds one `ai_usage` row. Works with "needs 0030" before the migration. |
 | **3. Developers and sales + work order drafts** | Turn on the roles the owner approved (setting, no new code path). Role-specific fact builders. "Review and add" hands a draft to the existing Smart add confirm screen. | inside the same cap | Break-in tests: a developer's question can't pull another developer's work or any revenue; a salesperson's can't pull client money. A draft is never saved without a Confirm tap. |
 | **4. Push-to-talk + read-aloud** | Mic and speaker buttons; mouth animation. | $0 extra | Mic hidden where unsupported; text appears for review before sending; read-aloud stops on demand; privacy note shown next to the mic. |
 | **5. Real-time voice call (optional)** | Separate plan: vendor choice, privacy review, package approval, cost cap. | per decision 4 | Its own plan doc and approval. |
@@ -152,9 +152,9 @@ Prices from `src/lib/ai/budget.ts` (Claude Opus 5.5: $4 per million input tokens
 
 ## 10. Phase 2 in detail: Ask BizToad (text), owner + managers
 
-**Built 2026-11-24 (approved the same day); `0029` not run yet.** This is the first BizToad step that changes the database and spends AI money.
+**Built 2026-11-24 (approved the same day); database update run the same day.** This is the first BizToad step that changes the database and spends AI money.
 
-Built: `supabase/migrations/0029_biztoad.sql` + break-in tests (section 7f), `src/lib/ai/toad-snapshot.ts`, `TOAD_SCHEMA`/`TOAD_TASK`/`textRequestWorstCase` in `client.ts`, `getToadStatus` in `data-source.ts`, `askToad`/`setToadSettings` in `actions.ts`, `ToadChat.tsx`, `ToadSettingsForm.tsx` (Safety page), `ask_toad` in `bot-runs.ts`. Small differences from the text below: the facts also include recent check-in notes per client (trimmed first when too long, emails/phones blanked); the "who may ask" roles setting exists in the database but has no screen yet (Phase 3). `0029` was run by the owner 2026-11-24.
+Built: `supabase/migrations/0030_biztoad.sql` + break-in tests (section 7f), `src/lib/ai/toad-snapshot.ts`, `TOAD_SCHEMA`/`TOAD_TASK`/`textRequestWorstCase` in `client.ts`, `getToadStatus` in `data-source.ts`, `askToad`/`setToadSettings` in `actions.ts`, `ToadChat.tsx`, `ToadSettingsForm.tsx` (Safety page), `ask_toad` in `bot-runs.ts`. Small differences from the text below: the facts also include recent check-in notes per client (trimmed first when too long, emails/phones blanked); the "who may ask" roles setting exists in the database but has no screen yet (Phase 3). The owner ran it 2026-11-24 as `0029_biztoad.sql`; renamed `0030` when merging into main (Google Ads audits took 0029). It must not be run again.
 
 **Hand check 2026-11-24** (owner login, this branch run locally against the real database; 5 questions, about $0.29 in total):
 - An overdue-work question got a correct-looking answer: 5 sourced points, 3 links all from the allowed list, about 6¢.
@@ -202,25 +202,25 @@ Size limit: about 45,000 characters of facts (≈15,000 tokens); if there's more
 6. Cost logged to `ai_usage` as `ask_toad` (also when the AI fails).
 7. Codes swapped back to names on your screen only; links kept only if they match a screen on your role's list; answer shown as plain text.
 
-### Database update `0029_biztoad.sql` (you run it in the SQL Editor)
+### Database update `0030_biztoad.sql` (you run it in the SQL Editor)
 
-`0028` is already used by the client journey update in another session, so this is `0029` (please confirm the order).
+`0028` is already used by the client journey update in another session, so this is `0030` (please confirm the order).
 
 - **`ai_usage`:** allow the feature name `ask_toad` (keeping all the existing names). New rule: a person may add an `ask_toad` row only for themselves and only if their role is switched on in `toad_settings`. Reading the cost log stays owner/managers only.
 - **`toad_settings`** (one row): `enabled` (on/off for everyone, default on), `roles` (default owner + managers), `monthly_usd` (default $25, max $200), `per_person_usd` (default $5, max $50). Everyone on the team can read it (so the app knows whether to show the toad); only the owner can change it.
 - **`toad_spend`** (add-only ledger, like Scout's): who, how much (≤ $1 per row), when. The database stamps who and when itself. Before accepting a row, a guard adds this question's worst case to what was **actually spent** this month (the real costs in `ai_usage`) and refuses it past the caps or the whole-app budget; it also applies the rate limit. Counting real costs (not every worst case) means $5 really buys about 100 typical questions; the 5-second rate limit stops two questions slipping through at once. You read your own rows; owner and managers read all. Nobody can edit or delete rows.
 - All tables: RLS on, the two-factor (`aal2`) rule, no delete grants.
-- **Before you run it,** the toad still shows and says "Asking needs database update 0029"; nothing else changes.
+- **Before you run it,** the toad still shows and says "Asking needs database update 0030"; nothing else changes.
 
 ### Files
 
 | File | What changes |
 |---|---|
-| `supabase/migrations/0029_biztoad.sql` | New (above). |
+| `supabase/migrations/0030_biztoad.sql` | New (above). |
 | `supabase/tests/10_rls_break_in.sql` | New break-in tests (below). |
 | `src/lib/ai/client.ts` | Add `TOAD_SCHEMA` and `TOAD_TASK` (answer format and instructions). No other change. |
 | `src/lib/ai/toad-snapshot.ts` | New, pure: turns what was read into the coded fact list; trims to the size limit; checks links against the screen list. |
-| `src/lib/data-source.ts` | `getToadSettings()`, `getMyToadSpend()`, with "needs 0029" fallbacks. |
+| `src/lib/data-source.ts` | `getToadSettings()`, `getMyToadSpend()`, with "needs 0030" fallbacks. |
 | `src/app/actions.ts` | `askToad` (the steps above) and `setToadSettings` (owner only). |
 | `src/components/toad/ToadChat.tsx` | New: the chat panel (question box, answers, meter, Clear). |
 | `src/components/toad/BizToad.tsx` | Opens `ToadChat` instead of "coming soon" when asking is allowed; "thinking" look. |
@@ -234,7 +234,7 @@ Size limit: about 45,000 characters of facts (≈15,000 tokens); if there's more
 - **Fact builder tests:** the facts never contain money fields (`monthly_usd`, amounts, invoices) or emails/phone numbers, for either role; client and team names in a question become codes; trimming keeps the most urgent items; a link to an outside website or a screen not on the role's list is dropped.
 - **Guardrail tests:** `toad-snapshot.ts` and `askToad` import nothing from billing; `client.ts` still sends no tools; `askToad` starts with `notWhilePreviewing()`; still no `dangerouslySetInnerHTML`.
 - `npm run check` passes (lint, type check, tests, build).
-- **Checked by hand** on your live app after you run `0029`, with your OK, because it spends real AI money (well under $1): the five example questions as owner and as a manager; a manager's answer shows no client money; each question adds one row to the AI cost log; turning BizToad off on the Safety page hides it for everyone.
+- **Checked by hand** on your live app after you run `0030`, with your OK, because it spends real AI money (well under $1): the five example questions as owner and as a manager; a manager's answer shows no client money; each question adds one row to the AI cost log; turning BizToad off on the Safety page hides it for everyone.
 
 ### Cost and limits
 

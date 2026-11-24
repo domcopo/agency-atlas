@@ -32,7 +32,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const mode = developer ? "developer" : sales ? "sales" : "full";
   const ordersHref = developer ? "/work" : "/work/orders";
   const cookieJar = await cookies();
-  // BizToad: shown, still, or hidden on this device; the owner can switch it off for everyone (0029).
+  // BizToad: shown, still, or hidden on this device; the owner can switch it off for everyone (0030).
   const toad = await getToadStatus();
   const toadMode = toad.ready && !toad.enabled ? "hidden" : parseToadMode(cookieJar.get(TOAD_COOKIE)?.value);
   // Asking (Phase 2): owner and managers whose role is switched on, outside a preview.
@@ -40,7 +40,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const toadNote = !usesDatabase()
     ? "Asking me needs the real database (this is the demo)."
     : !toad.ready && isLead(member?.role)
-      ? "Asking me needs database update 0029 first."
+      ? "Asking me needs database update 0030 first."
       : undefined;
   const toadLinks = developer
     ? [{ label: "Your work", href: "/work" }]

@@ -1,6 +1,6 @@
 "use client";
 
-// Safety page, owner only: BizToad on/off for everyone and its two monthly caps (0029).
+// Safety page, owner only: BizToad on/off for everyone and its two monthly caps (0030).
 // The database refuses changes from anyone but the owner, and checks the limits too.
 
 import { useActionState } from "react";

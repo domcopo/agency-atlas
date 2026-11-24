@@ -1771,11 +1771,11 @@ const emptyAi = (configured: boolean, tablesReady: boolean): AiStatus => ({
 });
 
 // ---------------------------------------------------------------------------
-// BizToad (0029, docs/BIZTOAD_PLAN.md section 10): on/off, who may ask, caps, my spend.
+// BizToad (0030, docs/BIZTOAD_PLAN.md section 10): on/off, who may ask, caps, my spend.
 // ---------------------------------------------------------------------------
 
 export interface ToadStatus {
-  /** False before 0029 is run (or without a database). */
+  /** False before 0030 is run (or without a database). */
   ready: boolean;
   enabled: boolean;
   roles: MemberRole[];

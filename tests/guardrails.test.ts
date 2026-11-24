@@ -388,7 +388,7 @@ describe("AI read-only + budget (Phase 4)", () => {
   });
 });
 
-describe("BizToad (0029)", () => {
+describe("BizToad (0030)", () => {
   const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
   const ask = (() => {
     const start = actions.indexOf("export async function askToad(");
