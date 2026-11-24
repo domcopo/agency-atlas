@@ -12,6 +12,8 @@
 
 import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
+import { WATCH_SAMPLE_TODAY, watchSample, watchSampleOpportunities, watchSampleRoom, type SampleOpportunity } from "@/fixtures/watch-sample";
+import type { WatchData } from "@/lib/watch/compute";
 import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
 import { parseSections, type AuditSectionId } from "@/lib/audit/sections";
@@ -2205,4 +2207,22 @@ export async function getSalespeople(): Promise<{ userId: string; name: string }
   const db = await createDatabaseClient();
   const { data } = await db.from("team_members").select("user_id, display_name, role").eq("role", "sales").order("display_name");
   return (data ?? []).map((r) => ({ userId: r.user_id as string, name: r.display_name as string }));
+}
+
+// ---------------------------------------------------------------- SEO Watcher (docs/SEO_WATCHER_PLAN.md)
+
+export interface WatchPreview {
+  sample: true;
+  today: string;
+  data: WatchData;
+  opportunities: SampleOpportunity[];
+  room: typeof watchSampleRoom;
+}
+
+/**
+ * The Watcher's "Preview with sample data": fictional businesses only, always labeled,
+ * never mixed with real clients (Phase A has no real Watcher data yet).
+ */
+export function getWatchPreview(): WatchPreview {
+  return { sample: true, today: WATCH_SAMPLE_TODAY, data: watchSample, opportunities: watchSampleOpportunities, room: watchSampleRoom };
 }

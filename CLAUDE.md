@@ -56,6 +56,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
 | Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
 | Audit builder in Sales (checkpoints, saved audits, caps, custom prompt) | `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
+| SEO Watcher (rankings board, demand, opportunity markets; Phase A = sample preview) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |
 | Trash and Delete forever | `docs/TRASH_PLAN.md` |
