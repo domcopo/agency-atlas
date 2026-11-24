@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { mayMove, nextIdleDelay, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
 import { buildCodebook, buildStaffBook } from "@/lib/ai/snapshot";
-import { buildToadFacts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
+import { buildToadFacts, pipelineCounts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, scrubMoney, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
 import type { RosterClient } from "@/lib/types";
 
 const eye = { x: 100, y: 100 };
@@ -150,6 +150,43 @@ describe("BizToad facts never carry money or contact details", () => {
     expect(facts.clients.some((c) => "recent_contact_notes" in c)).toBe(false);
     expect((facts.clients[0] as { code: string }).code).toBe("C1"); // most urgent kept
     expect(facts.open_work_orders.length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("BizToad never passes on dollar amounts written in text", () => {
+  it("blanks amounts in notes, reasons and titles", () => {
+    expect(scrubMoney("Multi-service client at $750/mo, was $1,200 a month")).toBe("Multi-service client at [amount removed], was [amount removed]");
+    expect(scrubMoney("Grade A · $750–$1.2K/mo potential")).not.toMatch(/\$/);
+    expect(scrubMoney("USD 300 per month")).toBe("[amount removed]");
+    expect(scrubMoney("they pay 750/mo, maybe 1.2K per month")).toBe("they pay [amount removed], maybe [amount removed]");
+    expect(scrubMoney("3 items, 8 open hours, due 2026-11-20")).toBe("3 items, 8 open hours, due 2026-11-20");
+  });
+
+  it("the sales pipeline goes in as counts only, never deal values", () => {
+    const p = pipelineCounts({
+      synced_at: "2026-11-24",
+      open_deals: { count: 315, value: 84610.97 },
+      by_stage: [{ stage: "New", count: 2, value: 999 } as { stage: string; count: number }],
+      new_this_month: 3,
+      won_this_month: { count: 1, value: 155 },
+      lost_this_month: 0,
+      appointments_next_7_days: 2,
+      showed_last_30_days: 1,
+      no_shows_last_30_days: 0,
+    });
+    expect(p?.open_deals).toBe(315);
+    expect(JSON.stringify(p)).not.toMatch(/84610|155|999/);
+    // Second lock: a { count, value } pair loses its value wherever it appears.
+    expect(stripMoney({ deals: { count: 4, value: 5000 }, health_score: { value: 62 } })).toEqual({ deals: { count: 4 }, health_score: { value: 62 } });
+  });
+
+  it("no $ figure survives in the facts or in an answer", () => {
+    const input = baseInput();
+    input.clients[0] = { code: "C1", health: { reasons: ["Only multi-service client at $750/mo"] } };
+    input.rankedPlan = [{ why: ["$950/mo at risk"] }];
+    expect(JSON.stringify(buildToadFacts(input))).not.toMatch(/\$\d/);
+    const a = restoreToadAnswer({ answer: "[C1] pays $950/mo.", points: [{ text: "Was $500", source: "notes" }], unknowns: [], links: [] }, book, staff, TOAD_SCREENS.full);
+    expect(JSON.stringify(a)).not.toMatch(/\$\d/);
   });
 });
 

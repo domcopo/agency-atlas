@@ -12,7 +12,7 @@ import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { askAi, isAiConfigured, textRequestWorstCase, TOAD_SCHEMA, TOAD_TASK, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
-import { buildToadFacts, cleanHistory, cleanQuestion, restoreToadAnswer, TOAD_LIMITS, TOAD_SCREENS, type ToadAnswer } from "@/lib/ai/toad-snapshot";
+import { buildToadFacts, cleanHistory, cleanQuestion, pipelineCounts, restoreToadAnswer, TOAD_LIMITS, TOAD_SCREENS, type ToadAnswer } from "@/lib/ai/toad-snapshot";
 import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
 import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
@@ -2017,8 +2017,8 @@ export async function askToad(question: unknown, history: unknown): Promise<Toad
       return { rank: i + 1, why: p.why ?? [], client: slug ? (book.codeOf.get(slug) ?? null) : null, item: redactStaff(redact(p.action ? p.action.title : p.title, book), staff) };
     }),
     riskAlerts: ops.risks.slice(0, 8).map((r) => ({ client: book.codeOf.get(r.client.slug) ?? null, severity: r.severity, score: r.score, problem: redact(r.problem, book) })),
-    // Counts only: the stage values are money and stay out.
-    pipeline: ghl ? { ...ghl, by_stage: ghl.by_stage.map((b) => ({ stage: b.stage, count: b.count })) } : null,
+    // Counts only: deal values are money and stay out.
+    pipeline: pipelineCounts(ghl),
   });
 
   const data = { question: q, conversation, facts };

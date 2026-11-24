@@ -57,15 +57,25 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const PHONE = /(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 
+// Dollar amounts typed into notes, reasons or titles ("$750/mo", "$1.2K", "USD 300").
+// Also bare "750/mo" or "1.2K per month" with no dollar sign.
+const DOLLARS =
+  /(?:\$|\bUSD\s?)\s?\d[\d,]*(?:\.\d+)?\s?(?:[kKmM]\b)?(?:\s?(?:\/\s?(?:mo|month|yr|year)\b|(?:a|per)\s(?:month|year)))?|\b\d[\d,]*(?:\.\d+)?\s?[kK]?\s?(?:\/\s?(?:mo|month)\b|per\smonth\b)/g;
+
 /** Emails and phone numbers in free text are blanked before anything is sent. */
 export function scrubContacts(text: string): string {
   return text.replace(EMAIL, "[email removed]").replace(PHONE, "[phone removed]");
 }
 
+/** Dollar amounts in free text are blanked too: BizToad never sees or repeats money. */
+export function scrubMoney(text: string): string {
+  return text.replace(DOLLARS, "[amount removed]");
+}
+
 /** The asker's question: hidden characters out, length capped, names → codes, contacts blanked. */
 export function cleanQuestion(raw: unknown, book: Codebook, staff: StaffBook): string {
   const t = typeof raw === "string" ? raw.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.questionChars) : "";
-  return scrubContacts(redactStaff(redact(t, book), staff));
+  return scrubMoney(scrubContacts(redactStaff(redact(t, book), staff)));
 }
 
 export type ToadTurn = { q: string; a: string };
@@ -77,7 +87,7 @@ export type ToadTurn = { q: string; a: string };
 export function cleanHistory(raw: unknown, book: Codebook, staff: StaffBook): ToadTurn[] {
   if (!Array.isArray(raw)) return [];
   const one = (v: unknown) =>
-    typeof v === "string" ? scrubContacts(redactStaff(redact(v.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.historyChars), book), staff)) : "";
+    typeof v === "string" ? scrubMoney(scrubContacts(redactStaff(redact(v.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.historyChars), book), staff))) : "";
   return raw
     .slice(-TOAD_LIMITS.historyTurns)
     .map((t) => (typeof t === "object" && t !== null ? { q: one((t as ToadTurn).q), a: one((t as ToadTurn).a) } : { q: "", a: "" }))
@@ -90,14 +100,44 @@ export const MONEY_KEY = /usd|amount|price|revenue|invoice|payment|monetary|bill
 /** A copy with every money-looking field removed and every string scrubbed of contacts. */
 export function stripMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripMoney);
-  if (typeof value === "string") return scrubContacts(value);
+  if (typeof value === "string") return scrubMoney(scrubContacts(value));
   if (typeof value !== "object" || value === null) return value;
   const out: Record<string, unknown> = {};
+  // { count, value } pairs (deals, stages) carry a money total in "value".
+  const counted = "count" in value;
   for (const [k, v] of Object.entries(value)) {
-    if (MONEY_KEY.test(k)) continue;
+    if (MONEY_KEY.test(k) || (counted && k === "value")) continue;
     out[k] = stripMoney(v);
   }
   return out;
+}
+
+type Counted = { count: number; value?: number };
+
+/** The sales pipeline as COUNTS only (deal values are money and stay out). */
+export function pipelineCounts(p: {
+  synced_at: string;
+  open_deals: Counted;
+  by_stage: { stage: string; count: number }[];
+  new_this_month: number;
+  won_this_month: Counted;
+  lost_this_month: number;
+  appointments_next_7_days: number;
+  showed_last_30_days: number;
+  no_shows_last_30_days: number;
+} | null) {
+  if (!p) return null;
+  return {
+    synced_at: p.synced_at,
+    open_deals: p.open_deals.count,
+    deals_by_stage: p.by_stage.map((b) => ({ stage: b.stage, deals: b.count })),
+    new_this_month: p.new_this_month,
+    won_this_month: p.won_this_month.count,
+    lost_this_month: p.lost_this_month,
+    appointments_next_7_days: p.appointments_next_7_days,
+    showed_last_30_days: p.showed_last_30_days,
+    no_shows_last_30_days: p.no_shows_last_30_days,
+  };
 }
 
 export interface ToadFactsInput {
@@ -197,8 +237,9 @@ export function safeToadLinks(raw: unknown, screens: ToadScreen[]): ToadScreen[]
 /** The AI's answer → plain, length-limited text with names swapped back in. */
 export function restoreToadAnswer(raw: unknown, book: Codebook, staff: StaffBook, screens: ToadScreen[]): ToadAnswer {
   const r = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  // Second lock: any amount that still slipped in is blanked on the way out, too.
   const t = (v: unknown, max: number) =>
-    restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff);
+    scrubMoney(restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff));
   const list = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n) : []);
   return {
     answer: t(r.answer, 1200) || "Sorry, I couldn't put an answer together. Try asking another way.",
