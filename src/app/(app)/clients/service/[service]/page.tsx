@@ -5,7 +5,7 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { RosterBrowser, type RosterRow } from "@/components/cards/RosterBrowser";
 import { Provenance, healthStyle } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getActions, getClientHealth, getRosterSource, getServiceGroup, getToday, tierOf } from "@/lib/data-source";
+import { getActions, getCarePlans, getClientHealth, getRosterSource, getServiceGroup, getToday, tierOf } from "@/lib/data-source";
 import { describeTenure, formatUsdExact } from "@/lib/format";
 import type { HealthLevel } from "@/lib/types";
 
@@ -31,6 +31,15 @@ export default async function ServiceGroupPage({ params }: Props) {
     health: h?.level,
   }));
   const levels: HealthLevel[] = ["healthy", "watch", "at_risk"];
+  // Plan tiers for this service (0024): how many current clients are on each.
+  const { plans } = await getCarePlans();
+  const tiers = group.service
+    ? plans
+        .filter((p) => p.service === group.service)
+        .map((p) => ({ plan: p, count: group.clients.filter((c) => c.plans?.some((cp) => cp.planId === p.id)).length }))
+        .filter((t) => !t.plan.archived || t.count > 0)
+    : [];
+  const noTier = group.service ? group.clients.filter((c) => !c.plans?.some((cp) => cp.service === group.service)).length : 0;
 
   return (
     <>
@@ -44,8 +53,8 @@ export default async function ServiceGroupPage({ params }: Props) {
 
       <GlassCard className="grid grid-cols-2 gap-2 text-center">
         <div>
-          <p className="font-display text-xl font-bold">{formatUsdExact(group.activeMrr)}</p>
-          <p className="text-[11px] text-muted">Active / month</p>
+          <p className="font-display text-xl font-bold">{group.moneyShown ? formatUsdExact(group.activeMrr) : group.activeCount}</p>
+          <p className="text-[11px] text-muted">{group.moneyShown ? "Active / month" : "Active"}</p>
         </div>
         <div>
           <p className="font-display text-xl font-bold">{group.clients.length}</p>
@@ -57,6 +66,35 @@ export default async function ServiceGroupPage({ params }: Props) {
         <p className="mt-2 px-1 text-xs text-muted">
           These clients don&apos;t have a service recorded yet. Atlas asks on Home will ask about them, a few at a time.
         </p>
+      )}
+
+      {tiers.length > 0 && (
+        <>
+          <SectionTitle>By plan tier</SectionTitle>
+          <GlassCard padding="none">
+            <ul className="divide-y divide-line">
+              {tiers.map(({ plan, count }) => (
+                <li key={plan.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">
+                      {plan.name}
+                      {plan.topTier && <span className="ml-1.5 text-[11px] font-normal text-violet">top tier</span>}
+                      {plan.archived && <span className="ml-1.5 text-[11px] font-normal text-faint">archived</span>}
+                    </span>
+                    {plan.hoursPerMonth !== null && <span className="block text-[11px] text-muted">Up to {plan.hoursPerMonth} hours a month</span>}
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold">{count}</span>
+                </li>
+              ))}
+              {noTier > 0 && (
+                <li className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="text-sm text-amber">No tier set yet</span>
+                  <span className="shrink-0 text-sm font-semibold text-amber">{noTier}</span>
+                </li>
+              )}
+            </ul>
+          </GlassCard>
+        </>
       )}
 
       <SectionTitle aside={<HeartPulse aria-hidden className="size-4 text-faint" />}>Health</SectionTitle>
@@ -71,7 +109,7 @@ export default async function ServiceGroupPage({ params }: Props) {
 
       <SectionTitle>Clients</SectionTitle>
       {rows.length ? (
-        <RosterBrowser clients={rows} />
+        <RosterBrowser clients={rows} showMoney={group.moneyShown} />
       ) : (
         <p className="px-1 text-sm text-muted">No current clients in this group.</p>
       )}

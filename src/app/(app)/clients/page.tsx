@@ -1,5 +1,5 @@
 import { RiskAlerts } from "@/components/cards/RiskAlerts";
-import { BellRing, ChevronRight, HeartPulse, Layers, RotateCcw } from "lucide-react";
+import { BellRing, ChevronRight, HeartPulse, Layers, Plus, RotateCcw } from "lucide-react";
 import type { Metadata } from "next";
 import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -14,6 +14,7 @@ import { CHECK_IN_DAYS, getActions, getBilling, getClientHealth, getMember, getO
 import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { WinLossSection } from "@/components/cards/WinLossSection";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
+import { byImportance } from "@/lib/ops";
 import type { HealthLevel } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Clients" };
@@ -49,25 +50,34 @@ export default async function ClientsPage() {
   const noNextIds = new Set(ops.gaps.noNextAction.map((c) => c.id));
   const gapClients = ops.clients
     .filter((c) => c.status === "active" && (!c.ownerId || noNextIds.has(c.id)))
-    .sort((a, b) => Number(Boolean(a.ownerId)) - Number(Boolean(b.ownerId)) || b.monthlyUsd - a.monthlyUsd);
+    .sort((a, b) => Number(Boolean(a.ownerId)) - Number(Boolean(b.ownerId)) || byImportance(a, b));
+  const money = summary.moneyShown;
 
   return (
     <>
       <PageHeader
         title="Clients"
         subtitle={`${summary.activeCount} active · ${summary.total} total`}
-        action={<Provenance kind={summary.source !== "demo" ? "real" : "demo"} />}
+        action={
+          usesDatabase() && member && isLead(member.role) ? (
+            <Link href="/clients/new" className="pressable flex min-h-11 items-center gap-1 rounded-2xl bg-violet-deep px-3 text-xs font-semibold">
+              <Plus aria-hidden className="size-4" /> Add client
+            </Link>
+          ) : (
+            <Provenance kind={summary.source !== "demo" ? "real" : "demo"} />
+          )
+        }
       />
 
       {/* Wide screens: the totals with the owner's setup links beside them. */}
       <div className={member?.role === "owner" ? "lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-x-8 lg:gap-y-3 xl:gap-x-10" : undefined}>
-      <GlassCard className="grid grid-cols-3 gap-2 text-center lg:row-span-2 lg:items-center">
+      <GlassCard className="grid grid-cols-3 gap-2 text-center lg:row-span-3 lg:items-center">
         <div>
-          <p className="font-display text-xl font-bold lg:text-3xl">{formatUsdExact(summary.activeMrr)}</p>
-          <p className="text-[11px] text-muted">Active / month</p>
+          <p className="font-display text-xl font-bold lg:text-3xl">{money ? formatUsdExact(summary.activeMrr) : summary.activeCount}</p>
+          <p className="text-[11px] text-muted">{money ? "Active / month" : "Active"}</p>
         </div>
         <div>
-          <p className="font-display text-xl font-bold text-amber lg:text-3xl">{formatUsdExact(summary.pausedMrr)}</p>
+          <p className="font-display text-xl font-bold text-amber lg:text-3xl">{money ? formatUsdExact(summary.pausedMrr) : summary.pausedCount}</p>
           <p className="text-[11px] text-muted">{summary.pausedCount} paused</p>
         </div>
         <div>
@@ -79,7 +89,14 @@ export default async function ClientsPage() {
       {member?.role === "owner" && (
         <Link href="/clients/setup" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl border border-violet/30 px-4 text-sm">
           <span className="font-semibold">Set up clients</span>
-          <span className="text-xs text-violet">Owners + plans, one screen →</span>
+          <span className="text-xs text-violet">Owners, tiers, VIP →</span>
+        </Link>
+      )}
+
+      {member?.role === "owner" && (
+        <Link href="/clients/plans" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl px-4 text-sm">
+          <span>Plan tiers</span>
+          <span className="text-xs text-violet">Starter, Growth, Pro… →</span>
         </Link>
       )}
 
@@ -126,7 +143,7 @@ export default async function ClientsPage() {
                 <span className="block text-[11px] text-muted">
                   {g.activeCount} active{g.pausedCount ? ` · ${g.pausedCount} paused` : ""}
                 </span>
-                <span className="block text-[11px] text-faint">{formatUsdExact(g.activeMrr)}/mo</span>
+                {money && <span className="block text-[11px] text-faint">{formatUsdExact(g.activeMrr)}/mo</span>}
               </span>
               <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" />
             </Link>
@@ -192,7 +209,7 @@ export default async function ClientsPage() {
                   <Link href={`/clients/${client.id}`} className="pressable min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">{client.name}</span>
                     <span className="block text-xs text-muted">
-                      {formatUsdExact(client.monthlyUsd)}/mo on hold · paused
+                      {client.monthlyUsd === null ? "Paused" : `${formatUsdExact(client.monthlyUsd)}/mo on hold · paused`}
                     </span>
                   </Link>
                   <CopyButton text={script} label={`Copy win-back message for ${client.name}`} />
@@ -200,7 +217,7 @@ export default async function ClientsPage() {
               ))}
             </ul>
             <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
-              {formatUsdExact(summary.pausedMrr)}/mo on hold. &ldquo;Copy&rdquo; copies a short check-in message
+              {money ? `${formatUsdExact(summary.pausedMrr)}/mo on hold. ` : ""}&ldquo;Copy&rdquo; copies a short check-in message
               to paste into GoHighLevel or your phone. This app never sends anything.
             </p>
           </GlassCard>
@@ -218,14 +235,16 @@ export default async function ClientsPage() {
       )}
 
       <div className="mt-5">
-        <RosterBrowser clients={rows} />
+        <RosterBrowser clients={rows} showMoney={money} />
       </div>
 
       <WinLossSection winLoss={winLoss} real={rosterSource !== "demo"} />
 
       <p className="mt-6 px-1 text-[11px] text-faint">
         {summary.source !== "demo"
-          ? "Monthly amounts are your plan amounts, not payments. Payment status (owner only) comes from Billing."
+          ? money
+            ? "Monthly amounts are your plan amounts, not payments, and only you can see them. Payment status comes from Billing."
+            : "Plan tiers come from the owner. Amounts are owner-only."
           : "Demo list. Add private-data/clients.json on this Mac to see your real clients."}
       </p>
     </>

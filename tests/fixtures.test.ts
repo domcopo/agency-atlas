@@ -204,7 +204,7 @@ describe("client roster", () => {
     const s = summaryNow;
     const active = rosterNow.filter((c) => c.status === "active");
     expect(s.activeCount).toBe(active.length);
-    expect(s.activeMrr).toBeCloseTo(active.reduce((n, c) => n + c.monthlyUsd, 0), 2);
+    expect(s.activeMrr).toBeCloseTo(active.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0), 2);
     expect(s.tiers.high.count + s.tiers.mid.count + s.tiers.low.count).toBe(active.length);
     expect(s.tiers.high.mrr + s.tiers.mid.mrr + s.tiers.low.mrr).toBeCloseTo(s.activeMrr, 2);
   });

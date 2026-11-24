@@ -297,7 +297,11 @@ export interface RosterClient {
   /** Database row id (database mode only). */
   dbId?: string;
   name: string;
-  monthlyUsd: number;
+  /**
+   * What the client pays a month. OWNER ONLY: null for everyone else (0024 locks it in
+   * the database too). Never show "$0" for null; show the plan tier instead.
+   */
+  monthlyUsd: number | null;
   startDate: ISODate;
   status: SubscriptionStatus;
   /** Which list(s) the record came from, for checking. */
@@ -321,6 +325,41 @@ export interface RosterClient {
   ghl?: GhlContactTimes;
   /** Newest contact the TEAM logged (not GoHighLevel). Used to tell if a waiting client got a reply. */
   lastLogged?: ISODate;
+  /** Owner-set "important client" switch (0024). */
+  vip?: boolean;
+  /** Backup person for client communication (0024). */
+  backupId?: string;
+  backupName?: string;
+  /** Day the care plan (onboarding touches) starts counting (0024). */
+  careStartedOn?: ISODate;
+  /** Plan tier per service (0024). Empty before 0024 or when none is set. */
+  plans?: ClientPlanRef[];
+}
+
+/** A client's tier for one service, e.g. SEO · Starter. */
+export interface ClientPlanRef {
+  service: Service;
+  planId: string;
+  name: string;
+  rank: number;
+  topTier: boolean;
+}
+
+/** A plan tier (0024, care_plans). Prices are never stored here. */
+export interface CarePlan {
+  id: string;
+  service: Service;
+  name: string;
+  /** 1 = entry tier; higher = bigger. */
+  rank: number;
+  hoursPerMonth: number | null;
+  includes: string[];
+  heatMapsPerMonth: number | null;
+  reportEveryDays: number;
+  midMonthCheckIn: boolean;
+  competitorReviewMonths: number;
+  topTier: boolean;
+  archived: boolean;
 }
 
 export interface GhlContactTimes {
@@ -368,6 +407,8 @@ export interface RosterSummary {
   /** Records in the private file that failed validation and were skipped. */
   skipped: number;
   tiers: Record<ClientTier, { count: number; mrr: number }>;
+  /** False for everyone but the owner: all money fields above are 0 and must not be shown. */
+  moneyShown: boolean;
   /** Average whole months active clients have been with us. */
   avgMonthsActive: number;
 }

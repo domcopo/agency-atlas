@@ -14,11 +14,13 @@ import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getActions, getAiStatus, getBilling, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRemovedCheckIns, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList, tierOf } from "@/lib/data-source";
+import { getActions, getAiStatus, getBilling, getCarePlans, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRemovedCheckIns, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
 import { ScoreTrend } from "@/components/cards/RiskAlerts";
-import { setCheckInRemoved, setClientServices } from "@/app/actions";
-import { planLabel } from "@/lib/ops";
+import { setCheckInRemoved } from "@/app/actions";
+import { planLabel, servicesLabel } from "@/lib/ops";
+import { planRhythm } from "@/lib/care";
+import { ClientCareForm } from "@/components/forms/ClientCareForm";
 import { PriorityList } from "@/components/cards/ActionRow";
 import { ActionForm } from "@/components/forms/ActionForm";
 import { Timeline } from "@/components/cards/Timeline";
@@ -33,7 +35,6 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: (await getRosterClient(id))?.name ?? "Client" };
 }
 
-const tierLabel = { high: "High tier ($500+)", mid: "Mid tier ($150–499)", low: "Low tier (under $150)" } as const;
 const sourceLabel: Record<string, string> = {
   sheet: "Full client sheet",
   pdf: "Top + recent clients PDF",
@@ -64,12 +65,15 @@ export default async function ClientPage({ params }: Props) {
   const removed = await getRemovedCheckIns(c.dbId);
   // Owner only: null for everyone else (and the database returns them nothing).
   const pay = (await getBilling())?.byClient.get(c.id) ?? null;
+  // Plan tiers (0024): what this client's tier includes. Empty before 0024.
+  const care = await getCarePlans();
+  const myTiers = (c.plans ?? []).map((p) => care.plans.find((t) => t.id === p.planId)).filter((t) => t !== undefined);
 
   return (
     <>
       <PageHeader
         title={c.name}
-        subtitle={c.status === "active" ? tierLabel[tierOf(c.monthlyUsd)] : undefined}
+        subtitle={c.status === "active" ? `${servicesLabel(c)}${c.vip ? " · VIP" : ""}` : undefined}
         backHref="/clients"
         backLabel="Clients"
         action={<StatusPill status={c.status} />}
@@ -205,10 +209,17 @@ export default async function ClientPage({ params }: Props) {
       <SectionTitle>Account</SectionTitle>
       <GlassCard className="space-y-3">
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs text-muted">Monthly</p>
-            <p className="font-display text-2xl font-bold">{formatUsdExact(c.monthlyUsd)}</p>
-          </div>
+          {c.monthlyUsd !== null ? (
+            <div>
+              <p className="text-xs text-muted">Monthly (only you see this)</p>
+              <p className="font-display text-2xl font-bold">{formatUsdExact(c.monthlyUsd)}</p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-xs text-muted">Plan</p>
+              <p className="font-display text-lg font-bold leading-tight">{servicesLabel(c)}</p>
+            </div>
+          )}
           <div>
             <p className="flex items-center gap-1 text-xs text-muted">
               <Clock aria-hidden className="size-3" /> With you
@@ -230,30 +241,46 @@ export default async function ClientPage({ params }: Props) {
           ) : (
             <span className="text-muted">Services not set yet.</span>
           )}
+          {c.vip && <Pill color="amber">VIP</Pill>}
         </div>
+        {usesDatabase() && (c.ownerName || c.backupName) && (
+          <p className="text-xs text-muted">
+            Main person: <span className="text-ink">{c.ownerName ?? "not set"}</span>
+            {care.ready && (
+              <>
+                {" "}
+                · Backup: <span className="text-ink">{c.backupName ?? "none"}</span>
+              </>
+            )}
+          </p>
+        )}
+        {myTiers.map((t) => (
+          <div key={t.id} className="border-t border-line pt-3">
+            <p className="text-sm font-semibold">
+              {t.service} {t.name}
+              {t.topTier && <span className="ml-1.5 text-[11px] font-normal text-violet">top tier</span>}
+            </p>
+            <p className="text-xs text-muted">{planRhythm(t)}</p>
+            {t.includes.length > 0 && (
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted">
+                {t.includes.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
         {member?.role === "owner" && c.dbId && (
           <details>
             <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit plan</summary>
-            <form action={setClientServices} className="mt-1.5 space-y-2">
-              <input type="hidden" name="clientId" value={c.dbId} />
-              <input type="hidden" name="slug" value={c.id} />
-              <div className="flex flex-wrap gap-2">
-                {([
-                  ["Website", "Website build"],
-                  ["SEO", "SEO"],
-                  ["Ads", "Google Ads"],
-                ] as const).map(([v, label]) => (
-                  <label key={v} className="flex min-h-10 items-center gap-2 rounded-xl border border-line bg-white/5 px-3 text-sm">
-                    <input type="checkbox" name="services" value={v} defaultChecked={c.services.includes(v)} className="size-4 accent-violet-500" />
-                    {label}
-                  </label>
-                ))}
-              </div>
-              <button type="submit" className="pressable min-h-10 rounded-xl bg-violet-deep px-4 text-xs font-semibold">
-                Save plan
-              </button>
-              <p className="text-[11px] text-faint">Monthly amount comes from your client list. Saved in this app only.</p>
-            </form>
+            <div className="mt-1.5">
+              <ClientCareForm
+                client={{ dbId: c.dbId, slug: c.id, name: c.name, ownerId: c.ownerId, backupId: c.backupId, vip: c.vip, services: c.services, plans: c.plans, monthlyUsd: c.monthlyUsd }}
+                staff={staff}
+                tiers={care.plans}
+                careReady={care.ready}
+              />
+            </div>
           </details>
         )}
       </GlassCard>

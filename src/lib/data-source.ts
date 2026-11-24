@@ -31,10 +31,12 @@ import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type Sa
 import { isLead } from "@/lib/roles";
 import {
   buildPriorities,
+  byImportance,
   developerClientScope,
   developerWorkScope,
   healthScore,
   healthSummary,
+  isImportant,
   isSalesStage,
   kindLabel,
   opportunities,
@@ -60,6 +62,8 @@ import type {
   Alert,
   ActivityItem,
   Business,
+  CarePlan,
+  ClientPlanRef,
   ClientTier,
   Conversation,
   DataMode,
@@ -83,6 +87,7 @@ import type {
   RosterSource,
   RosterSummary,
   SafetyStatus,
+  Service,
   GhlSummary,
   AiStatus,
   Briefing,
@@ -235,12 +240,84 @@ export const getTrashedIds = cache(async (): Promise<{ ready: boolean; clients: 
   return { ready: true, clients: new Set((c.data ?? []).map((r) => r.id as string)), actions: new Set((a.data ?? []).map((r) => r.id as string)) };
 });
 
+/** Columns every client read uses. Never monthly_usd: from 0024 that is locked (client_money). */
+const CLIENT_COLS = "id, slug, name, start_date, status, services, listed_in, check_note, follow_up, end_date";
+const CARE_PLAN_COLS = "id, service, name, rank, hours_per_month, includes, heat_maps_per_month, report_every_days, mid_month_check_in, competitor_review_months, top_tier, archived";
+
+type ClientRow = {
+  id: string;
+  slug: string;
+  name: string;
+  start_date: string;
+  status: string;
+  services: string[] | null;
+  listed_in: string[] | null;
+  check_note: string | null;
+  follow_up: string | null;
+  end_date: string | null;
+  owner_staff_id: string | null;
+  vip?: boolean | null;
+  backup_staff_id?: string | null;
+  care_started_on?: string | null;
+  monthly_usd?: number | string | null;
+};
+
+function toCarePlan(r: Record<string, unknown>): CarePlan {
+  return {
+    id: r.id as string,
+    service: r.service as Service,
+    name: r.name as string,
+    rank: Number(r.rank),
+    hoursPerMonth: r.hours_per_month === null ? null : Number(r.hours_per_month),
+    includes: (r.includes as string[] | null) ?? [],
+    heatMapsPerMonth: r.heat_maps_per_month === null ? null : Number(r.heat_maps_per_month),
+    reportEveryDays: Number(r.report_every_days),
+    midMonthCheckIn: Boolean(r.mid_month_check_in),
+    competitorReviewMonths: Number(r.competitor_review_months),
+    topTier: Boolean(r.top_tier),
+    archived: Boolean(r.archived),
+  };
+}
+
+/**
+ * Client rows, newest database shape first. Before 0024 there are no care columns (and
+ * monthly_usd is still readable); before 0006 there is no owner column.
+ */
+async function readClientRows(db: DbClient): Promise<{ data: ClientRow[] | null; careReady: boolean }> {
+  const care = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on`);
+  if (!care.error) return { data: (care.data ?? []) as ClientRow[], careReady: true };
+  const withOwner = await db.from("clients").select(`${CLIENT_COLS}, monthly_usd, owner_staff_id`);
+  if (!withOwner.error) return { data: (withOwner.data ?? []) as ClientRow[], careReady: false };
+  const bare = await db.from("clients").select(`${CLIENT_COLS}, monthly_usd`);
+  return { data: bare.error ? null : ((bare.data ?? []) as ClientRow[]).map((r) => ({ ...r, owner_staff_id: null })), careReady: false };
+}
+
+/**
+ * Monthly amounts by client id. OWNER ONLY: everyone else gets null (hidden), even before
+ * 0024 when the database would still allow it. After 0024 they live in client_money.
+ */
+async function readClientMoney(db: DbClient, rows: ClientRow[], careReady: boolean, isOwner: boolean): Promise<Map<string, number> | null> {
+  if (!isOwner) return null;
+  if (!careReady) return new Map(rows.map((r) => [r.id, Number(r.monthly_usd ?? 0)]));
+  const { data, error } = await db.from("client_money").select("client_id, monthly_usd").limit(5000);
+  if (error) return new Map();
+  return new Map((data ?? []).map((m) => [m.client_id as string, Number(m.monthly_usd)]));
+}
+
+/** Plan tiers (0024), archived ones included so old assignments still have a name. Empty before 0024. */
+export const getCarePlans = cache(async (): Promise<{ ready: boolean; plans: CarePlan[] }> => {
+  if (!usesDatabase()) return { ready: false, plans: [] };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("care_plans").select(CARE_PLAN_COLS).order("service").order("rank");
+  if (error) return { ready: false, plans: [] };
+  return { ready: true, plans: (data ?? []).map((r) => toCarePlan(r)) };
+});
+
 /** Reads clients as the signed-in person. Row-level security decides what comes back. */
 async function loadDatabaseRoster(): Promise<Roster> {
   const db = await createDatabaseClient();
-  const cols = "id, slug, name, monthly_usd, start_date, status, services, listed_in, check_note, follow_up, end_date";
-  const [withOwner, checkIns, staff, ghlTimes, trashed] = await Promise.all([
-    db.from("clients").select(`${cols}, owner_staff_id`),
+  const [clients, checkIns, staff, ghlTimes, trashed, me, planRead, carePlans] = await Promise.all([
+    readClientRows(db),
     readCheckIns(db),
     db.from("staff").select("id, name"),
     // Call/message times from GoHighLevel (0008). Missing table = none yet.
@@ -248,6 +325,9 @@ async function loadDatabaseRoster(): Promise<Roster> {
       .from("ghl_contact_stats")
       .select("client_id, last_inbound_at, last_outbound_at, last_call_at, last_call_seconds, last_channel, last_direction, unanswered_outbound, synced_at"),
     getTrashedIds(),
+    getMember(),
+    db.from("client_plans").select("client_id, service, plan_id"),
+    getCarePlans(),
   ]);
   const timesByClient = new Map(
     (ghlTimes.error ? [] : (ghlTimes.data ?? [])).map((t) => [
@@ -267,12 +347,18 @@ async function loadDatabaseRoster(): Promise<Roster> {
   /** Newest of: a logged contact, or a GoHighLevel call/message either way. */
   const newest = (logged: string | undefined, t: GhlContactTimes | undefined) =>
     [logged, t?.lastInboundAt?.slice(0, 10), t?.lastOutboundAt?.slice(0, 10)].filter((d): d is string => Boolean(d)).sort().pop();
-  // Before 0006 there is no owner column: read without it.
-  const clients = withOwner.error
-    ? await db.from("clients").select(cols).then((r) => ({ ...r, data: r.data?.map((c) => ({ ...c, owner_staff_id: null as string | null })) ?? null }))
-    : withOwner;
   const staffName = new Map((staff.data ?? []).map((m) => [m.id as string, m.name as string]));
-  if (clients.error || !clients.data) return { source: "database", clients: [], skipped: 0 };
+  if (!clients.data) return { source: "database", clients: [], skipped: 0 };
+  const money = await readClientMoney(db, clients.data, clients.careReady, me?.role === "owner");
+  const planById = new Map(carePlans.plans.map((p) => [p.id, p]));
+  const plansByClient = new Map<string, ClientPlanRef[]>();
+  for (const r of planRead.error ? [] : (planRead.data ?? [])) {
+    const p = r.plan_id ? planById.get(r.plan_id as string) : undefined;
+    if (!p) continue;
+    const list = plansByClient.get(r.client_id as string) ?? [];
+    list.push({ service: p.service, planId: p.id, name: p.name, rank: p.rank, topTier: p.topTier });
+    plansByClient.set(r.client_id as string, list);
+  }
   const lastContact = new Map<string, string>();
   const lastMood = new Map<string, { mood: CheckInMood; date: string }>();
   for (const c of checkIns) {
@@ -287,7 +373,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
       id: r.slug,
       dbId: r.id,
       name: r.name,
-      monthlyUsd: Number(r.monthly_usd),
+      monthlyUsd: money ? (money.get(r.id) ?? 0) : null,
       startDate: r.start_date,
       status: r.status as SubscriptionStatus,
       listedIn: r.listed_in ?? [],
@@ -301,6 +387,11 @@ async function loadDatabaseRoster(): Promise<Roster> {
       ownerId: r.owner_staff_id ?? undefined,
       ownerName: r.owner_staff_id ? staffName.get(r.owner_staff_id) : undefined,
       services: (r.services ?? []) as RosterClient["services"],
+      vip: Boolean(r.vip),
+      backupId: r.backup_staff_id ?? undefined,
+      backupName: r.backup_staff_id ? staffName.get(r.backup_staff_id) : undefined,
+      careStartedOn: r.care_started_on ?? undefined,
+      plans: (plansByClient.get(r.id) ?? []).sort((a, b) => a.service.localeCompare(b.service)),
     })),
   };
 }
@@ -322,7 +413,7 @@ const statusOrder: Record<SubscriptionStatus, number> = { active: 0, paused: 1, 
 /** Active first, then by monthly amount (highest first). */
 export async function getRoster(): Promise<RosterClient[]> {
   return [...(await roster()).clients].sort(
-    (a, b) => statusOrder[a.status] - statusOrder[b.status] || b.monthlyUsd - a.monthlyUsd || a.name.localeCompare(b.name),
+    (a, b) => statusOrder[a.status] - statusOrder[b.status] || byImportance(a, b) || a.name.localeCompare(b.name),
   );
 }
 
@@ -330,7 +421,9 @@ export async function getRosterClient(id: string): Promise<RosterClient | undefi
   return (await roster()).clients.find((c) => c.id === id);
 }
 
-export function tierOf(monthlyUsd: number): ClientTier {
+/** Price band from the amount (owner only). Everyone else gets null: show the plan tier instead. */
+export function tierOf(monthlyUsd: number | null): ClientTier | null {
+  if (monthlyUsd === null) return null;
   if (monthlyUsd >= 500) return "high";
   if (monthlyUsd >= 150) return "mid";
   return "low";
@@ -338,14 +431,18 @@ export function tierOf(monthlyUsd: number): ClientTier {
 
 export async function getRosterSummary(): Promise<RosterSummary> {
   const { clients, source, skipped } = await roster();
-  const sum = (xs: RosterClient[]) => Math.round(xs.reduce((n, c) => n + c.monthlyUsd, 0) * 100) / 100;
+  const sum = (xs: RosterClient[]) => Math.round(xs.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0) * 100) / 100;
   const by = (s: SubscriptionStatus) => clients.filter((c) => c.status === s);
+  // Amounts are owner-only (null for everyone else); then every money field is 0 and hidden.
+  const moneyShown = clients.length > 0 && clients.every((c) => c.monthlyUsd !== null);
   const active = by("active");
   const tiers = { high: { count: 0, mrr: 0 }, mid: { count: 0, mrr: 0 }, low: { count: 0, mrr: 0 } };
   for (const c of active) {
-    const t = tiers[tierOf(c.monthlyUsd)];
+    const band = tierOf(c.monthlyUsd);
+    if (!band) continue;
+    const t = tiers[band];
     t.count++;
-    t.mrr = Math.round((t.mrr + c.monthlyUsd) * 100) / 100;
+    t.mrr = Math.round((t.mrr + (c.monthlyUsd ?? 0)) * 100) / 100;
   }
   const months = active.map((c) => monthsBetween(c.startDate, today()));
   return {
@@ -361,6 +458,7 @@ export async function getRosterSummary(): Promise<RosterSummary> {
     needsCheck: clients.filter((c) => c.check).length,
     skipped,
     tiers,
+    moneyShown,
     avgMonthsActive: months.length ? Math.round((months.reduce((a, b) => a + b, 0) / months.length) * 10) / 10 : 0,
   };
 }
@@ -376,7 +474,7 @@ export async function getSignupsByMonth(count = 6): Promise<{ month: string; sig
     out.push({
       month: key,
       signed: signed.length,
-      mrrAdded: Math.round(signed.reduce((n, c) => n + c.monthlyUsd, 0) * 100) / 100,
+      mrrAdded: Math.round(signed.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0) * 100) / 100,
     });
   }
   return out;
@@ -399,7 +497,7 @@ export async function getWinLoss(count = 6) {
   const clients = (await roster()).clients;
   const isLost = (c: RosterClient) => c.status === "canceled" || c.status === "incomplete_expired";
   const lost = clients.filter(isLost);
-  const money = (xs: RosterClient[]) => Math.round(xs.reduce((n, c) => n + c.monthlyUsd, 0) * 100) / 100;
+  const money = (xs: RosterClient[]) => Math.round(xs.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0) * 100) / 100;
   const months: WinLossMonth[] = (await getSignupsByMonth(count)).map((m) => {
     const out = lost.filter((c) => c.endDate?.startsWith(m.month));
     return { month: m.month, won: m.signed, wonMrr: m.mrrAdded, lost: out.length, lostMrr: money(out) };
@@ -416,6 +514,8 @@ export async function getWinLoss(count = 6) {
     pausedMrr: money(paused),
     /** Share of every client ever signed who has canceled or expired. */
     lifetimeChurnPct: everSigned ? Math.round((lost.length / everSigned) * 100) : 0,
+    /** False for everyone but the owner: the *Mrr numbers above are 0 and must not be shown. */
+    moneyShown: clients.length > 0 && clients.every((c) => c.monthlyUsd !== null),
   };
 }
 
@@ -452,7 +552,7 @@ export function getClientHealth(c: RosterClient, actions: ClientAction[] = []): 
 export async function getWinBackList() {
   return (await roster())
     .clients.filter((c) => c.status === "paused")
-    .sort((a, b) => b.monthlyUsd - a.monthlyUsd)
+    .sort(byImportance)
     .map((c) => {
       const first = c.name.split(/\s+/)[0] ?? c.name;
       const service = c.services[0] ?? "marketing";
@@ -489,7 +589,7 @@ export async function getMissionControl(): Promise<MissionControlData> {
   if (s.skipped > 0)
     realAlerts.push({ id: "al_skip", isSynthetic: false, href: "/safety", severity: "critical", title: `${s.skipped} client records couldn't be read`, detail: "Check the private client file. These were left out." });
   if (s.pausedCount > 0)
-    realAlerts.push({ id: "al_paused", isSynthetic: false, href: "/clients#paused", severity: "warning", title: `${s.pausedCount} clients paused${label}`, detail: `$${s.pausedMrr.toLocaleString("en-US")}/mo on hold. Worth a check-in call to win them back.` });
+    realAlerts.push({ id: "al_paused", isSynthetic: false, href: "/clients#paused", severity: "warning", title: `${s.pausedCount} clients paused${label}`, detail: s.moneyShown ? `$${s.pausedMrr.toLocaleString("en-US")}/mo on hold. Worth a check-in call to win them back.` : "Worth a check-in call to win them back." });
   if (s.needsCheck > 0)
     realAlerts.push({ id: "al_check", isSynthetic: false, href: "/clients", severity: "info", title: `${s.needsCheck} client records need checking`, detail: "The two client lists disagreed on these. Confirm them once." });
   const recent = (await getRoster()).filter((c) => c.status === "active" && daysBetween(c.startDate, today()) <= 21);
@@ -505,7 +605,7 @@ export async function getMissionControl(): Promise<MissionControlData> {
       isSynthetic: false,
       href: `/clients/${c.id}`,
       kind: "client_signed" as const,
-      title: `Signed: ${c.name} · $${c.monthlyUsd.toLocaleString("en-US")}/mo`,
+      title: c.monthlyUsd === null ? `Signed: ${c.name}` : `Signed: ${c.name} · $${c.monthlyUsd.toLocaleString("en-US")}/mo`,
       at: `${c.startDate}T12:00:00Z`,
     }));
 
@@ -1083,7 +1183,7 @@ export async function getContactMatches() {
   });
   // Clients needing a decision first, then unmatched, then done.
   const rank = (r: (typeof rows)[number]) => (r.confirmed ? 2 : r.suggestions.length ? 0 : 1);
-  return { ready: true, rows: rows.sort((a, b) => rank(a) - rank(b) || b.client.monthlyUsd - a.client.monthlyUsd) };
+  return { ready: true, rows: rows.sort((a, b) => rank(a) - rank(b) || byImportance(a.client, b.client)) };
 }
 
 /** Recent contacts across all clients (calls, messages, check-ins...), newest first. */
@@ -1126,7 +1226,7 @@ export async function getDetections(): Promise<Detection[]> {
       title: `${risk ? "At risk" : "Needs attention"}: ${c.name}`,
       why: h.reasons.slice(0, 3).join(". ") + ".",
       // More reasons and more money = closer to the center.
-      closeness: clamp((risk ? 0.6 : 0.3) + h.reasons.length * 0.08 + Math.min(c.monthlyUsd, 1000) / 5000),
+      closeness: clamp((risk ? 0.6 : 0.3) + h.reasons.length * 0.08 + Math.min(c.monthlyUsd ?? (isImportant(c) ? 1000 : 0), 1000) / 5000),
       confidence: risk ? 0.85 : 0.7,
       href: `/clients/${c.id}`,
       isSynthetic: !real,
@@ -1246,12 +1346,12 @@ export async function getAtlasQuestions(limit = 3): Promise<AtlasQuestion[]> {
     return daysBetween(h.day, today()) < (h.status === "skipped" ? 14 : 3);
   };
 
-  const byValue = [...clients].sort((a, b) => b.monthlyUsd - a.monthlyUsd);
+  const byValue = [...clients].sort(byImportance);
   const base = (c: RosterClient) => ({ clientDbId: c.dbId ?? "", clientSlug: c.id, clientName: c.name, services: c.services });
   const out: AtlasQuestion[] = [];
   const current = (c: RosterClient) => c.status === "active" || c.status === "paused";
 
-  for (const c of byValue.filter((x) => current(x) && x.services.length === 1 && x.services[0] === "Ads" && x.monthlyUsd >= 150))
+  for (const c of byValue.filter((x) => current(x) && x.services.length === 1 && x.services[0] === "Ads" && (x.monthlyUsd ?? 0) >= 150))
     out.push({ ...base(c), key: `also_seo:${c.dbId}`, type: "also_seo", prompt: `Does ${c.name} also get SEO, or only Ads?`, why: "Sets their check-in rhythm and upsell suggestions." });
   for (const c of byValue.filter((x) => x.status === "active" && !x.lastContact))
     out.push({ ...base(c), key: `last_contact:${c.dbId}`, type: "last_contact", prompt: `When did you last talk to ${c.name}?`, why: "Starts their check-in reminders." });
@@ -1639,7 +1739,8 @@ export async function getServiceGroup(slug: string) {
     clients,
     activeCount: active.length,
     pausedCount: clients.length - active.length,
-    activeMrr: active.reduce((n, c) => n + c.monthlyUsd, 0),
+    activeMrr: active.reduce((n, c) => n + (c.monthlyUsd ?? 0), 0),
+    moneyShown: clients.every((c) => c.monthlyUsd !== null),
   };
 }
 
