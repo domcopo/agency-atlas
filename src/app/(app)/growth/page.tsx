@@ -1,4 +1,4 @@
-import { Bot, ChevronRight, ClipboardList, FileSearch, Layers, Link2, TrendingUp } from "lucide-react";
+import { Activity, Bot, ChevronRight, ClipboardList, FileSearch, Layers, Link2, TrendingUp } from "lucide-react";
 import type { Metadata } from "next";
 import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -40,6 +40,14 @@ export default async function GrowthPage() {
   return (
     <>
       <PageHeader title="Growth Lab" subtitle="Long-term case studies: why businesses grow, and what to ask them." />
+
+      <GlassCard href="/growth/watcher" label="Open SEO Watcher" className="mb-5 space-y-1">
+        <p className="flex items-center justify-between text-[11px] text-muted">
+          SEO Watcher <Activity aria-hidden className="size-3.5 text-violet" />
+        </p>
+        <p className="text-sm font-semibold">Rankings board: trends, movers, rising competitors, easy markets</p>
+        <p className="text-[11px] text-faint">Preview with sample data; real watching comes next</p>
+      </GlassCard>
 
       {!samples && (
         <section id="opportunities" className="mb-5 scroll-mt-16">

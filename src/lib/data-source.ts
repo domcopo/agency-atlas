@@ -12,6 +12,8 @@
 
 import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
+import { WATCH_SAMPLE_TODAY, watchSample, watchSampleOpportunities, watchSampleRoom, type SampleOpportunity } from "@/fixtures/watch-sample";
+import type { WatchData } from "@/lib/watch/compute";
 import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
 import { parseSections, type AuditSectionId } from "@/lib/audit/sections";
@@ -49,6 +51,7 @@ import {
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
 import { journeyState, type JourneyState, type TouchLog } from "@/lib/journey";
+import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
@@ -2329,6 +2332,49 @@ export const getAudits = cache(async (): Promise<{ ready: boolean; audits: Saved
   return { ready: true, audits: [...audits.filter((a) => !a.archived), ...audits.filter((a) => a.archived)] };
 });
 
+/**
+ * Sales leaderboard (0026 view): names + this month's Won totals only. The database decides
+ * who may read it (owner, managers, sales, with two-factor) and adds up the deals; a
+ * salesperson never gets the deals themselves. Before 0026 is run: ready false.
+ * Demo mode: three fictional reps, labeled as samples.
+ */
+export const getLeaderboard = cache(async (): Promise<{ ready: boolean; sample: boolean; scope: "sales" | "all"; rows: BoardRow[] }> => {
+  if (!usesDatabase()) {
+    if (!showsSamples()) return { ready: false, sample: false, scope: "all", rows: [] };
+    return {
+      ready: true,
+      sample: true,
+      scope: "sales",
+      rows: [
+        { name: "Avery Sample (sample)", isMe: true, linked: true, wonUsd: 12400, wonDeals: 3 },
+        { name: "Blake Sample (sample)", isMe: false, linked: true, wonUsd: 4800, wonDeals: 1 },
+        { name: "Casey Sample (sample)", isMe: false, linked: true, wonUsd: 0, wonDeals: 0 },
+      ],
+    };
+  }
+  const none = { ready: false, sample: false, scope: "all" as const, rows: [] };
+  const me = await getMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return none;
+  const db = await createDatabaseClient();
+  const [board, pipes] = await Promise.all([
+    db.from("sales_leaderboard").select("name, is_me, linked, won_usd, won_deals").limit(100),
+    db.from("sales_pipelines").select("pipeline_id").eq("active", true).limit(1),
+  ]);
+  if (board.error) return none;
+  return {
+    ready: true,
+    sample: false,
+    scope: (pipes.data ?? []).length > 0 ? "sales" : "all",
+    rows: (board.data ?? []).map((r) => ({
+      name: String(r.name ?? ""),
+      isMe: r.is_me === true,
+      linked: r.linked === true,
+      wonUsd: Number(r.won_usd ?? 0) || 0,
+      wonDeals: Number(r.won_deals ?? 0) || 0,
+    })),
+  };
+});
+
 /** One saved audit (or null: not found, or not one the database lets this person read). */
 export async function getSavedAudit(id: string): Promise<SavedAudit | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return null;
@@ -2374,6 +2420,24 @@ export async function getSalespeople(): Promise<{ userId: string; name: string }
   const db = await createDatabaseClient();
   const { data } = await db.from("team_members").select("user_id, display_name, role").eq("role", "sales").order("display_name");
   return (data ?? []).map((r) => ({ userId: r.user_id as string, name: r.display_name as string }));
+}
+
+// ---------------------------------------------------------------- SEO Watcher (docs/SEO_WATCHER_PLAN.md)
+
+export interface WatchPreview {
+  sample: true;
+  today: string;
+  data: WatchData;
+  opportunities: SampleOpportunity[];
+  room: typeof watchSampleRoom;
+}
+
+/**
+ * The Watcher's "Preview with sample data": fictional businesses only, always labeled,
+ * never mixed with real clients (Phase A has no real Watcher data yet).
+ */
+export function getWatchPreview(): WatchPreview {
+  return { sample: true, today: WATCH_SAMPLE_TODAY, data: watchSample, opportunities: watchSampleOpportunities, room: watchSampleRoom };
 }
 
 // ---------------------------------------------------------------------------
