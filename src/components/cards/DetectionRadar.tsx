@@ -109,7 +109,7 @@ function Scope({
             }}
           />
         );
-        const pos = { left: `${left}%`, top: `${top}%` };
+        const pos = { left: `${left.toFixed(2)}%`, top: `${top.toFixed(2)}%` };
         return mini ? (
           <span key={d.id} aria-hidden className="absolute -translate-x-1/2 -translate-y-1/2" style={pos}>
             {dot}
