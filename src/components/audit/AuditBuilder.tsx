@@ -297,7 +297,7 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
   );
 }
 
-function SectionToggle({ id, label: name, detail, on, locked, onToggle }: { id: AuditSectionId; label: string; detail: string; on: boolean; locked?: boolean; onToggle: (id: AuditSectionId) => void }) {
+export function SectionToggle<T extends string>({ id, label: name, detail, on, locked, onToggle }: { id: T; label: string; detail: string; on: boolean; locked?: boolean; onToggle: (id: T) => void }) {
   return (
     <li>
       <button
@@ -321,7 +321,7 @@ function SectionToggle({ id, label: name, detail, on, locked, onToggle }: { id: 
   );
 }
 
-function SourceToggle({ name, label: title, detail, on }: { name: string; label: string; detail: string; on: boolean }) {
+export function SourceToggle({ name, label: title, detail, on }: { name: string; label: string; detail: string; on: boolean }) {
   return (
     <label className="flex min-h-12 items-center gap-3 rounded-2xl border border-line px-3 py-2">
       <input type="checkbox" name={name} defaultChecked={on} className="size-5 accent-violet" />

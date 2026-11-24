@@ -12,13 +12,15 @@
 
 import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
+import { sampleAdsData, sampleAdsIntake, sampleAdsPlans } from "@/fixtures/ads-sample";
 import { WATCH_SAMPLE_TODAY, watchSample, watchSampleOpportunities, watchSampleRoom, type SampleOpportunity } from "@/fixtures/watch-sample";
 import { WATCH_RULES, type RankCheck, type VolumeMonth, type WatchClient, type WatchData, type WatchMarket } from "@/lib/watch/compute";
 import { fromAudit, type AuditImport } from "@/lib/watch/lists";
 import { parseAuditConfig } from "@/lib/audit/config";
 import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
-import { parseSections, type AuditSectionId } from "@/lib/audit/sections";
+import { deckPages, parseSections, type AuditSectionId } from "@/lib/audit/sections";
+import { adsDeckPages, emptyAdsData, parseAdsIntake, parseAdsPlans, parseAdsSections, type AdsBundle, type AdsIntake, type AdsPlan, type AdsSectionId } from "@/lib/audit/ads";
 import { AUDIT_CAP_DEFAULTS, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
 import { demoRosterRaw, demoTeam } from "@/fixtures/demo-roster";
 import { caseStudyHistory, surveyQuestions, surveyResponses, trends } from "@/fixtures/growth";
@@ -2233,12 +2235,24 @@ export function getAuditPreview(id: string): AuditBundle | null {
   return { id: SAMPLE_AUDIT_ID, sample: true, config: sampleAuditConfig, data: sampleAuditData };
 }
 
+/** The fictional Google Ads audit template (made-up business and numbers, labeled sample). */
+export const SAMPLE_ADS_AUDIT_ID = "sample-ads";
+
+export function getAdsPreview(id: string): AdsBundle | null {
+  if (id !== SAMPLE_ADS_AUDIT_ID) return null;
+  return { id: SAMPLE_ADS_AUDIT_ID, sample: true, agencyName: "Your Agency (sample)", agencyWebsite: "agency.example.com", intake: sampleAdsIntake, plans: sampleAdsPlans, data: sampleAdsData };
+}
+
 
 export interface AuditSettingsView {
   /** false = 0023 not run yet (or no database). */
   ready: boolean;
   caps: AuditCaps;
   agency: AuditAgencySettings;
+  /** false = 0029 not run yet: Google Ads audits can't be saved and Ads prices can't be set. */
+  adsReady: boolean;
+  /** The owner's Google Ads management plans (0029). */
+  adsPlans: AdsPlan[];
   /** The owner's weekly cap for the signed-in person, when one is set. */
   myWeeklyCap: number | null;
   /** Owner only: per-salesperson weekly caps, by login. */
@@ -2249,6 +2263,8 @@ const NO_AUDIT_SETTINGS: AuditSettingsView = {
   ready: false,
   caps: AUDIT_CAP_DEFAULTS,
   agency: { agencyName: null, agencyWebsite: null, plans: [], perAuditUsd: AUDIT_CAP_DEFAULTS.perAuditUsd },
+  adsReady: false,
+  adsPlans: [],
   myWeeklyCap: null,
   userCaps: new Map(),
 };
@@ -2258,18 +2274,24 @@ export const getAuditSettings = cache(async (): Promise<AuditSettingsView> => {
   const me = await getMember();
   if (!me || (!isLead(me.role) && me.role !== "sales")) return NO_AUDIT_SETTINGS;
   const db = await createDatabaseClient();
-  const [settings, limits] = await Promise.all([
-    db.from("audit_settings").select("per_audit_usd, weekly_usd, monthly_usd, agency_name, agency_website, plans").maybeSingle(),
+  const SETTINGS_COLUMNS = "per_audit_usd, weekly_usd, monthly_usd, agency_name, agency_website, plans";
+  const [withAds, limits] = await Promise.all([
+    db.from("audit_settings").select(`${SETTINGS_COLUMNS}, ads_plans`).maybeSingle(),
     db.from("audit_user_limits").select("user_id, weekly_usd"),
   ]);
+  // Before 0029 the ads_plans column doesn't exist yet: read the rest and say "needs 0029".
+  const adsReady = !withAds.error;
+  const settings = adsReady ? withAds : await db.from("audit_settings").select(SETTINGS_COLUMNS).maybeSingle();
   if (settings.error || !settings.data) return NO_AUDIT_SETTINGS;
-  const r = settings.data;
+  const r = settings.data as Record<string, unknown>;
   const caps = { perAuditUsd: Number(r.per_audit_usd), weeklyUsd: Number(r.weekly_usd), monthlyUsd: Number(r.monthly_usd) };
   const userCaps = new Map((limits.data ?? []).map((l) => [l.user_id as string, Number(l.weekly_usd)]));
   return {
     ready: true,
     caps,
     agency: { agencyName: (r.agency_name as string | null) ?? null, agencyWebsite: (r.agency_website as string | null) ?? null, plans: parsePlans(r.plans), perAuditUsd: caps.perAuditUsd },
+    adsReady,
+    adsPlans: adsReady ? parseAdsPlans(r.ads_plans) : [],
     myWeeklyCap: userCaps.get(me.userId) ?? null,
     userCaps,
   };
@@ -2286,9 +2308,16 @@ export interface SavedAudit {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /** SEO audits: the checkpoints (empty for a Google Ads audit). */
   sections: AuditSectionId[];
-  /** null = the saved intake no longer passes the check (shown as "needs fixing"). */
+  /** SEO audits: null = the saved intake no longer passes the check ("needs fixing"). Always null for Google Ads audits. */
   intake: AuditIntake | null;
+  /** Google Ads audits only (0029): their own intake check and checkpoints. */
+  ads: { intake: AdsIntake | null; sections: AdsSectionId[] } | null;
+  /** What every list shows, from either kind (null = needs fixing). */
+  base: { company: string; domain: string; hqTown: string; state: string; competitors: number } | null;
+  /** Pages in its deck. */
+  pageCount: number;
   rawIntake: Record<string, unknown>;
   hasResults: boolean;
   dataRetrieved: string | null;
@@ -2298,20 +2327,30 @@ const AUDIT_COLUMNS = "id, title, kind, lead_ghl_id, created_by, created_at, upd
 
 function toSavedAudit(r: Record<string, unknown>, me: string, names: Map<string, string>): SavedAudit {
   const raw = r.intake && typeof r.intake === "object" && !Array.isArray(r.intake) ? (r.intake as Record<string, unknown>) : {};
-  const parsed = parseIntake(raw);
+  const kind = r.kind === "ads" ? "ads" : "seo";
+  const parsed = kind === "seo" ? parseIntake(raw) : null;
+  const adsParsed = kind === "ads" ? parseAdsIntake(raw) : null;
+  const seoIntake = parsed?.ok ? parsed.intake : null;
+  const adsIntake = adsParsed?.ok ? adsParsed.intake : null;
+  const adsSections = kind === "ads" ? parseAdsSections(r.sections) : [];
+  const seoSections = kind === "seo" ? parseSections(r.sections) : [];
+  const shared = seoIntake ?? adsIntake;
   const by = r.created_by as string;
   return {
     id: r.id as string,
     title: r.title as string,
-    kind: r.kind === "ads" ? "ads" : "seo",
+    kind,
     leadGhlId: (r.lead_ghl_id as string | null) ?? null,
     createdBy: by,
     createdByName: by === me ? "you" : (names.get(by) ?? null),
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     archived: Boolean(r.archived_at),
-    sections: parseSections(r.sections),
-    intake: parsed.ok ? parsed.intake : null,
+    sections: seoSections,
+    intake: seoIntake,
+    ads: kind === "ads" ? { intake: adsIntake, sections: adsSections } : null,
+    base: shared ? { company: shared.company, domain: shared.domain, hqTown: shared.hqTown, state: shared.state, competitors: shared.competitors.length } : null,
+    pageCount: kind === "ads" ? adsDeckPages(adsSections).length : deckPages(seoSections).length,
     rawIntake: raw,
     hasResults: Boolean(r.data_retrieved),
     dataRetrieved: (r.data_retrieved as string | null) ?? null,
@@ -2394,6 +2433,23 @@ export async function getSavedAuditBundle(audit: SavedAudit): Promise<AuditBundl
   const day = audit.createdAt.slice(0, 10);
   const config = buildAuditConfig(audit.intake, settings.agency, day);
   return { id: audit.id, sample: false, config, data: emptyAuditData(config, day) };
+}
+
+/** The pages for a saved Google Ads audit: settings from the intake + owner's Ads plans, every figure "not pulled yet". */
+export async function getSavedAdsBundle(audit: SavedAudit): Promise<AdsBundle | null> {
+  const intake = audit.ads?.intake;
+  if (!intake) return null;
+  const settings = await getAuditSettings();
+  const day = audit.createdAt.slice(0, 10);
+  return {
+    id: audit.id,
+    sample: false,
+    agencyName: settings.agency.agencyName || "Your agency",
+    agencyWebsite: settings.agency.agencyWebsite,
+    intake,
+    plans: settings.adsPlans,
+    data: emptyAdsData(intake, day),
+  };
 }
 
 /** What the signed-in person has spent and has left (salespeople: their own week). */

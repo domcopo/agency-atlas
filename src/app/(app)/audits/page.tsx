@@ -1,4 +1,4 @@
-// Audits home (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md Phase 1): two doors, SEO audit and
+// Audits home (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md Phases 1 and 3): two doors, SEO audit and
 // Google Ads audit, then recent audits of both kinds, the fictional template, spending, and
 // (owner) the shared audit settings. Owner, managers and salespeople; developers don't
 // see audits (the database decides which audits come back).
@@ -9,9 +9,9 @@ import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
 import { saveAuditUserCap } from "@/app/actions";
 import { AuditSettingsForm } from "@/components/audit/AuditSettingsForm";
+import { AdsPlansForm } from "@/components/audit/ads/AdsPlansForm";
 import { SavedAuditCard } from "@/components/audit/SavedAuditCard";
 import { GlassCard } from "@/components/cards/GlassCard";
-import { Pill } from "@/components/labels/labels";
 import { Fold } from "@/components/shell/Fold";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
 import { RoleNotice } from "@/components/shell/RoleNotice";
@@ -99,11 +99,10 @@ export default async function AuditsPage() {
           iconClass="text-amber"
           title="Google Ads audit"
           blurb="How many clicks their market has, what a click costs, and what a budget could bring in."
-          count={adsCount ? saved(adsCount) : "Being built next"}
-          badge={<Pill color="amber">Coming soon</Pill>}
+          count={saved(adsCount)}
           action={
-            <Link href="/audits/ads" className="pressable glass inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl text-sm font-semibold text-violet">
-              See what it will show
+            <Link href="/audits/ads/new" className="pressable inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl bg-violet-deep text-sm font-semibold">
+              <Plus aria-hidden className="size-4" /> New Google Ads audit
             </Link>
           }
         />
@@ -156,9 +155,12 @@ export default async function AuditsPage() {
       )}
 
       {owner && settings.ready && (
-        <Fold title="Settings" summary="Spending caps, agency name, plan prices" label="Audit settings">
+        <Fold title="Settings" summary="Spending caps, agency name, SEO and Google Ads prices" label="Audit settings">
           <div className="glass mt-2.5 space-y-5 rounded-3xl p-4">
             <AuditSettingsForm caps={settings.caps} agencyName={settings.agency.agencyName} agencyWebsite={settings.agency.agencyWebsite} plans={settings.agency.plans} />
+            <div className="border-t border-line pt-4">
+              <AdsPlansForm plans={settings.adsPlans} ready={settings.adsReady} />
+            </div>
             {people.length > 0 && (
               <div className="border-t border-line pt-4">
                 <p className="text-sm font-semibold">Weekly cap per salesperson</p>
