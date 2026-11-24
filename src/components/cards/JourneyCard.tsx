@@ -7,7 +7,27 @@ import { NextMoveForm } from "@/components/forms/NextMoveForm";
 import { cn, formatDate } from "@/lib/format";
 import { draftMessage, GROW_STAGE, JOURNEY_STAGES, JOURNEY_TOUCHES, touchByStep, type JourneyState } from "@/lib/journey";
 
-export function JourneyCard({ journey, clientDbId, slug, business, canEdit, canUseAi = false }: { journey: JourneyState; clientDbId: string; slug: string; business: string; canEdit: boolean; canUseAi?: boolean }) {
+export function JourneyCard({
+  journey,
+  clientDbId,
+  slug,
+  business,
+  canEdit,
+  canUseAi = false,
+  noTexts = false,
+  missing = [],
+}: {
+  journey: JourneyState;
+  clientDbId: string;
+  slug: string;
+  business: string;
+  canEdit: boolean;
+  canUseAi?: boolean;
+  /** They replied STOP (0032): every text becomes an email. */
+  noTexts?: boolean;
+  /** Week-1 intake items still missing (shown in the first two stages). */
+  missing?: string[];
+}) {
   const next = journey.next ? touchByStep(journey.next.step) : undefined;
   const neverStarted = !journey.startedOn;
   return (
@@ -71,7 +91,24 @@ export function JourneyCard({ journey, clientDbId, slug, business, canEdit, canU
               {next.ask}
             </p>
           )}
-          {canEdit && <NextMoveForm clientId={clientDbId} slug={slug} step={next.step} defaultChannel={next.channel} draft={draftMessage(next, business)} attempts={journey.next.attempts} canUseAi={canUseAi} />}
+          {journey.stage <= 1 && missing.length > 0 && (
+            <p className="mt-1 text-sm">
+              <span className="text-amber">Still need: </span>
+              {missing.join(", ")}
+            </p>
+          )}
+          {noTexts && next.channel === "text" && <p className="mt-1 text-sm font-semibold text-rose">No texts: they asked not to be texted. Send this by email instead.</p>}
+          {canEdit && (
+            <NextMoveForm
+              clientId={clientDbId}
+              slug={slug}
+              step={next.step}
+              defaultChannel={noTexts && next.channel === "text" ? "email" : next.channel}
+              draft={draftMessage(next, business)}
+              attempts={journey.next.attempts}
+              canUseAi={canUseAi}
+            />
+          )}
           <p className="mt-2 text-[11px] text-faint">Nothing sends from Atlas. Copy, send from GoHighLevel, then tap Done.</p>
         </div>
       )}

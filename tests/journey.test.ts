@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { asOutcome, dayProgress, nextWorkingDay, restartSchedule, touchPoints } from "@/lib/journey";
+import { asIntakeKey, asOutcome, dayProgress, INTAKE_ITEMS, missingIntake, nextWorkingDay, restartSchedule, touchPoints } from "@/lib/journey";
 import { asStatusReason, asTouchChannel, draftMessage, touchesDue, GROW_TOUCHES, JOURNEY_STAGES, JOURNEY_TOUCHES, journeyLabel, journeyState, touchByStep, type TouchLog } from "@/lib/journey";
 
 const ROOT = join(__dirname, "..");
@@ -171,6 +171,23 @@ describe("calls first (0031)", () => {
   });
 });
 
+describe("week-1 intake (0032)", () => {
+  it("has the 10 items, and the database allows exactly those keys", () => {
+    expect(INTAKE_ITEMS).toHaveLength(10);
+    const sql = read("supabase/migrations/0032_client_care_extras.sql");
+    const fn = sql.slice(sql.indexOf("create function private.intake_keys_ok"), sql.indexOf("create table public.client_care"));
+    for (const [k] of INTAKE_ITEMS) expect(fn).toContain(`'${k}'`);
+    expect(fn.match(/'[a-z_]+'/g)).toHaveLength(10);
+  });
+
+  it("lists what's still missing, and only known items", () => {
+    expect(missingIntake({ photos: "2026-11-24" })).toHaveLength(9);
+    expect(missingIntake({ photos: "2026-11-24" })).not.toContain("Job and team photos (with permission)");
+    expect(asIntakeKey("gbp_access")).toBe("gbp_access");
+    expect(asIntakeKey("passwords")).toBeNull();
+  });
+});
+
 describe("input checks", () => {
   it("only known reasons and channels", () => {
     expect(asStatusReason("price")).toBe("price");
@@ -208,7 +225,7 @@ describe("journey guardrails", () => {
   it("the AI helper: budget check first, names as codes, cost logged, nothing saved or sent", () => {
     for (const [from, to, feature] of [
       ["export async function suggestNextMoves", "export async function draftTouchMessage", "care_suggestions"],
-      ["export async function draftTouchMessage", "/** Who owns a client", "care_draft"],
+      ["export async function draftTouchMessage", "// Client care extras (0032)", "care_draft"],
     ] as const) {
       const fn = slice(from, to);
       expect(fn).toMatch(/const pre = await aiPreflight\(\);/);
@@ -219,6 +236,15 @@ describe("journey guardrails", () => {
       // Client names never go in the data: only codes and short, redacted notes.
       expect(fn).not.toMatch(/name: c\.name|client\.name,/);
     }
+  });
+
+  it("extras: owner or manager; only the owner resolves; nothing deleted; no logins stored", () => {
+    const extras = slice("async function saveClientCareRow", "/** Who owns a client");
+    expect(extras).not.toMatch(/\.delete\(/);
+    const resolve = slice("export async function resolveEscalation", "/** Who owns a client");
+    expect(resolve).toMatch(/me\.role !== "owner"\) return;/);
+    for (const fn of ["saveCareContact", "setIntakeItem", "raiseEscalation"]) expect(slice(`export async function ${fn}`, "/** Who owns a client")).toMatch(/!isLead\(me\.role\)/);
+    expect(slice("export async function setIntakeItem", "export async function raiseEscalation")).toMatch(/localToday\(\)/);
   });
 
   it("touches: Done also logs a check-in; nothing is sent", () => {
