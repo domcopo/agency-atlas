@@ -2643,7 +2643,7 @@ export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<
   redirect(`/audits/${savedId}`);
 }
 
-const ADS_SETUP = "Saving Google Ads audits needs one setup step first (0028 SQL).";
+const ADS_SETUP = "Saving Google Ads audits needs one setup step first (0029 SQL).";
 
 /** Save a Google Ads audit (new or edited). Same rules as saveAudit; checked by parseAdsIntake. */
 export async function saveAdsAudit(_prev: AuditFormState, form: FormData): Promise<AuditFormState> {
@@ -2692,7 +2692,7 @@ export async function saveAdsAudit(_prev: AuditFormState, form: FormData): Promi
       .single();
     if (error || !data) {
       console.warn(`Ads audit not added: ${error?.code}`);
-      // 23514 here almost always means 0028 hasn't been run (the old rule refuses "ads_" checkpoints).
+      // 23514 here almost always means 0029 hasn't been run (the old rule refuses "ads_" checkpoints).
       return { error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : error?.code === "42501" ? "That lead isn't an open lead in a sales pipeline." : error?.code === "23514" ? ADS_SETUP : "Couldn't save it." };
     }
     savedId = data.id as string;
@@ -2702,7 +2702,7 @@ export async function saveAdsAudit(_prev: AuditFormState, form: FormData): Promi
   redirect(`/audits/${savedId}`);
 }
 
-/** Owner: the Google Ads management plans (audit_settings.ads_plans, 0028). */
+/** Owner: the Google Ads management plans (audit_settings.ads_plans, 0029). */
 export async function saveAdsPlans(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
@@ -2724,7 +2724,7 @@ export async function saveAdsPlans(_prev: { error?: string; ok?: boolean } | und
   const { error } = await db.from("audit_settings").update({ ads_plans: plans, updated_by: me.userId, updated_at: new Date().toISOString() }).eq("id", true);
   if (error) {
     console.warn(`Ads plans refused: ${error.code}`);
-    return { error: MISSING_TABLE.has(error.code ?? "") ? "Google Ads prices need one setup step first (0028 SQL)." : "Couldn't save the prices." };
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Google Ads prices need one setup step first (0029 SQL)." : "Couldn't save the prices." };
   }
   revalidatePath("/audits", "layout");
   return { ok: true };

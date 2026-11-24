@@ -2180,9 +2180,9 @@ export interface AuditSettingsView {
   ready: boolean;
   caps: AuditCaps;
   agency: AuditAgencySettings;
-  /** false = 0028 not run yet: Google Ads audits can't be saved and Ads prices can't be set. */
+  /** false = 0029 not run yet: Google Ads audits can't be saved and Ads prices can't be set. */
   adsReady: boolean;
-  /** The owner's Google Ads management plans (0028). */
+  /** The owner's Google Ads management plans (0029). */
   adsPlans: AdsPlan[];
   /** The owner's weekly cap for the signed-in person, when one is set. */
   myWeeklyCap: number | null;
@@ -2210,7 +2210,7 @@ export const getAuditSettings = cache(async (): Promise<AuditSettingsView> => {
     db.from("audit_settings").select(`${SETTINGS_COLUMNS}, ads_plans`).maybeSingle(),
     db.from("audit_user_limits").select("user_id, weekly_usd"),
   ]);
-  // Before 0028 the ads_plans column doesn't exist yet: read the rest and say "needs 0028".
+  // Before 0029 the ads_plans column doesn't exist yet: read the rest and say "needs 0029".
   const adsReady = !withAds.error;
   const settings = adsReady ? withAds : await db.from("audit_settings").select(SETTINGS_COLUMNS).maybeSingle();
   if (settings.error || !settings.data) return NO_AUDIT_SETTINGS;
@@ -2243,7 +2243,7 @@ export interface SavedAudit {
   sections: AuditSectionId[];
   /** SEO audits: null = the saved intake no longer passes the check ("needs fixing"). Always null for Google Ads audits. */
   intake: AuditIntake | null;
-  /** Google Ads audits only (0028): their own intake check and checkpoints. */
+  /** Google Ads audits only (0029): their own intake check and checkpoints. */
   ads: { intake: AdsIntake | null; sections: AdsSectionId[] } | null;
   /** What every list shows, from either kind (null = needs fixing). */
   base: { company: string; domain: string; hqTown: string; state: string; competitors: number } | null;

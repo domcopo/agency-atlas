@@ -1993,7 +1993,7 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 7x. Google Ads audits (0028): Ads audits use their own checkpoint list (ads_ ids only),
+-- 7x. Google Ads audits (0029): Ads audits use their own checkpoint list (ads_ ids only),
 --     SEO audits keep theirs; nobody can mix them. Ads management prices: owner edits,
 --     sales reads. Who reads or saves audits is unchanged (7t).
 -- ---------------------------------------------------------------------------

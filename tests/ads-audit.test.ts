@@ -38,8 +38,8 @@ const ok = (over: Record<string, unknown> = {}): AdsIntake => {
 };
 
 describe("Google Ads audit checkpoints", () => {
-  it("the id list matches the 0028 database rule, and never overlaps the SEO ids", () => {
-    const sql = read("supabase/migrations/0028_ads_audits.sql");
+  it("the id list matches the 0029 database rule, and never overlaps the SEO ids", () => {
+    const sql = read("supabase/migrations/0029_ads_audits.sql");
     const ads = sql.match(/kind = 'ads' and sections <@ array\[([^\]]+)\]/)?.[1];
     const seo = sql.match(/kind = 'seo' and sections <@ array\[([^\]]+)\]/)?.[1];
     const ids = (list: string | undefined) => (list ?? "").match(/'([a-z_]+)'/g)?.map((x) => x.slice(1, -1)) ?? [];

@@ -26,7 +26,7 @@ export interface AdsBuilderProps {
   sections: AdsSectionId[];
   capsLine: string | null;
   plansSet: boolean;
-  /** false = 0023 or 0028 not run yet. */
+  /** false = 0023 or 0029 not run yet. */
   ready: boolean;
   setupNote: string | null;
 }

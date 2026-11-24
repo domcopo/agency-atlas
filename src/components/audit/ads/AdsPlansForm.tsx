@@ -13,7 +13,7 @@ const field = "mt-1 min-h-11 w-full rounded-xl border border-line bg-white/5 px-
 export function AdsPlansForm({ plans, ready }: { plans: AdsPlan[]; ready: boolean }) {
   const [state, action, pending] = useActionState(saveAdsPlans, undefined);
   const recIndex = plans.findIndex((p) => p.recommended);
-  if (!ready) return <p className="text-xs text-faint">Google Ads prices need one setup step first (0028 SQL).</p>;
+  if (!ready) return <p className="text-xs text-faint">Google Ads prices need one setup step first (0029 SQL).</p>;
   return (
     <form action={action} className="space-y-2">
       <p className="text-sm font-semibold">Google Ads management plans</p>

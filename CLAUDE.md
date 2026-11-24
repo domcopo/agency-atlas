@@ -55,7 +55,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md`, `docs/DEVELOPER_SIMPLIFY_PLAN.md` |
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
 | Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
-| Audits area (SEO + Google Ads doors), audit builder (checkpoints, saved audits, caps, custom prompt), Google Ads audit (`0028`, `src/lib/audit/ads.ts`), sales leaderboard (`0026` view, `src/lib/leaderboard.ts`) | `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`, `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
+| Audits area (SEO + Google Ads doors), audit builder (checkpoints, saved audits, caps, custom prompt), Google Ads audit (`0029`, `src/lib/audit/ads.ts`), sales leaderboard (`0026` view, `src/lib/leaderboard.ts`) | `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`, `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, playbook (later) | `docs/CLIENT_CARE_PLAN.md` (`0025`), `src/lib/care.ts` |
 | SEO Watcher (rankings board, demand, opportunity markets; Phase A = sample preview) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |

@@ -1,6 +1,6 @@
 -- Agency Atlas: Google Ads audits (approved 2026-11-24, docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md
--- Phase 3). Numbered 0028: the owner set 0024 Scout, 0025 client care, 0026 leaderboard,
--- 0027 SEO Watcher. It needs 0023 (saved audits) and nothing else.
+-- Phase 3). Numbered 0029: the owner set 0024 Scout, 0025 client care, 0026 leaderboard,
+-- 0027 SEO Watcher, 0028 client journey. It needs 0023 (saved audits) and nothing else.
 --
 -- Run ONCE in the Supabase SQL Editor. Before running it, check that today's daily backup
 -- exists (Supabase > Database > Backups). Undo steps are at the end.

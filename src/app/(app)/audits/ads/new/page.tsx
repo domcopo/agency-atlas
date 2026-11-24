@@ -25,7 +25,7 @@ export default async function NewAdsAuditPage({ searchParams }: { searchParams: 
   }
   const [settings, spend] = await Promise.all([getAuditSettings(), getAuditSpend()]);
   const ready = settings.ready && settings.adsReady;
-  const setupNote = !usesDatabase() ? "Saving needs the database." : !settings.ready ? "Saving audits needs one setup step first (0023 SQL)." : !settings.adsReady ? "Saving Google Ads audits needs one setup step first (0028 SQL)." : null;
+  const setupNote = !usesDatabase() ? "Saving needs the database." : !settings.ready ? "Saving audits needs one setup step first (0023 SQL)." : !settings.adsReady ? "Saving Google Ads audits needs one setup step first (0029 SQL)." : null;
   return (
     <>
       <PageHeader

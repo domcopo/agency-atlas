@@ -28,7 +28,7 @@ export default async function EditAuditPage({ params }: { params: Promise<{ id: 
     return (
       <>
         <PageHeader title="Edit Google Ads audit" subtitle={audit.base?.company ?? audit.title} backHref={`/audits/${audit.id}`} backLabel="Audit" />
-        <AdsBuilder id={audit.id} intake={adsIntake} sections={audit.ads?.sections ?? []} capsLine={capsLine(settings, spend)} plansSet={settings.adsPlans.length > 0} ready={settings.ready && settings.adsReady} setupNote={settings.adsReady ? null : "Saving Google Ads audits needs one setup step first (0028 SQL)."} />
+        <AdsBuilder id={audit.id} intake={adsIntake} sections={audit.ads?.sections ?? []} capsLine={capsLine(settings, spend)} plansSet={settings.adsPlans.length > 0} ready={settings.ready && settings.adsReady} setupNote={settings.adsReady ? null : "Saving Google Ads audits needs one setup step first (0029 SQL)."} />
       </>
     );
   }

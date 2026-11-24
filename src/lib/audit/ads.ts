@@ -6,7 +6,7 @@
 // is a labeled model with its inputs shown; rates stay "assumption" until the client
 // confirms them; plan prices come only from the owner's settings; no emails or phone
 // numbers anywhere. The database keeps the checkpoint ids in a check rule
-// (supabase/migrations/0028_ads_audits.sql); a test makes sure they match.
+// (supabase/migrations/0029_ads_audits.sql); a test makes sure they match.
 
 import type { Fig, SourceId } from "./data";
 import { parseIntake, type AuditIntake } from "./intake";
@@ -168,7 +168,7 @@ export function parseAdsIntake(raw: unknown): AdsIntakeResult {
 }
 
 // ---------------------------------------------------------------------------
-// Owner's ad-management plans (audit_settings.ads_plans, 0028)
+// Owner's ad-management plans (audit_settings.ads_plans, 0029)
 // ---------------------------------------------------------------------------
 
 export interface AdsPlan {

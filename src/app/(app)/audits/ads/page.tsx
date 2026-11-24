@@ -38,7 +38,7 @@ export default async function AdsAuditsPage() {
         }
       />
 
-      {usesDatabase() && ready && !settings.adsReady && <p className="glass mb-3 rounded-3xl px-4 py-3 text-sm text-muted">Saving Google Ads audits needs one setup step first (0028 SQL). The template below still works.</p>}
+      {usesDatabase() && ready && !settings.adsReady && <p className="glass mb-3 rounded-3xl px-4 py-3 text-sm text-muted">Saving Google Ads audits needs one setup step first (0029 SQL). The template below still works.</p>}
 
       <SectionTitle aside={ready ? `${open.length} saved` : undefined}>{lead ? "Saved Google Ads audits" : "My Google Ads audits"}</SectionTitle>
       {open.length ? (
