@@ -50,9 +50,11 @@ Same rules as the SEO audit: every figure has a source and date, missing = "not 
 **Database (`0028` or later; `0027` is SEO Watcher):** probably none for the audit itself (`audits` already stores intake/config/data as JSON); `audit_settings` gains an `ads_plans` column. Break-in tests added for it.
 
 ## 3. Sales leaderboard
-**What it shows:** a slim card at the top right of the Sales tab (on a phone: a row of small chips under the title). Each salesperson: initials icon, first name, total, rank. Gold/silver/bronze for the top 3, everyone else after. Owner can turn it on/off.
+**What it shows:** a slim card at the top right of the Sales tab (on a phone: a row of small chips under the title). Each salesperson: initials icon, first name, total, rank. Gold/silver/bronze for the top 3 who won something, everyone else after; people with the same total share a rank. (An owner on/off switch was left out for now; ask if wanted.)
 
-**Where the number comes from (never typed in, never made up):** the **value of deals marked Won in GoHighLevel**, credited to the salesperson the deal is assigned to in GoHighLevel, for **this month** (resets on the 1st). Label on the card: "Won deal value · GoHighLevel · this month". People with no linked GoHighLevel user show "not linked" instead of $0, so nobody looks worse than they are.
+**Built:** `0026_sales_leaderboard.sql` (one read-only view: name, linked, is_me, won_usd, won_deals; owner/managers/sales with two-factor; break-in tests 7w), `src/lib/leaderboard.ts` (rank, medals, labels; `tests/leaderboard.test.ts`), `getLeaderboard` in `data-source.ts`, `src/components/sales/SalesLeaderboard.tsx`. Before `0026` is run the card is hidden (the owner sees "needs 0026").
+
+**Where the number comes from (never typed in, never made up):** the **value of deals marked Won in GoHighLevel**, credited to the salesperson the deal is assigned to in GoHighLevel, for **this month**, New York time (resets on the 1st). Once sales pipelines are picked, only those count; before that, every pipeline counts. Label on the card: "Won deal value · GoHighLevel · this month". People with no linked GoHighLevel user show "not linked" instead of $0, so nobody looks worse than they are.
 
 **Who sees what (needs a small database step):** today a salesperson can only see *open* leads, not won deals. The leaderboard needs a tiny summary the database builds for them: **name + total + rank only**, never which deals or which clients. Planned as a read-only summary in `0026` with break-in tests (salesperson can see totals, can't see the deals behind them; developers see nothing).
 

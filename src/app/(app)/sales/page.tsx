@@ -10,6 +10,7 @@ import { ProspectCard, stageInfo } from "@/components/cards/ProspectCard";
 import { LeadActionForm } from "@/components/forms/LeadActionForm";
 import { Provenance } from "@/components/labels/labels";
 import { AuditDoors, AuditsCard } from "@/components/sales/AuditsCard";
+import { SalesLeaderboard } from "@/components/sales/SalesLeaderboard";
 import { ScoutCard } from "@/components/scout/ScoutCard";
 import { LeadRow } from "@/components/sales/LeadRow";
 import { PipelineHealthCard } from "@/components/sales/PipelineHealthCard";
@@ -88,7 +89,8 @@ async function SalespersonSales({ who }: { who?: string }) {
   const tab = (on: boolean) => `pressable flex min-h-10 flex-1 items-center justify-center rounded-xl text-sm font-semibold ${on ? "bg-violet-deep text-ink" : "text-muted"}`;
   return (
     <>
-      <PageHeader title="Sales" subtitle="Your leads and follow-ups" />
+      <PageHeader title="Sales" subtitle="Your leads and follow-ups" action={<SalesLeaderboard variant="card" owner={false} />} />
+      <SalesLeaderboard variant="chips" owner={false} />
       <AuditDoors />
       {!sales.ready || !sales.pipelines.some((p) => p.active) ? (
         <>
@@ -289,7 +291,12 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <PageHeader title="Sales" subtitle="Winning new clients for the agency" />
+      <PageHeader
+        title="Sales"
+        subtitle="Winning new clients for the agency"
+        action={viewer || showSamples ? <SalesLeaderboard variant="card" owner={viewer?.role === "owner"} /> : undefined}
+      />
+      {(viewer || showSamples) && <SalesLeaderboard variant="chips" owner={viewer?.role === "owner"} />}
       {(viewer || showSamples) && <AuditDoors />}
       {viewer && <LeadSales member={viewer} />}
       {showSamples && samples}
