@@ -152,7 +152,9 @@ Prices from `src/lib/ai/budget.ts` (Claude Opus 5.5: $4 per million input tokens
 
 ## 10. Phase 2 in detail: Ask BizToad (text), owner + managers
 
-**Written 2026-11-24, waiting for the owner's go-ahead.** This is the first BizToad step that changes the database and spends AI money.
+**Built 2026-11-24 (approved the same day); `0029` not run yet.** This is the first BizToad step that changes the database and spends AI money.
+
+Built: `supabase/migrations/0029_biztoad.sql` + break-in tests (section 7f), `src/lib/ai/toad-snapshot.ts`, `TOAD_SCHEMA`/`TOAD_TASK`/`textRequestWorstCase` in `client.ts`, `getToadStatus` in `data-source.ts`, `askToad`/`setToadSettings` in `actions.ts`, `ToadChat.tsx`, `ToadSettingsForm.tsx` (Safety page), `ask_toad` in `bot-runs.ts`. Small differences from the text below: the facts also include recent check-in notes per client (trimmed first when too long, emails/phones blanked); the "who may ask" roles setting exists in the database but has no screen yet (Phase 3). Still to do: the owner runs `0029`, then the hand checks with real questions.
 
 ### What you'll be able to do
 

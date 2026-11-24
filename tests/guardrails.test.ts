@@ -388,6 +388,46 @@ describe("AI read-only + budget (Phase 4)", () => {
   });
 });
 
+describe("BizToad (0029)", () => {
+  const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
+  const ask = (() => {
+    const start = actions.indexOf("export async function askToad(");
+    expect(start).toBeGreaterThan(-1);
+    return actions.slice(start, actions.indexOf("\nexport async function ", start + 10));
+  })();
+  const builder = readFileSync(join(ROOT, "src/lib/ai/toad-snapshot.ts"), "utf8");
+  const chat = readFileSync(join(ROOT, "src/components/toad/ToadChat.tsx"), "utf8");
+
+  it("the fact builder never touches billing, money tables, the network or the database", () => {
+    expect(builder).not.toMatch(/@\/lib\/billing|client_money|ghl\/client|supabase|fetch\(|@\/lib\/ai\/client/);
+  });
+
+  it("askToad reads nothing from billing or client money, and never asks for amounts", () => {
+    expect(ask).not.toMatch(/billing|client_money|getBilling|monthlyUsd|moneyShown/i);
+  });
+
+  it("askToad reserves the cost in the database BEFORE asking, then logs it", () => {
+    const reserve = ask.indexOf('db.from("toad_spend").insert(');
+    expect(reserve).toBeGreaterThan(-1);
+    expect(reserve).toBeLessThan(ask.indexOf("await askAi("));
+    expect(ask).toMatch(/if \(reserve\.error\) return/);
+    expect(ask).toMatch(/await logAiUsage\(db, "ask_toad", result\)/);
+  });
+
+  it("askToad saves nothing but the reservation and the cost log", () => {
+    const writes = [...ask.matchAll(/\.(insert|upsert|update|delete)\(/g)].length;
+    expect(writes).toBe(1); // the toad_spend reservation (logAiUsage writes the cost row)
+    expect(ask).not.toMatch(/\.storage\b|writeFile|ai_briefings/);
+  });
+
+  it("answers are cleaned on the server and shown as plain text", () => {
+    expect(ask).toMatch(/restoreToadAnswer\(/);
+    expect(ask).toMatch(/cleanQuestion\(/);
+    expect(ask).toMatch(/cleanHistory\(/);
+    expect(chat).not.toMatch(/dangerouslySetInnerHTML|innerHTML|<a\s+href=\{/);
+  });
+});
+
 describe("cancel and quick add (0013)", () => {
   const actions = readFileSync(join(ROOT, "src/app/actions.ts"), "utf8");
   const body = (name: string) => {

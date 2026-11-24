@@ -1439,7 +1439,10 @@ create temp table sales_scope_check as
                           -- 0024: one settings row salespeople read on purpose (their Scout cap);
                           -- tested explicitly in 7u. Every other scout_ table stays in this check
                           -- AND gets own-rows / shared-pool checks in 7u.
-                          'scout_settings');
+                          'scout_settings',
+                          -- 0029: BizToad's on/off + caps row, read by everyone on the team on
+                          -- purpose (tested in 7f). toad_spend stays in this check.
+                          'toad_settings');
 do $$
 declare r record; n bigint;
 begin
@@ -1908,6 +1911,106 @@ select test.expect('select * from public.care_plans', 0, 'owner without two-fact
 select test.expect('select * from public.client_money', 0, 'owner without two-factor reads no amounts');
 select test.expect($$insert into public.care_plans (service, name) values ('SEO', 'No 2FA (test)')$$, -1, 'owner without two-factor cannot add a tier');
 commit;
+
+-- ---------------------------------------------------------------------------
+-- 7f. BizToad (0029): who may ask, the caps, the rate limit, add-only ledger.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.toad_settings', 1, 'developer reads the BizToad settings (to know if it is on)');
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -1, 'developer cannot ask while developers are switched off');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('ask_toad', 'claude-opus-5-5', 1, 1, 0.01, 'ok')$$, -1, 'developer cannot log BizToad costs while switched off');
+select test.expect($$update public.toad_settings set roles = '{owner,manager,developer}'$$, 0, 'developer cannot switch developers on');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -1, 'salesperson cannot ask while sales is switched off');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.toad_settings', 0, 'someone not on the team reads no BizToad settings');
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -1, 'someone not on the team cannot ask');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -1, 'owner without two-factor cannot ask');
+select test.expect('select * from public.toad_settings', 0, 'owner without two-factor reads no BizToad settings');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, 1, 'manager asks a question');
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -2, 'manager cannot ask twice within 5 seconds');
+select test.expect($$insert into public.toad_spend (user_id, usd) values ('00000000-0000-0000-0000-0000000000a1', 0.08)$$, -1, 'manager cannot spend in someone else''s name');
+select test.expect($$insert into public.toad_spend (usd) values (5)$$, -2, 'a single question cannot reserve more than $1');
+select test.expect($$update public.toad_spend set usd = 0.01$$, -1, 'nobody edits the ledger');
+select test.expect($$delete from public.toad_spend$$, -1, 'nobody deletes from the ledger');
+select test.expect($$update public.toad_settings set per_person_usd = 50$$, 0, 'manager cannot change the BizToad caps');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('ask_toad', 'claude-opus-5-5', 1000, 100, 0.006, 'ok')$$, 1, 'manager logs a BizToad cost');
+commit;
+
+-- Real spending near the cap (seeded as admin): the next question is refused.
+insert into public.ai_usage (requested_by, feature, model, input_tokens, output_tokens, cost_usd, outcome)
+  values ('00000000-0000-0000-0000-0000000000a1', 'ask_toad', 'claude-opus-5-5', 1, 1, 4.95, 'ok');
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -2, 'a question past the owner''s own $5 is refused');
+select test.expect($$insert into public.toad_spend (usd) values (0.03)$$, 1, 'a question that still fits is allowed');
+select test.expect('select * from public.toad_spend', 2, 'owner reads everyone''s BizToad spend');
+commit;
+
+-- 30 questions in the last hour (seeded with triggers off): the 31st is refused.
+set session_replication_role = replica;
+insert into public.toad_spend (user_id, usd, at)
+  select '00000000-0000-0000-0000-0000000000a7', 0.001, now() - (g || ' minutes')::interval from generate_series(2, 31) g;
+set session_replication_role = default;
+update public.toad_settings set roles = '{owner,manager,sales}';
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.01)$$, -2, 'the 31st question in an hour is refused');
+select test.expect('select * from public.toad_spend', 30, 'a salesperson reads only their own spend');
+commit;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.05)$$, 1, 'once sales is switched on, a salesperson can ask');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('ask_toad', 'claude-opus-5-5', 1, 1, 0.01, 'ok')$$, 1, 'and log their own BizToad cost');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'claude-opus-5-5', 1, 1, 0.01, 'ok')$$, -1, 'but no other AI feature');
+select test.expect('select * from public.ai_usage', 0, 'and still cannot read the AI cost log');
+commit;
+
+-- The whole-app AI budget and the BizToad switch.
+update public.ai_settings set monthly_budget_usd = 0.5 where id = 1;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.08)$$, -2, 'a question past the whole-app AI budget is refused');
+commit;
+update public.ai_settings set monthly_budget_usd = 10 where id = 1;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.toad_settings set enabled = false$$, 1, 'owner switches BizToad off for everyone');
+select test.expect($$update public.toad_settings set roles = '{owner,boss}'$$, -2, 'only real roles can be switched on');
+select test.expect($$update public.toad_settings set per_person_usd = 500$$, -2, 'the per-person cap has a ceiling');
+commit;
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.toad_spend (usd) values (0.01)$$, -2, 'nobody can ask while BizToad is off (the guard refuses it before the rules even look)');
+commit;
+update public.toad_settings set enabled = true, roles = '{owner,manager}';
 
 -- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.

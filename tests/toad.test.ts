@@ -1,6 +1,9 @@
-// BizToad motion rules (docs/BIZTOAD_PLAN.md, Phase 1).
+// BizToad (docs/BIZTOAD_PLAN.md): motion rules (Phase 1) and what the AI is given (Phase 2).
 import { describe, expect, it } from "vitest";
 import { mayMove, nextIdleDelay, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
+import { buildCodebook, buildStaffBook } from "@/lib/ai/snapshot";
+import { buildToadFacts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
+import type { RosterClient } from "@/lib/types";
 
 const eye = { x: 100, y: 100 };
 
@@ -74,5 +77,131 @@ describe("when the toad may move", () => {
     expect(parseToadMode("hidden")).toBe("hidden");
     expect(parseToadMode(undefined)).toBe("on");
     expect(parseToadMode("<script>")).toBe("on");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: what the AI is given, and how its answer is checked (0029).
+// ---------------------------------------------------------------------------
+
+const roster = [
+  { id: "sample-plumbing", name: "Sample Plumbing (fictional)" },
+  { id: "demo-roofing", name: "Demo Roofing Co (fictional)" },
+] as unknown as RosterClient[];
+const book = buildCodebook(roster);
+const staff = buildStaffBook([{ id: "s1", name: "Alex Sample" }, { id: "s2", name: "Jordan Example" }]);
+
+function keysDeep(v: unknown, out: string[] = []): string[] {
+  if (Array.isArray(v)) v.forEach((x) => keysDeep(x, out));
+  else if (typeof v === "object" && v !== null)
+    for (const [k, x] of Object.entries(v)) {
+      out.push(k);
+      keysDeep(x, out);
+    }
+  return out;
+}
+
+const baseInput = (): ToadFactsInput => ({
+  today: "2026-11-24",
+  askerRole: "manager",
+  askerCode: "T1",
+  screens: TOAD_SCREENS.full,
+  clients: [
+    { code: "C1", status: "active", monthly_usd: 900, health: { word: "watch" }, health_score: { value: 62 }, recent_contact_notes: [{ note: "Call me at 330-555-0142 or owner@example.com" }] },
+    { code: "C2", status: "active", monthly_usd: 450, extra: { invoice_total: 12, nested: [{ price: 3, ok: 1 }] } },
+  ],
+  workOrders: [{ title: "Fix homepage speed", client: "C1", owner: "T2", due: "2026-11-20", overdue: true }],
+  team: [{ code: "T1", role: "manager", open_hours: 4 }],
+  rankedPlan: [{ rank: 1, client: "C1" }],
+  riskAlerts: [{ client: "C1", score: 40 }],
+  pipeline: { open_deals: 4, by_stage: [{ stage: "New", count: 2 }], open_value_usd: 5000 },
+});
+
+describe("BizToad facts never carry money or contact details", () => {
+  it("removes every money-looking field at any depth, for any role", () => {
+    for (const askerRole of ["owner", "manager"]) {
+      const facts = buildToadFacts({ ...baseInput(), askerRole });
+      const bad = keysDeep(facts).filter((k) => MONEY_KEY.test(k));
+      expect(bad).toEqual([]);
+      expect(JSON.stringify(facts)).not.toMatch(/900|450|5000/);
+    }
+  });
+
+  it("keeps the useful facts (health score value, counts)", () => {
+    const facts = buildToadFacts(baseInput()) as unknown as { clients: { health_score?: { value: number } }[]; sales_pipeline: { open_deals: number } };
+    expect(facts.clients[0]?.health_score?.value).toBe(62);
+    expect(facts.sales_pipeline.open_deals).toBe(4);
+  });
+
+  it("blanks emails and phone numbers in free text", () => {
+    const text = JSON.stringify(buildToadFacts(baseInput()));
+    expect(text).not.toMatch(/330-555-0142|owner@example\.com/);
+    expect(scrubContacts("Text (330) 555-0199 now")).toBe("Text [phone removed] now");
+    expect(scrubContacts("Due 2026-11-20, 3 items")).toBe("Due 2026-11-20, 3 items");
+    expect(stripMoney({ a: "x@example.com" })).toEqual({ a: "[email removed]" });
+  });
+
+  it("trims to the size limit, dropping notes before clients", () => {
+    const input = baseInput();
+    input.clients = Array.from({ length: 200 }, (_, i) => ({ code: `C${i + 1}`, status: "active", recent_contact_notes: [{ note: "x".repeat(300) }], open_items: [{ title: "y".repeat(100) }] }));
+    input.workOrders = Array.from({ length: 200 }, (_, i) => ({ title: `Order ${i}`, due: "2026-11-30" }));
+    const facts = buildToadFacts(input, 20_000) as unknown as { clients: Record<string, unknown>[]; open_work_orders: unknown[] };
+    expect(JSON.stringify(facts).length).toBeLessThanOrEqual(20_000);
+    expect(facts.clients.some((c) => "recent_contact_notes" in c)).toBe(false);
+    expect((facts.clients[0] as { code: string }).code).toBe("C1"); // most urgent kept
+    expect(facts.open_work_orders.length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("BizToad questions and history are cleaned", () => {
+  it("swaps client and team names for codes and blanks contacts", () => {
+    const q = cleanQuestion("What does Alex Sample owe Sample Plumbing (fictional)? Email bob@example.com", book, staff);
+    expect(q).not.toMatch(/Alex Sample|Sample Plumbing|bob@example/);
+    expect(q).toMatch(/\[T1\]/);
+    expect(q).toMatch(/\[C1\]/);
+  });
+
+  it("caps length and strips hidden characters", () => {
+    expect(cleanQuestion("a".repeat(5000), book, staff).length).toBe(1000);
+    expect(cleanQuestion("hi\u0000there", book, staff)).toBe("hi there");
+    expect(cleanQuestion(42, book, staff)).toBe("");
+  });
+
+  it("keeps only the last 6 turns, each cleaned", () => {
+    const turns = Array.from({ length: 10 }, (_, i) => ({ q: `Question ${i} about Demo Roofing Co (fictional)`, a: "Answer" }));
+    const h = cleanHistory(turns, book, staff);
+    expect(h).toHaveLength(6);
+    expect(h[0]?.q).toMatch(/Question 4/);
+    expect(h.every((t) => !t.q.includes("Demo Roofing"))).toBe(true);
+    expect(cleanHistory("nope", book, staff)).toEqual([]);
+    expect(cleanHistory([{ q: 5 }, null], book, staff)).toEqual([]);
+  });
+});
+
+describe("BizToad answers are checked", () => {
+  it("keeps only links to this person's own screens", () => {
+    const links = safeToadLinks(
+      [{ label: "Bad", path: "https://evil.example.com" }, { label: "Billing", path: "/billing" }, { label: "Work orders", path: "/work/orders" }, { label: "Dup", path: "/work/orders" }],
+      TOAD_SCREENS.full,
+    );
+    expect(links).toEqual([{ label: "Work orders", path: "/work/orders" }]);
+    expect(safeToadLinks([{ path: "/clients" }], TOAD_SCREENS.developer)).toEqual([]);
+  });
+
+  it("no role's screen list includes billing or trash", () => {
+    for (const list of Object.values(TOAD_SCREENS)) expect(list.some((s) => /billing|trash/.test(s.path))).toBe(false);
+  });
+
+  it("swaps codes back to names and limits lengths", () => {
+    const a = restoreToadAnswer(
+      { answer: "[C1] needs a check-in; ask [T2].", points: Array.from({ length: 9 }, () => ({ text: "p", source: "s" })), unknowns: ["u"], links: [{ label: "x", path: "/" }] },
+      book,
+      staff,
+      TOAD_SCREENS.full,
+    );
+    expect(a.answer).toBe("Sample Plumbing (fictional) needs a check-in; ask Jordan Example.");
+    expect(a.points).toHaveLength(5);
+    expect(a.links).toHaveLength(1);
+    expect(restoreToadAnswer(null, book, staff, TOAD_SCREENS.full).answer).toMatch(/couldn't/);
   });
 });

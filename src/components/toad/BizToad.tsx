@@ -1,7 +1,8 @@
 "use client";
 
-// BizToad (Phase 1, docs/BIZTOAD_PLAN.md): the toad in the corner. No AI yet: tapping it
-// opens a small "coming soon" panel. All timing and distances come from TOAD_RULES.
+// BizToad (docs/BIZTOAD_PLAN.md): the toad in the corner. Tapping it opens "Ask BizToad"
+// (Phase 2, 0029) for people allowed to ask, otherwise a short note with helpful links.
+// All timing and distances come from TOAD_RULES.
 //
 // - corner (computers): eyes follow a nearby mouse, a small idle move every 1–2 minutes,
 //   tucks to the edge when a button is underneath it.
@@ -14,6 +15,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/format";
 import { CONTROL_SELECTOR, mayMove, nextIdleDelay, pickIdleMove, pupilOffset, TOAD_COOKIE, TOAD_RULES, type IdleMove, type ToadMode } from "@/lib/toad";
+import { ToadChat } from "./ToadChat";
 import { TOAD_EYES, ToadSvg } from "./ToadSvg";
 
 /** Remember the choice in this browser for a year (a display preference, no personal data). */
@@ -35,11 +37,17 @@ export function BizToad({
   variant,
   initialMode,
   links,
+  ask,
+  note,
 }: {
   variant: "corner" | "bar";
   initialMode: ToadMode;
-  /** Screens this person's role can open, shown while asking isn't available yet. */
+  /** Screens this person's role can open, shown while asking isn't available. */
   links: { label: string; href: string }[];
+  /** Set when this person may ask (the server checks again on every question). */
+  ask?: { usedUsd: number | null; capUsd: number } | null;
+  /** Why asking isn't available (e.g. the database update hasn't been run). */
+  note?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -52,6 +60,7 @@ export function BizToad({
   const [open, setOpen] = useState(false);
   const [move, setMove] = useState<IdleMove | null>(null);
   const [tucked, setTucked] = useState(false);
+  const [thinking, setThinking] = useState(false);
   const corner = variant === "corner";
 
   const canMove = useCallback(
@@ -195,12 +204,16 @@ export function BizToad({
       aria-label="Ask BizToad"
       className={cn(
         "glass z-50 rounded-3xl border border-line bg-bg-raised/95 p-4 text-sm shadow-[0_20px_50px_-12px_rgb(0_0_0/0.7)] backdrop-blur-xl",
-        corner ? "absolute bottom-full right-0 mb-3 w-80" : "fixed inset-x-3 top-28",
+        corner ? cn("absolute bottom-full right-0 mb-3", ask ? "w-96" : "w-80") : "fixed inset-x-3 top-28",
       )}
     >
-      <p className="font-display text-base font-semibold">Hi, I&apos;m BizToad.</p>
-      <p className="mt-1 text-muted">Soon you&apos;ll be able to ask me questions about your work right here. Until then, these might help:</p>
-      {links.length > 0 && (
+      <p className="mb-1 font-display text-base font-semibold">{ask ? "Ask BizToad" : "Hi, I\u2019m BizToad."}</p>
+      {ask ? (
+        <ToadChat usedUsd={ask.usedUsd} capUsd={ask.capUsd} onThinking={setThinking} />
+      ) : (
+        <p className="text-muted">{note ?? "Soon you\u2019ll be able to ask me questions about your work right here."} Until then, these might help:</p>
+      )}
+      {!ask && links.length > 0 && (
         <ul className="mt-3 space-y-1.5">
           {links.map((l) => (
             <li key={l.href}>
@@ -238,6 +251,7 @@ export function BizToad({
         corner ? "toad-corner fixed bottom-6 right-6 z-30 hidden lg:block" : "relative",
         corner && tucked && !open && "toad-tucked",
         move && `toad-move-${move}`,
+        thinking && "toad-thinking",
       )}
     >
       {panel}

@@ -348,6 +348,10 @@ body {
   25%, 40% { transform: translateX(-3px); }
   65%, 80% { transform: translateX(3px); }
 }
+/* Thinking (waiting for an answer): eyes look up. A still pose, so it's fine with reduce motion. */
+.toad-thinking .toad-glance {
+  transform: translateY(-3px);
+}
 /* Tucked: slides into the right edge (a 20 px peek) while a button is underneath its spot.
    Pointing at it or tabbing to it brings it back. */
 .toad-corner .toad-button {
