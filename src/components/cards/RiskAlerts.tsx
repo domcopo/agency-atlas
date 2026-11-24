@@ -45,7 +45,7 @@ export function RiskAlerts({ alerts, limit = 5, historyReady }: { alerts: RiskAl
       </div>
       <p className="mt-1.5 text-sm">{a.problem}</p>
       <p className="mt-1 text-xs text-muted">
-        ${a.client.monthlyUsd.toLocaleString("en-US")}/mo · {a.client.ownerName ?? <span className="text-amber">no owner</span>} · detected {shortDay(a.detectedOn)}
+        {a.client.monthlyUsd !== null && `$${a.client.monthlyUsd.toLocaleString("en-US")}/mo · `}{a.client.ownerName ?? <span className="text-amber">no owner</span>} · detected {shortDay(a.detectedOn)}
       </p>
       <details className="mt-2">
         <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center text-xs font-semibold text-violet">

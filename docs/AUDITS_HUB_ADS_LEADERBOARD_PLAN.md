@@ -47,14 +47,14 @@ Same rules as the SEO audit: every figure has a source and date, missing = "not 
 
 **Existing clients' real Google Ads accounts** (read-only, through Google's API) are a later step with its own approval: it needs a Google Ads developer token and read-only access, and the same "never write" rule as GoHighLevel.
 
-**Database (`0025` or later):** probably none for the audit itself (`audits` already stores intake/config/data as JSON); `audit_settings` gains an `ads_plans` column. Break-in tests added for it.
+**Database (`0028` or later; `0027` is SEO Watcher):** probably none for the audit itself (`audits` already stores intake/config/data as JSON); `audit_settings` gains an `ads_plans` column. Break-in tests added for it.
 
 ## 3. Sales leaderboard
 **What it shows:** a slim card at the top right of the Sales tab (on a phone: a row of small chips under the title). Each salesperson: initials icon, first name, total, rank. Gold/silver/bronze for the top 3, everyone else after. Owner can turn it on/off.
 
 **Where the number comes from (never typed in, never made up):** the **value of deals marked Won in GoHighLevel**, credited to the salesperson the deal is assigned to in GoHighLevel, for **this month** (resets on the 1st). Label on the card: "Won deal value · GoHighLevel · this month". People with no linked GoHighLevel user show "not linked" instead of $0, so nobody looks worse than they are.
 
-**Who sees what (needs a small database step):** today a salesperson can only see *open* leads, not won deals. The leaderboard needs a tiny summary the database builds for them: **name + total + rank only**, never which deals or which clients. Planned as a read-only summary in `0025` with break-in tests (salesperson can see totals, can't see the deals behind them; developers see nothing).
+**Who sees what (needs a small database step):** today a salesperson can only see *open* leads, not won deals. The leaderboard needs a tiny summary the database builds for them: **name + total + rank only**, never which deals or which clients. Planned as a read-only summary in `0026` with break-in tests (salesperson can see totals, can't see the deals behind them; developers see nothing).
 
 **The founder appears on it** if the founder is set up as a salesperson (linked to a GoHighLevel user in Sales → Setup). Names come from the team list in the database, never written into the code.
 
@@ -62,7 +62,7 @@ Same rules as the SEO audit: every figure has a source and date, missing = "not 
 
 ## Phases (each checked before the next)
 - **Phase 1: Audits area.** New pages, two doors, SEO builder without the type step, redirects. No database. Small.
-- **Phase 2: Sales leaderboard.** `0025` summary + break-in tests (Scout takes `0024`), card on Sales. You run `0025`.
+- **Phase 2: Sales leaderboard.** `0026` summary + break-in tests (order set by the owner: `0024` Scout, `0025` client care), card on Sales. You run `0026`.
 - **Phase 3: Google Ads audit, builder + deck with "not pulled yet" figures + custom Ads prompt.** Plus `ads_plans` in settings. Costs $0; fetches nothing.
 - **Phase 4: first real Ads audit.** Run the prompt in Claude Code on a real prospect (a few cents of DataForSEO), attach results (shares Phase B of the audit builder).
 - **Later:** KPI threshold; real client Google Ads accounts (read-only, separate approval); the app pulling data itself (audit Phase E).
