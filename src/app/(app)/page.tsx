@@ -74,6 +74,7 @@ import {
   getRosterSummary,
   getTrends,
   showsSamples,
+  getWatch,
 } from "@/lib/data-source";
 import { formatShortDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { stateNote } from "@/lib/billing";
@@ -100,6 +101,21 @@ function SeeAll({ href, children }: { href: string; children: string }) {
   );
 }
 
+/** Developers: a way into the SEO Watcher when a client they work on is watched (the database decides which). */
+async function DeveloperRankingsLink() {
+  const watch = await getWatch();
+  const mine = watch.clients.filter((c) => c.active);
+  if (!watch.ready || !mine.length) return null;
+  return (
+    <Link href="/growth/watcher" className="pressable glass mt-3 flex min-h-12 items-center justify-between gap-2 rounded-3xl px-4 text-sm">
+      <span>
+        <span className="font-semibold">Rankings</span> <span className="text-muted">for {mine.length === 1 ? mine[0]!.name : `${mine.length} of your clients`}</span>
+      </span>
+      <ArrowRight aria-hidden className="size-4 text-violet" />
+    </Link>
+  );
+}
+
 export default async function MissionControlPage() {
   // Developers (or the owner/a manager previewing one) get a short "Today" summary of
   // their own work; the work itself is on the Work tab. The database limits what they read.
@@ -111,7 +127,10 @@ export default async function MissionControlPage() {
       <>
         <PageHeader title={`Hi, ${dev.name}`} subtitle="Today" action={dev.preview ? undefined : <a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
         {dev.staffId ? (
-          <DeveloperHome items={items} today={getToday()} readOnly={dev.preview} />
+          <>
+            <DeveloperHome items={items} today={getToday()} readOnly={dev.preview} />
+            {!dev.preview && <DeveloperRankingsLink />}
+          </>
         ) : (
           <p className="glass rounded-3xl px-4 py-3 text-sm text-muted">Your login isn&apos;t linked to your team profile yet. Ask the owner to link it.</p>
         )}

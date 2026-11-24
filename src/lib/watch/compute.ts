@@ -115,7 +115,8 @@ export interface RankCheck {
   pack: number | null;
   /** Other sites seen in the results, with their position. */
   others: { domain: string; position: number }[];
-  source: SourceId;
+  /** "audit" = a starting point copied from a saved SEO audit. */
+  source: SourceId | "audit";
 }
 
 export interface VolumeMonth {
@@ -123,7 +124,7 @@ export interface VolumeMonth {
   marketId: string;
   month: string; // YYYY-MM
   volume: number | null;
-  source: SourceId;
+  source: SourceId | "audit";
 }
 
 export interface WatchData {

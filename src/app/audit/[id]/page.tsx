@@ -1,6 +1,6 @@
-// SEO audit viewer: the 1280×720 pages, outside the app's tabs so they can be shown full
-// width and printed to PDF. Two kinds:
-//  - "sample": the fictional template (owner, managers, salespeople).
+// Audit viewer (SEO and Google Ads): the 1280×720 pages, outside the app's tabs so they can
+// be shown full width and printed to PDF. Kinds:
+//  - "sample" / "sample-ads": the fictional templates (owner, managers, salespeople).
 //  - a saved audit (0023): only the pages its checkpoints picked, and only if the database
 //    lets this person read it (owner/managers: all; a salesperson: their own).
 
@@ -9,40 +9,51 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AuditDeck } from "@/components/audit/AuditDeck";
+import { AdsDeck } from "@/components/audit/ads/AdsDeck";
 import { PrintButton } from "@/components/audit/PrintButton";
 import { RoleNotice } from "@/components/shell/RoleNotice";
+import type { AdsBundle, AdsSectionId } from "@/lib/audit/ads";
 import type { AuditBundle } from "@/lib/audit/data";
 import type { AuditSectionId } from "@/lib/audit/sections";
-import { getAuditPreview, getMember, getSavedAudit, getSavedAuditBundle, SAMPLE_AUDIT_ID, usesDatabase } from "@/lib/data-source";
+import { getAdsPreview, getAuditPreview, getMember, getSavedAdsBundle, getSavedAudit, getSavedAuditBundle, SAMPLE_ADS_AUDIT_ID, SAMPLE_AUDIT_ID, usesDatabase } from "@/lib/data-source";
 import { isLead } from "@/lib/roles";
 import "@/components/audit/audit.css";
 
-export const metadata: Metadata = { title: "SEO audit" };
+export const metadata: Metadata = { title: "Audit" };
 
 export default async function AuditPage({ params }: { params: Promise<{ id: string }> }) {
   const me = usesDatabase() ? await getMember() : null;
   if (usesDatabase() && !isLead(me?.role) && me?.role !== "sales") {
     return (
       <main className="mx-auto max-w-lg px-4">
-        <RoleNotice title="SEO audit" />
+        <RoleNotice title="Audit" />
       </main>
     );
   }
   const { id } = await params;
   let bundle: AuditBundle | null = null;
+  let adsBundle: AdsBundle | null = null;
   let sections: AuditSectionId[] | undefined;
+  let adsSections: AdsSectionId[] | undefined;
   let back = { href: "/audits/seo", label: "Audits" };
   if (id === SAMPLE_AUDIT_ID) {
     bundle = getAuditPreview(id);
+  } else if (id === SAMPLE_ADS_AUDIT_ID) {
+    adsBundle = getAdsPreview(id);
+    back = { href: "/audits/ads", label: "Google Ads audits" };
   } else if (usesDatabase()) {
     const saved = await getSavedAudit(id);
-    if (saved) {
+    if (saved?.kind === "ads") {
+      adsBundle = await getSavedAdsBundle(saved);
+      adsSections = saved.ads?.sections;
+    } else if (saved) {
       bundle = await getSavedAuditBundle(saved);
       sections = saved.sections;
-      back = { href: `/audits/${saved.id}`, label: saved.intake?.company ?? "Audit" };
     }
+    if (saved) back = { href: `/audits/${saved.id}`, label: saved.base?.company ?? "Audit" };
   }
-  if (!bundle) notFound();
+  if (!bundle && !adsBundle) notFound();
+  const sample = bundle?.sample ?? adsBundle?.sample ?? false;
   return (
     <div className="audit audit-print-root">
       <div className="audit-viewer">
@@ -52,7 +63,7 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
           </Link>
           <PrintButton />
         </div>
-        {bundle.sample ? (
+        {sample ? (
           <p className="audit-toolbar w-full max-w-[1280px] rounded-xl border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
             Template preview: a fictional business with made-up numbers, so you can check the layout. Nothing was fetched and nothing was spent.
           </p>
@@ -61,7 +72,7 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
             No data pulled yet: every figure says &quot;not found&quot; until results are attached. Copy the custom prompt from the audit page to run it.
           </p>
         )}
-        <AuditDeck bundle={bundle} sections={sections} />
+        {bundle ? <AuditDeck bundle={bundle} sections={sections} /> : adsBundle ? <AdsDeck bundle={adsBundle} sections={adsSections} /> : null}
       </div>
     </div>
   );

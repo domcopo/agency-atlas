@@ -1,6 +1,6 @@
 # Plan: Audits area (SEO + Google Ads), Google Ads audit, sales leaderboard
 
-Status: **owner answers in (2026-11-24); Phase 1 (Audits area) built** on branch `audits-hub`. Phases 2–4 not started.**
+Status: **owner answers in (2026-11-24). Phase 1 (Audits area) built and merged. Phase 2 (leaderboard, `0026`) built and merged. Phase 3 (Google Ads audit, `0029` written, not run) built on branch `ads-audit`. Phase 4 not started.**
 Owner answers: Audits = its own side-menu item on computers + a big card at the top of Sales on phones (no new phone tab) · leaderboard = Won deal value **this month** · Ads math = **1 in 10 clicks becomes a lead**, then a close rate · order = Audits area → leaderboard → Google Ads audit. Builds on `docs/AUDIT_BUILDER_PLAN.md` (Phase A built, `0023` run) and replaces its "Phase D". Overlaps the Scout plan (`docs/SCOUT_PLAN.md`, another session) only in the Sales area; build after or alongside it on a separate branch.
 
 ## What the owner asked for
@@ -47,7 +47,7 @@ Same rules as the SEO audit: every figure has a source and date, missing = "not 
 
 **Existing clients' real Google Ads accounts** (read-only, through Google's API) are a later step with its own approval: it needs a Google Ads developer token and read-only access, and the same "never write" rule as GoHighLevel.
 
-**Database (`0028` or later; `0027` is SEO Watcher):** probably none for the audit itself (`audits` already stores intake/config/data as JSON); `audit_settings` gains an `ads_plans` column. Break-in tests added for it.
+**Database (`0029` or later; `0027` is SEO Watcher):** probably none for the audit itself (`audits` already stores intake/config/data as JSON); `audit_settings` gains an `ads_plans` column. Break-in tests added for it.
 
 ## 3. Sales leaderboard
 **What it shows:** a slim card at the top right of the Sales tab (on a phone: a row of small chips under the title). Each salesperson: initials icon, first name, total, rank. Gold/silver/bronze for the top 3 who won something, everyone else after; people with the same total share a rank. (An owner on/off switch was left out for now; ask if wanted.)
@@ -79,3 +79,11 @@ Same rules as the SEO audit: every figure has a source and date, missing = "not 
 - Phase 1: from Sales or the side menu, Audits shows two doors; each has its own list and builder; old links still work; phone and computer clean; `npm run check` passes.
 - Phase 2: every salesperson shows on the leaderboard with their GoHighLevel won value for the period; a salesperson can't read the deals behind others' totals (break-in tests); `npm run test:rls` passes.
 - Phase 3: a rep builds and saves an Ads audit, copies the Ads prompt, opens a deck with only the chosen pages and the budget calculator working from the inputs.
+
+## Phase 3 as built (2026-11-24)
+- `0029_ads_audits.sql`: `audits.sections` checked by kind (SEO keeps its 13 ids; Ads gets 9 `ads_` ids; no mixing), `audit_settings.ads_plans` (≤4, owner edits). Break-in tests 7x.
+- `src/lib/audit/ads.ts`: checkpoints + presets, `parseAdsIntake` (reuses the SEO intake check for the shared fields; adds click→lead 1–50% default 10%, lead→job 5–100% default 30%, 1–3 budgets $100–$100,000), `parseAdsPlans`, `AdsData` (every figure a `Fig`), `emptyAdsData`, `adsMarket` (search-weighted middle of the bid range), `budgetRows` (budget ÷ CPC → clicks → leads → jobs → revenue, per $1, cost per lead, "more than the market" flag).
+- `src/lib/audit/ads-prompt.ts`: copy-only Ads prompt (read-only, never touches a Google Ads account; competitor spend labeled estimate; prices only from settings).
+- Pages (`src/components/audit/ads/AdsDeck.tsx`): Market size (cover), Cost per click, Budget calculator, Who's bidding (+ spend), Their ads today (running / landing / LSA), Plan + investment. Fictional sample at `/audit/sample-ads` (`src/fixtures/ads-sample.ts`).
+- Screens: `/audits/ads` (list + template), `/audits/ads/new` (`AdsBuilder`), `/audits/[id]` and `/edit` branch by kind (`AdsAuditView`), Ads prices in Audits → Settings (`AdsPlansForm`, owner), "Google Ads audit for this lead" on the lead page. `saveAdsAudit`, `saveAdsPlans` in `actions.ts`. Before `0029`: Ads saving says "needs 0029"; everything else works.
+- Not yet: attaching results (shared with audit Phase B), real client Google Ads accounts (separate approval).

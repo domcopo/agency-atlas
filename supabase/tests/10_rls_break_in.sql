@@ -2063,6 +2063,184 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 7x. SEO Watcher (0027): owner/managers run it; developers read ONLY clients they work
+--     on (no costs); salespeople see nothing. List limits, the monthly cap and the
+--     add-only history are enforced by the database.
+-- ---------------------------------------------------------------------------
+insert into public.clients (id, slug, name, start_date, status) values
+  ('00000000-0000-0000-0000-0000000007c1', 'watch-one', 'Watch One (fictional)', '2026-03-01', 'active'),
+  ('00000000-0000-0000-0000-0000000007c2', 'watch-two', 'Watch Two (fictional)', '2026-04-01', 'active');
+-- The developer (staff b3) has open work on Watch One only.
+insert into public.actions (id, client_id, kind, title, owner_staff_id, created_by) values
+  ('00000000-0000-0000-0000-0000000007a1', '00000000-0000-0000-0000-0000000007c1', 'issue', 'Fix page titles (test)', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a1');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect('select * from public.watch_settings where monthly_usd = 20 and keywords_per_client = 25', 1, 'owner reads the Watcher settings ($20 cap, 25 keywords)');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche) values ('00000000-0000-0000-0000-0000000007c1', 'watch-one.example.com', 'Plumbing')$$, 1, 'owner starts watching a client');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche) values ('00000000-0000-0000-0000-0000000007c2', 'watch-two.example.com', 'Roofing')$$, 1, 'owner starts watching a second client');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche) values ('00000000-0000-0000-0000-0000000000c1', 'https://x.example.com/', 'Plumbing')$$, -2, 'watched websites must be bare domains');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche) values ('00000000-0000-0000-0000-0000000000c1', 'x.example.com', 'call 330-555-0100')$$, -2, 'niches refuse phone numbers');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche, added_by) values ('00000000-0000-0000-0000-0000000000c1', 'x.example.com', 'Plumbing', '00000000-0000-0000-0000-0000000000a2')$$, -1, 'nobody adds a watched client in someone else''s name');
+select test.expect($$insert into public.watch_keywords (id, client_id, keyword, money) values ('00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007c1', 'plumber near me', true)$$, 1, 'owner adds a money keyword');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'plumber near me')$$, -3, 'the same keyword twice is refused');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'Plumber Akron')$$, -2, 'keywords are stored in lower case');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'pat@example.com')$$, -2, 'keywords refuse email addresses');
+select test.expect($$update public.watch_settings set keywords_per_client = 2, updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner lowers the keyword limit (for this test)');
+select test.expect($$insert into public.watch_keywords (id, client_id, keyword) values ('00000000-0000-0000-0000-0000000007b2', '00000000-0000-0000-0000-0000000007c1', 'drain cleaning')$$, 1, 'a keyword up to the limit is allowed');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'water heater repair')$$, -2, 'a full keyword list refuses more');
+select test.expect($$update public.watch_keywords set active = false where id = '00000000-0000-0000-0000-0000000007b2'$$, 1, 'owner pauses a keyword');
+select test.expect($$insert into public.watch_keywords (id, client_id, keyword) values ('00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007c1', 'water heater repair')$$, 1, 'a paused keyword frees a spot');
+select test.expect($$update public.watch_keywords set active = true where id = '00000000-0000-0000-0000-0000000007b2'$$, -2, 'turning a paused keyword back on still respects the limit');
+select test.expect($$update public.watch_settings set keywords_per_client = 25, updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner puts the keyword limit back');
+select test.expect($$insert into public.watch_keywords (id, client_id, keyword) values ('00000000-0000-0000-0000-0000000007b4', '00000000-0000-0000-0000-0000000007c2', 'roof repair')$$, 1, 'owner adds a keyword for the second client');
+select test.expect($$insert into public.watch_markets (id, client_id, city, state, lat, lng) values ('00000000-0000-0000-0000-0000000007d1', '00000000-0000-0000-0000-0000000007c1', 'Springfield', 'OH', 39.92, -83.81)$$, 1, 'owner adds a city');
+select test.expect($$insert into public.watch_markets (id, client_id, city, state) values ('00000000-0000-0000-0000-0000000007d2', '00000000-0000-0000-0000-0000000007c2', 'Dayton', 'OH')$$, 1, 'a city can start without a map position');
+select test.expect($$insert into public.watch_markets (client_id, city, state) values ('00000000-0000-0000-0000-0000000007c1', 'Akron', 'Ohio')$$, -2, 'states are two capital letters');
+select test.expect($$insert into public.watch_markets (client_id, city, state, lat, lng) values ('00000000-0000-0000-0000-0000000007c1', 'Akron', 'OH', 10, -81)$$, -2, 'map positions must be in the USA');
+select test.expect($$update public.watch_markets set lat = 39.76, lng = -84.19 where id = '00000000-0000-0000-0000-0000000007d2'$$, 1, 'owner fills in a city''s map position later');
+select test.expect($$update public.watch_markets set city = 'Elsewhere' where id = '00000000-0000-0000-0000-0000000007d2'$$, -1, 'a city''s name cannot be changed (add a new one instead)');
+select test.expect($$insert into public.watch_competitors (client_id, domain) values ('00000000-0000-0000-0000-0000000007c1', 'rival-one.example.com')$$, 1, 'owner adds a competitor');
+select test.expect($$insert into public.watch_competitors (client_id, domain) values ('00000000-0000-0000-0000-0000000007c1', 'not a domain')$$, -2, 'competitors must be bare domains');
+select test.expect($$insert into public.watch_runs (id, client_ids, pairs, est_usd) values ('00000000-0000-0000-0000-0000000007e1', '{00000000-0000-0000-0000-0000000007c1,00000000-0000-0000-0000-0000000007c2}', 3, 5)$$, 1, 'owner starts a round of checks with its estimate');
+select test.expect($$insert into public.watch_runs (client_ids, pairs, est_usd) values ('{00000000-0000-0000-0000-0000000007c1}', 3, 16)$$, -2, 'the $20 monthly cap refuses a round that would go over');
+select test.expect($$insert into public.watch_runs (id, client_ids, pairs, est_usd) values ('00000000-0000-0000-0000-0000000007e2', '{00000000-0000-0000-0000-0000000007c2}', 1, 15)$$, 1, 'a round up to the cap is allowed');
+select test.expect($$select * from public.watch_runs where created_by = '00000000-0000-0000-0000-0000000000a1'$$, 2, 'rounds are always stamped with the person who started them');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, pack, url, others, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 4, 1, 'https://watch-one.example.com/', '[{"domain":"rival-one.example.com","position":2}]', 'dataforseo')$$, 1, 'owner saves a rank check from a round');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 5, 'dataforseo')$$, -3, 'one check per keyword, city and day');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date + 2, 5, 'dataforseo')$$, -2, 'checks cannot be dated in the future');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d2', (now() at time zone 'America/New_York')::date, 5, 'dataforseo')$$, -2, 'a check cannot mix one client''s keyword with another client''s city');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 0, 'dataforseo')$$, -2, 'positions start at 1');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, url, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 'javascript:alert(1)', 'dataforseo')$$, -2, 'ranking pages must be web links');
+select test.expect($$insert into public.watch_rank_checks (client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 7, 'dataforseo')$$, -1, 'fetched checks must belong to a round');
+select test.expect($$insert into public.watch_rank_checks (client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007d1', '2026-01-05', 9, 'audit')$$, 1, 'a starting point imported from a saved audit needs no round');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e2', '00000000-0000-0000-0000-0000000007c2', '00000000-0000-0000-0000-0000000007b4', '00000000-0000-0000-0000-0000000007d2', (now() at time zone 'America/New_York')::date, 12, 'dataforseo')$$, 1, 'owner saves a check for the second client');
+select test.expect($$insert into public.watch_volumes (run_id, client_id, market_id, keyword, month, volume, cpc_usd, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007d1', 'plumber near me', date_trunc('month', now() at time zone 'America/New_York')::date, 1300, 18.5, 'dataforseo')$$, 1, 'owner saves a monthly search volume');
+select test.expect($$insert into public.watch_volumes (run_id, client_id, market_id, keyword, month, volume, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007d1', 'drain cleaning', '2026-03-15', 100, 'dataforseo')$$, -2, 'volumes are stored per month (the 1st)');
+select test.expect($$insert into public.watch_volumes (run_id, client_id, market_id, keyword, month, volume, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007d1', 'drain cleaning', (date_trunc('month', now() at time zone 'America/New_York') + interval '1 month')::date, 100, 'dataforseo')$$, -2, 'volumes cannot be dated in the future');
+select test.expect($$insert into public.watch_volumes (run_id, client_id, market_id, keyword, month, volume, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007d2', 'drain cleaning', '2026-03-01', 100, 'dataforseo')$$, -2, 'a volume cannot use another client''s city');
+select test.expect($$update public.watch_rank_checks set organic = 1$$, -1, 'rank checks cannot be changed');
+select test.expect($$delete from public.watch_rank_checks$$, -1, 'rank checks cannot be deleted');
+select test.expect($$update public.watch_volumes set volume = 1$$, -1, 'volumes cannot be changed');
+select test.expect($$delete from public.watch_volumes$$, -1, 'volumes cannot be deleted');
+select test.expect($$update public.watch_runs set est_usd = 0.01 where id = '00000000-0000-0000-0000-0000000007e1'$$, -1, 'a round''s estimate cannot be rewritten');
+select test.expect($$update public.watch_runs set status = 'attached', actual_usd = 4.1, checks_saved = 2 where id = '00000000-0000-0000-0000-0000000007e1'$$, 1, 'owner marks the round attached with its real cost');
+select test.expect($$select * from public.watch_runs where id = '00000000-0000-0000-0000-0000000007e1' and est_usd = 5 and attached_at is not null$$, 1, 'the database stamps when results were attached');
+select test.expect($$update public.watch_runs set actual_usd = 0.5 where id = '00000000-0000-0000-0000-0000000007e1'$$, -2, 'an attached round cannot be changed again');
+select test.expect($$insert into public.watch_rank_checks (run_id, client_id, keyword_id, market_id, checked_on, organic, source) values ('00000000-0000-0000-0000-0000000007e1', '00000000-0000-0000-0000-0000000007c1', '00000000-0000-0000-0000-0000000007b3', '00000000-0000-0000-0000-0000000007d1', (now() at time zone 'America/New_York')::date, 3, 'dataforseo')$$, -2, 'no more results for a round that is already attached');
+select test.expect($$delete from public.watch_runs$$, -1, 'rounds cannot be deleted');
+select test.expect($$delete from public.watch_clients$$, -1, 'watched clients cannot be deleted (pause them instead)');
+select test.expect($$delete from public.watch_keywords$$, -1, 'keywords cannot be deleted (pause them instead)');
+select test.expect($$update public.watch_clients set active = false where client_id = '00000000-0000-0000-0000-0000000007c2'$$, 1, 'owner pauses watching a client');
+select test.expect($$update public.watch_clients set active = true where client_id = '00000000-0000-0000-0000-0000000007c2'$$, 1, 'owner resumes watching it');
+select test.expect('select * from public.watch_client_names', 2, 'owner sees both watched clients by name');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.watch_client_names', 2, 'manager sees every watched client');
+select test.expect('select * from public.watch_runs', 2, 'manager sees the rounds and their costs');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c2', 'metal roofing')$$, 1, 'manager adds a keyword');
+select test.expect($$update public.watch_settings set monthly_usd = 500, updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 0, 'manager cannot raise the Watcher cap');
+select test.expect($$update public.watch_keywords set keyword = 'other' where id = '00000000-0000-0000-0000-0000000007b1'$$, -1, 'a keyword''s words cannot be changed (add a new one instead)');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.watch_client_names', 1, 'developer sees only the watched client they work on');
+select test.expect($$select * from public.watch_client_names where client_id = '00000000-0000-0000-0000-0000000007c1'$$, 1, 'developer sees their client by name');
+select test.expect('select * from public.watch_clients', 1, 'developer reads only their watched client');
+select test.expect($$select * from public.watch_keywords where client_id = '00000000-0000-0000-0000-0000000007c2'$$, 0, 'developer cannot read another client''s keywords');
+select test.expect('select * from public.watch_markets', 1, 'developer reads only their client''s cities');
+select test.expect('select * from public.watch_competitors', 1, 'developer reads their client''s competitors');
+select test.expect('select * from public.watch_rank_checks', 2, 'developer reads only their client''s rank checks');
+select test.expect('select * from public.watch_volumes', 1, 'developer reads their client''s search volumes');
+select test.expect('select * from public.watch_runs', 0, 'developer sees no rounds or costs');
+select test.expect('select * from public.watch_settings', 0, 'developer sees no cap');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'sewer repair')$$, -1, 'developer cannot add keywords');
+select test.expect($$update public.watch_keywords set active = false$$, 0, 'developer cannot pause keywords');
+select test.expect($$insert into public.watch_clients (client_id, domain, niche) values ('00000000-0000-0000-0000-0000000000c1', 'x.example.com', 'Plumbing')$$, -1, 'developer cannot start watching a client');
+select test.expect($$insert into public.watch_runs (client_ids, pairs, est_usd) values ('{00000000-0000-0000-0000-0000000007c1}', 1, 0.01)$$, -1, 'developer cannot start a round');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.watch_client_names', 0, 'salesperson sees no watched clients');
+select test.expect('select * from public.watch_clients', 0, 'salesperson reads no watched clients');
+select test.expect('select * from public.watch_rank_checks', 0, 'salesperson reads no rankings');
+select test.expect('select * from public.watch_volumes', 0, 'salesperson reads no search volumes');
+select test.expect('select * from public.watch_runs', 0, 'salesperson reads no rounds');
+select test.expect('select * from public.watch_settings', 0, 'salesperson reads no Watcher settings');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'sales keyword')$$, -1, 'salesperson cannot add keywords');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.watch_client_names', 0, 'someone not on the team sees no watched clients');
+select test.expect('select * from public.watch_rank_checks', 0, 'someone not on the team reads no rankings');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.watch_client_names', 0, 'owner without two-factor sees no watched clients');
+select test.expect('select * from public.watch_rank_checks', 0, 'owner without two-factor reads no rankings');
+select test.expect($$insert into public.watch_keywords (client_id, keyword) values ('00000000-0000-0000-0000-0000000007c1', 'no two factor')$$, -1, 'owner without two-factor cannot add keywords');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.watch_client_names', -1, 'signed out cannot read watched clients');
+select test.expect('select * from public.watch_rank_checks', -1, 'signed out cannot read rankings');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7z. Google Ads audits (0029): Ads audits use their own checkpoint list (ads_ ids only),
+--     SEO audits keep theirs; nobody can mix them. Ads management prices: owner edits,
+--     sales reads. Who reads or saves audits is unchanged (7t).
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$insert into public.audits (id, kind, title, sections, intake) values ('00000000-0000-0000-0000-00000000ae11', 'ads', 'Sample Plumbing Google Ads audit (fictional)', '{ads_market,ads_cpc,ads_calculator,ads_plan}', '{"domain":"plumbing.example"}')$$, 1, 'sales saves a Google Ads audit with Ads checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('ads', 'X', '{summary}', '{}')$$, -2, 'an Ads audit cannot use SEO checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('seo', 'X', '{summary,ads_cpc}', '{}')$$, -2, 'an SEO audit cannot use Ads checkpoints');
+select test.expect($$insert into public.audits (kind, title, sections, intake) values ('ads', 'X', '{ads_market,ads_hack}', '{}')$$, -2, 'unknown Ads checkpoints are rejected');
+select test.expect($$update public.audits set sections = '{ads_market,rankings}' where id = '00000000-0000-0000-0000-00000000ae11'$$, -2, 'an Ads audit cannot be edited to SEO checkpoints');
+select test.expect($$update public.audits set sections = '{ads_market,ads_bidders,ads_spend}' where id = '00000000-0000-0000-0000-00000000ae11'$$, 1, 'sales edits the checkpoints of their own Ads audit');
+select test.expect($$update public.audits set kind = 'seo' where id = '00000000-0000-0000-0000-00000000ae11'$$, -1, 'nobody can change the kind of an audit');
+select test.expect($$select ads_plans from public.audit_settings$$, 1, 'sales reads the Google Ads prices');
+select test.expect($$update public.audit_settings set ads_plans = '[{"name":"Sneaky (test)","feeUsd":1}]'$$, 0, 'sales cannot set Google Ads prices');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect($$select * from public.audits where id = '00000000-0000-0000-0000-00000000ae11'$$, 0, 'another salesperson cannot read someone else''s Ads audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.audits where kind = 'ads'$$, 1, 'owner reads every Ads audit');
+select test.expect($$update public.audit_settings set ads_plans = '[{"name":"Launch (test)","feeUsd":500},{"name":"Grow (test)","feeUsd":900,"recommended":true}]', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, 1, 'owner sets the Google Ads prices');
+select test.expect($$update public.audit_settings set ads_plans = '[1,2,3,4,5]', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'at most 4 Google Ads plans');
+select test.expect($$update public.audit_settings set ads_plans = '{"name":"x"}', updated_by = '00000000-0000-0000-0000-0000000000a1'$$, -2, 'Google Ads plans must be a list');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.audits where kind = 'ads'$$, 0, 'developers read no Ads audits');
+select test.expect($$select ads_plans from public.audit_settings$$, 0, 'developers read no Google Ads prices');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 7y. Calls first + daily goals (0030): an unanswered call is an "attempt" (call or video,
 --     voicemail only); "talked" only for calls; goals: owner sets, you read your own.
 -- ---------------------------------------------------------------------------

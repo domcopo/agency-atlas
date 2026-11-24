@@ -431,20 +431,31 @@ describe("screens (view builders)", () => {
 });
 
 describe("Watcher guardrails", () => {
-  it("Watcher code never touches billing, GoHighLevel, the AI, the network or the database writer", async () => {
+  // Phase B (approved 2026-11-24): screens may now save through the actions file; the pure
+  // math, the sample and the round/list helpers still may not touch the database at all.
+  it("Watcher code never touches billing, GoHighLevel, the AI, client money or the network", async () => {
     const { readdirSync, readFileSync, statSync } = await import("node:fs");
     const { join } = await import("node:path");
     const walk = (d: string): string[] => readdirSync(d).flatMap((n) => (statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]));
-    const files = [
-      ...walk("src/lib/watch"),
-      ...walk("src/components/watcher"),
-      ...walk("src/app/(app)/growth/watcher"),
-      "src/fixtures/watch-sample.ts",
-    ];
-    expect(files.length).toBeGreaterThan(8);
+    const files = [...walk("src/lib/watch"), ...walk("src/components/watcher"), ...walk("src/app/(app)/growth/watcher"), "src/fixtures/watch-sample.ts"];
+    expect(files.length).toBeGreaterThan(12);
     for (const f of files) {
-      const text = readFileSync(f, "utf8");
-      expect(text, f).not.toMatch(/billing|@\/lib\/ghl|@\/lib\/ai|fetch\(|monthly_usd|monthlyUsd|@\/app\/actions|\.from\(["'`]/);
+      expect(readFileSync(f, "utf8"), f).not.toMatch(/billing|@\/lib\/ghl|@\/lib\/ai\b|fetch\(|monthly_usd|monthlyUsd|client_money/);
     }
+  });
+
+  it("the Watcher math, sample and helpers stay pure: no database, no saves", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const files = [...readdirSync("src/lib/watch").map((n) => `src/lib/watch/${n}`), "src/fixtures/watch-sample.ts"];
+    for (const f of files) {
+      expect(readFileSync(f, "utf8"), f).not.toMatch(/@\/app\/actions|@\/lib\/supabase|@\/lib\/data-source|\.from\(["'`]/);
+    }
+  });
+
+  it("the round prompt carries websites, keywords and cities, never client names", async () => {
+    const { readFileSync } = await import("node:fs");
+    const page = readFileSync("src/app/(app)/growth/watcher/rounds/[id]/page.tsx", "utf8");
+    const call = page.slice(page.indexOf("buildWatchPrompt("), page.indexOf("});", page.indexOf("buildWatchPrompt(")));
+    expect(call).not.toMatch(/\.name\b/);
   });
 });
