@@ -91,8 +91,8 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
       )}
 
       {lead.status === "open" && (
-        <Link href={`/sales/audits/new?lead=${encodeURIComponent(lead.ghlId)}`} className="pressable glass mt-2.5 flex min-h-12 items-center justify-center gap-2 rounded-2xl text-sm font-semibold text-violet">
-          <FileSearch aria-hidden className="size-4" /> Audit this lead
+        <Link href={`/audits/seo/new?lead=${encodeURIComponent(lead.ghlId)}`} className="pressable glass mt-2.5 flex min-h-12 items-center justify-center gap-2 rounded-2xl text-sm font-semibold text-violet">
+          <FileSearch aria-hidden className="size-4" /> SEO audit for this lead
         </Link>
       )}
       </Column>

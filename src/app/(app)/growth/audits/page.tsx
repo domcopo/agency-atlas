@@ -30,7 +30,7 @@ export default async function AuditsPage() {
         </GlassCard>
       )}
       <SectionTitle>Saved audits</SectionTitle>
-      <GlassCard href="/sales/audits" label="Open saved audits in Sales" className="space-y-1">
+      <GlassCard href="/audits" label="Open audits" className="space-y-1">
         <p className="font-semibold">Sales → Audits</p>
         <p className="text-sm text-muted">Build, save and reopen custom audits (every rep&apos;s, for the owner and managers), and set spending caps and plan prices.</p>
       </GlassCard>

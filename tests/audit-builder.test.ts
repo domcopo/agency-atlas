@@ -256,3 +256,37 @@ describe("audit spending caps", () => {
     expect(spendBlocker(tight, 2)).toMatch(/weekly cap/);
   });
 });
+
+describe("Audits area (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md Phase 1)", () => {
+  const root = process.cwd();
+  const read = (p: string) => readFileSync(join(root, p), "utf8");
+
+  it("every Audits page turns away anyone who isn't owner, manager or sales", () => {
+    for (const page of ["src/app/(app)/audits/page.tsx", "src/app/(app)/audits/seo/page.tsx", "src/app/(app)/audits/seo/new/page.tsx", "src/app/(app)/audits/ads/page.tsx", "src/app/(app)/audits/[id]/page.tsx", "src/app/(app)/audits/[id]/edit/page.tsx"]) {
+      expect(read(page), page).toMatch(/!isLead\(me\??\.role\) && me\??\.role !== "sales"\)+ return <RoleNotice/);
+    }
+  });
+
+  it("old Sales → Audits links still work and nothing links to them any more", () => {
+    const config = read("next.config.ts");
+    for (const [from, to] of [
+      ["/sales/audits", "/audits"],
+      ["/sales/audits/new", "/audits/seo/new"],
+      ["/sales/audits/:id/edit", "/audits/:id/edit"],
+      ["/sales/audits/:id", "/audits/:id"],
+    ]) {
+      expect(config).toContain(`{ source: "${from}", destination: "${to}", permanent: false }`);
+    }
+    for (const file of ["src/components/sales/AuditsCard.tsx", "src/app/actions.ts", "src/app/audit/[id]/page.tsx", "src/app/(app)/sales/lead/[id]/page.tsx", "src/app/(app)/growth/audits/page.tsx"]) {
+      expect(read(file), file).not.toContain("/sales/audits");
+    }
+  });
+
+  it("the side menu shows Audits right under Sales, so developers (no Sales tab) never get it", () => {
+    expect(read("src/components/shell/SideNav.tsx")).toMatch(/t\.href === "\/sales" && <PlainItem href="\/audits"/);
+  });
+
+  it("the SEO builder no longer offers a Google Ads choice (Ads gets its own builder)", () => {
+    expect(read("src/components/audit/AuditBuilder.tsx")).not.toContain('name="wantsAds"');
+  });
+});

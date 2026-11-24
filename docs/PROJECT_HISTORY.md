@@ -45,3 +45,4 @@ Phase 2 rules:
 - Zero plans allowed: Investment says "prices not set".
 
 - 2026-11-24 (owner): Home radar moved top right on computers; app renamed "YO Marketing Co" with the agency logo (`public/brand/`, `BrandLogo.tsx`); desktop-only light theme with a switch in the side menu. Details in `docs/DESKTOP_LAYOUT_PLAN.md` (Follow-up).
+- 2026-11-24: Audits area (`docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md` Phase 1): audits moved from Sales to `/audits` with two doors (SEO audit, Google Ads audit "coming soon"), SEO list at `/audits/seo`, side-menu item under Sales, phone card at the top of Sales, old `/sales/audits` links redirect. SEO builder no longer offers the Ads checkbox. No database change.

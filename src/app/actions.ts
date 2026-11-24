@@ -2354,7 +2354,8 @@ export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<
   }
   revalidatePath("/sales", "layout");
   revalidatePath("/growth/audits");
-  redirect(`/sales/audits/${savedId}`);
+  revalidatePath("/audits", "layout");
+  redirect(`/audits/${savedId}`);
 }
 
 /** Owner and managers: hide an audit (or bring it back). Never deleted. */
@@ -2369,6 +2370,7 @@ export async function archiveAudit(form: FormData) {
   if (error) console.warn(`Audit archive refused: ${error.code}`);
   revalidatePath("/sales", "layout");
   revalidatePath("/growth/audits");
+  revalidatePath("/audits", "layout");
 }
 
 /** Owner: spending caps, the agency name on the pages, and the plan prices. */
