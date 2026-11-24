@@ -14,6 +14,11 @@ import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
+import { getJourneys, getStatusLog } from "@/lib/data-source";
+import { JourneyCard } from "@/components/cards/JourneyCard";
+import { ClientStatusForm } from "@/components/forms/ClientStatusForm";
+import { ClientMemoryForm } from "@/components/forms/ClientMemoryForm";
+import { STATUS_REASONS } from "@/lib/journey";
 import { getActions, getAiStatus, getBilling, getCarePlans, getClientHealth, getClientOps, getClientProfile, getClientTimeline, getMember, getRemovedCheckIns, getRosterClient, getTeam, usesDatabase, getRosterSource, getToday, getWinBackList } from "@/lib/data-source";
 import { ClientOpsCard } from "@/components/cards/ClientOpsCard";
 import { ScoreTrend } from "@/components/cards/RiskAlerts";
@@ -68,6 +73,11 @@ export default async function ClientPage({ params }: Props) {
   // Plan tiers (0025): what this client's tier includes. Empty before 0025.
   const care = await getCarePlans();
   const myTiers = (c.plans ?? []).map((p) => care.plans.find((t) => t.id === p.planId)).filter((t) => t !== undefined);
+  // Journey, status log and memory (0028). journeys.ready is false before 0028 runs.
+  const [journeys, statusLog] = await Promise.all([getJourneys(), getStatusLog(c.dbId)]);
+  const journey = journeys.bySlug.get(c.id);
+  const reasonLabel = (r: string | null) => STATUS_REASONS.find(([k]) => k === r)?.[1] ?? null;
+  const statusWord = { active: "Active", paused: "Paused", canceled: "Lost" } as Record<string, string>;
 
   return (
     <>
@@ -126,6 +136,12 @@ export default async function ClientPage({ params }: Props) {
             ghl={c.ghl}
             plan={planLabel(c)}
           />
+        </div>
+      )}
+
+      {journey && c.dbId && (
+        <div className="mb-3">
+          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} />
         </div>
       )}
 
@@ -284,6 +300,57 @@ export default async function ClientPage({ params }: Props) {
           </details>
         )}
       </GlassCard>
+
+      {journeys.ready && c.dbId && (
+        <>
+          <SectionTitle>Client memory</SectionTitle>
+          <GlassCard className="space-y-2">
+            <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm">
+              <dt className="text-xs text-muted">Goal</dt>
+              <dd>{c.memory?.goal ?? <span className="text-faint">Not set</span>}</dd>
+              <dt className="text-xs text-muted">Tone</dt>
+              <dd>{c.memory?.tone ?? <span className="text-faint">Not set</span>}</dd>
+              <dt className="text-xs text-muted">Next ask</dt>
+              <dd>{c.memory?.nextAsk ?? <span className="text-faint">Not set</span>}</dd>
+            </dl>
+            {canWork && (
+              <details>
+                <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit memory</summary>
+                <div className="pt-1">
+                  <ClientMemoryForm clientId={c.dbId} slug={c.id} memory={c.memory ?? { goal: null, tone: null, nextAsk: null }} />
+                </div>
+              </details>
+            )}
+          </GlassCard>
+
+          <SectionTitle aside={statusWord[c.status] ?? c.status}>Status</SectionTitle>
+          <GlassCard className="space-y-3">
+            {canWork && c.status !== "incomplete_expired" && (
+              <details>
+                <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">
+                  {c.status === "active" ? "Pause or mark lost" : "Change status"}
+                </summary>
+                <div className="pt-1">
+                  <ClientStatusForm clientId={c.dbId} slug={c.id} status={c.status} today={today} />
+                </div>
+              </details>
+            )}
+            {statusLog.length > 0 ? (
+              <ul className="space-y-1 border-t border-line pt-2 text-xs">
+                {statusLog.map((s) => (
+                  <li key={s.at} className="text-muted">
+                    <span className="text-faint">{formatDate(s.at.slice(0, 10))}</span> · {statusWord[s.from] ?? s.from} → <span className="text-ink">{statusWord[s.to] ?? s.to}</span>
+                    {reasonLabel(s.reason) ? ` · ${reasonLabel(s.reason)}` : ""}
+                    {s.note ? ` · ${s.note}` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[11px] text-faint">No status changes logged yet.</p>
+            )}
+          </GlassCard>
+        </>
+      )}
 
       {health && ci && (
         <details className="glass mt-2.5 rounded-3xl px-4 py-1" open={!usesDatabase()}>

@@ -40,6 +40,8 @@ import { DeveloperHome } from "@/components/cards/DeveloperHome";
 import { clientCareView, HOME_LAYOUT_LABEL, salesView, workLeadView } from "@/lib/home-layouts";
 import { HomeSwitcher } from "@/components/home/HomeSwitcher";
 import { ClientCareHome } from "@/components/home/ClientCareHome";
+import { getJourneys } from "@/lib/data-source";
+import { touchesDue } from "@/lib/journey";
 import { WorkLeadHome } from "@/components/home/WorkLeadHome";
 import { SalesHome } from "@/components/home/SalesHome";
 import { Pill, Provenance } from "@/components/labels/labels";
@@ -210,7 +212,10 @@ export default async function MissionControlPage() {
     let body;
     if (homeLayout.layout === "client_care") {
       const view = clientCareView({ clients: ops.clients, health: ops.health, checkIns: ops.checkIns, actions: ops.actions, priorities: ops.priorities, staffId: homeLayout.staffId, today: ops.today });
-      body = <ClientCareHome view={view} staff={staffList} canEdit={Boolean(me)} today={ops.today} linked={linked} />;
+      // Journey touches due (0028): mine as main person, plus overdue ones I back up.
+      const journeys = await getJourneys();
+      const touches = journeys.ready ? touchesDue(ops.clients, journeys.bySlug, homeLayout.staffId, ops.today) : null;
+      body = <ClientCareHome view={view} staff={staffList} canEdit={Boolean(me)} today={ops.today} linked={linked} touches={touches} />;
     } else if (homeLayout.layout === "work_lead") {
       body = <WorkLeadHome view={workLeadView(ops.actions, ops.today)} workload={workloadRows({ actions: ops.actions, staff: staffList, today: ops.today })} staff={staffList} today={ops.today} />;
     } else {

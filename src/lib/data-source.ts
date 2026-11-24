@@ -52,6 +52,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
+import { journeyState, type JourneyState, type TouchLog } from "@/lib/journey";
 import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
@@ -265,6 +266,9 @@ type ClientRow = {
   vip?: boolean | null;
   backup_staff_id?: string | null;
   care_started_on?: string | null;
+  memory_goal?: string | null;
+  memory_tone?: string | null;
+  memory_next_ask?: string | null;
   monthly_usd?: number | string | null;
 };
 
@@ -290,6 +294,9 @@ function toCarePlan(r: Record<string, unknown>): CarePlan {
  * monthly_usd is still readable); before 0006 there is no owner column.
  */
 async function readClientRows(db: DbClient): Promise<{ data: ClientRow[] | null; careReady: boolean }> {
+  // 0028 adds client memory; before it, read without.
+  const journey = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on, memory_goal, memory_tone, memory_next_ask`);
+  if (!journey.error) return { data: (journey.data ?? []) as ClientRow[], careReady: true };
   const care = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on`);
   if (!care.error) return { data: (care.data ?? []) as ClientRow[], careReady: true };
   const withOwner = await db.from("clients").select(`${CLIENT_COLS}, monthly_usd, owner_staff_id`);
@@ -308,6 +315,64 @@ async function readClientMoney(db: DbClient, rows: ClientRow[], careReady: boole
   const { data, error } = await db.from("client_money").select("client_id, monthly_usd").limit(5000);
   if (error) return new Map();
   return new Map((data ?? []).map((m) => [m.client_id as string, Number(m.monthly_usd)]));
+}
+
+/** Journey touches (0028), by client database id, newest first. ready=false before 0028. */
+export const getCareTouches = cache(async (): Promise<{ ready: boolean; byClient: Map<string, TouchLog[]> }> => {
+  const byClient = new Map<string, TouchLog[]>();
+  if (!usesDatabase()) return { ready: false, byClient };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("care_touches").select("client_id, step, status, happened_on").order("created_at", { ascending: false }).limit(10000);
+  if (error) return { ready: false, byClient };
+  for (const r of data ?? []) {
+    const list = byClient.get(r.client_id as string) ?? [];
+    list.push({ step: Number(r.step), status: r.status === "skipped" ? "skipped" : "done", happenedOn: r.happened_on as string });
+    byClient.set(r.client_id as string, list);
+  }
+  return { ready: true, byClient };
+});
+
+/**
+ * Where each current client is on the journey (0028), by slug. Rhythm comes from the
+ * client's SEO tier (else their first tier, else monthly + mid-month check-in).
+ */
+export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map<string, JourneyState> }> => {
+  const [clients, touches, care] = await Promise.all([getRoster(), getCareTouches(), getCarePlans()]);
+  const bySlug = new Map<string, JourneyState>();
+  if (!touches.ready) return { ready: false, bySlug };
+  const planById = new Map(care.plans.map((p) => [p.id, p]));
+  for (const c of clients) {
+    if (c.status !== "active" || !c.dbId) continue;
+    const ref = c.plans?.find((p) => p.service === "SEO") ?? c.plans?.[0];
+    const plan = ref ? planById.get(ref.planId) : undefined;
+    bySlug.set(
+      c.id,
+      journeyState({ startedOn: c.careStartedOn ?? null, touches: touches.byClient.get(c.dbId) ?? [], plan: plan ?? null, lastContact: c.lastContact ?? null, today: today() }),
+    );
+  }
+  return { ready: true, bySlug };
+});
+
+export interface StatusChange {
+  at: string;
+  from: string;
+  to: string;
+  reason: string | null;
+  note: string | null;
+}
+
+/** One client's status log (0028), newest first. Empty before 0028. */
+export async function getStatusLog(clientDbId: string | undefined): Promise<StatusChange[]> {
+  if (!usesDatabase() || !clientDbId || !/^[0-9a-f-]{36}$/.test(clientDbId)) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("client_status_changes")
+    .select("created_at, from_status, to_status, reason, note")
+    .eq("client_id", clientDbId)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  if (error) return [];
+  return (data ?? []).map((r) => ({ at: r.created_at as string, from: r.from_status as string, to: r.to_status as string, reason: (r.reason as string | null) ?? null, note: (r.note as string | null) ?? null }));
 }
 
 /** Plan tiers (0025), archived ones included so old assignments still have a name. Empty before 0025. */
@@ -398,6 +463,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
       backupName: r.backup_staff_id ? staffName.get(r.backup_staff_id) : undefined,
       careStartedOn: r.care_started_on ?? undefined,
       plans: (plansByClient.get(r.id) ?? []).sort((a, b) => a.service.localeCompare(b.service)),
+      memory: { goal: r.memory_goal ?? null, tone: r.memory_tone ?? null, nextAsk: r.memory_next_ask ?? null },
     })),
   };
 }
@@ -1048,7 +1114,7 @@ export const getWorkOrderDetail = cache(async (id: string) => {
 /** In-app notices (0017). Written only by the database; each person reads only their own. */
 export interface Notice {
   id: string;
-  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow";
+  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow" | "client_lost";
   title: string;
   actionId: string | null;
   at: string;
@@ -1061,6 +1127,7 @@ export const NOTICE_KINDS: { kind: Notice["kind"]; label: string; who: "develope
   { kind: "comment", label: "New comments", who: "everyone" },
   { kind: "due_tomorrow", label: "Due tomorrow (shown when I open Atlas)", who: "everyone" },
   { kind: "reassign_request", label: "A developer asks to be reassigned", who: "owner" },
+  { kind: "client_lost", label: "A manager marks a client lost (0028)", who: "owner" },
 ];
 
 /**

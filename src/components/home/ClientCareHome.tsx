@@ -8,8 +8,10 @@ import { SectionTitle } from "@/components/shell/PageHeader";
 import { cn } from "@/lib/format";
 import type { ClientCareView } from "@/lib/home-layouts";
 import { promiseMissed } from "@/lib/ops";
+import { formatDate } from "@/lib/format";
+import type { TouchDue } from "@/lib/journey";
 
-export function ClientCareHome({ view, staff, canEdit, today, linked }: { view: ClientCareView; staff: { id: string; name: string }[]; canEdit: boolean; today: string; linked: boolean }) {
+export function ClientCareHome({ view, staff, canEdit, today, linked, touches }: { view: ClientCareView; staff: { id: string; name: string }[]; canEdit: boolean; today: string; linked: boolean; touches?: TouchDue[] | null }) {
   const atRisk = view.attention.filter((a) => a.state === "at_risk").length;
   return (
     <>
@@ -26,6 +28,32 @@ export function ClientCareHome({ view, staff, canEdit, today, linked }: { view: 
       {/* Wide screens: clients on the left, my follow-ups on the right. */}
       <Columns>
       <Column>
+      {touches && (
+        <>
+          <SectionTitle aside={`${touches.length} due`}>Touches due</SectionTitle>
+          {touches.length ? (
+            <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
+              {touches.slice(0, 10).map((t) => (
+                <li key={t.slug}>
+                  <Link href={`/clients/${t.slug}`} className="pressable flex min-h-12 items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{t.name}</span>
+                      <span className="block truncate text-[11px] text-muted">
+                        {t.title}
+                        {t.as === "backup" ? " · you're the backup" : ""}
+                      </span>
+                    </span>
+                    <span className={cn("shrink-0 text-xs", t.overdue ? "font-semibold text-rose" : "text-amber")}>{t.overdue ? `since ${formatDate(t.due)}` : "today"}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="glass rounded-2xl px-4 py-3 text-sm text-muted">No touches due today.</p>
+          )}
+        </>
+      )}
+
       <SectionTitle aside={<Link href="/clients" className="text-xs text-violet">All clients</Link>}>Needs attention</SectionTitle>
       {view.attention.length ? (
         <ul className="glass divide-y divide-line overflow-hidden rounded-3xl">
