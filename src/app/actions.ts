@@ -11,9 +11,9 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { askAi, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
-import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
-import { EST_OPTIONS, needsReview, parseSteps } from "@/lib/ops";
+import { askAi, CARE_DRAFT_SCHEMA, CARE_DRAFT_TASK, CARE_MOVES_SCHEMA, CARE_MOVES_TASK, isAiConfigured, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
+import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restore, restoreClients, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
+import { byImportance, EST_OPTIONS, isImportant, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
 import type { RosterClient, WorkOrderDrafts } from "@/lib/types";
 import { findSecrets } from "@/lib/kit";
@@ -23,6 +23,7 @@ import {
   getAuditSettings,
   getAtlasQuestions,
   getCheckInHistory,
+  getJourneys,
   getActions,
   getClientHealth,
   getGhlSummary,
@@ -60,7 +61,7 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
-import { asStatusReason, asTouchChannel, CHECK_IN_KIND, STATUS_REASONS, touchByStep } from "@/lib/journey";
+import { asStatusReason, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
@@ -1367,7 +1368,21 @@ export async function setClientStatus(_prev: JourneyFormState, form: FormData): 
   return { ok: true };
 }
 
-/** Mark a journey touch Done (also logs a check-in) or Skipped (needs a reason). */
+/** How a touch happened, as picked on the Done form. "call_noanswer" keeps the touch open (0029). */
+const TOUCH_HOW = {
+  call_talked: { status: "done", channel: "call", outcome: "talked" },
+  call_noanswer: { status: "attempt", channel: "call", outcome: "voicemail" },
+  video: { status: "done", channel: "video", outcome: "talked" },
+  text: { status: "done", channel: "text", outcome: null },
+  email: { status: "done", channel: "email", outcome: null },
+} as const;
+
+/**
+ * Log a journey touch:
+ * - Done (talked, text or email) also logs a check-in, so health and "last contact" stay right;
+ * - No answer (voicemail + text) keeps the touch open for the next working day (0029);
+ * - Skip needs a reason.
+ */
 export async function logTouch(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
@@ -1377,8 +1392,9 @@ export async function logTouch(_prev: JourneyFormState, form: FormData): Promise
   const touch = touchByStep(Number(text(form, "step", 4)));
   if (!touch) return { error: "Unknown touch." };
   const skip = text(form, "op", 6) === "skip";
-  const channel = skip ? null : asTouchChannel(text(form, "channel", 6));
-  if (!skip && !channel) return { error: "How did it happen? Pick call, text, email or video." };
+  const howKey = text(form, "how", 16) as keyof typeof TOUCH_HOW;
+  const how = skip ? null : (Object.prototype.hasOwnProperty.call(TOUCH_HOW, howKey) ? TOUCH_HOW[howKey] : null);
+  if (!skip && !how) return { error: "How did it go? Pick talked, no answer, text, email or video." };
   const note = text(form, "note", 300);
   if (skip && !note) return { error: "Say why you're skipping it." };
   const mood = text(form, "mood", 10);
@@ -1387,18 +1403,24 @@ export async function logTouch(_prev: JourneyFormState, form: FormData): Promise
   if (secret) return { error: secret };
   const day = localToday();
   const db = await createDatabaseClient();
-  const { error } = await db.from("care_touches").insert({ client_id: clientId, step: touch.step, status: skip ? "skipped" : "done", happened_on: day, channel, note: note || null });
+  // A text or email on a touch planned as a call = "text instead" (the call didn't happen).
+  const outcome = how && how.outcome === null && touch.channel === "call" ? "text_instead" : (how?.outcome ?? null);
+  const row: Record<string, string | number | null> = { client_id: clientId, step: touch.step, status: skip ? "skipped" : how!.status, happened_on: day, channel: how?.channel ?? null, note: note || null };
+  let { error } = await db.from("care_touches").insert(outcome ? { ...row, outcome } : row);
+  // Before 0029 there's no outcome column (and no "no answer"): save the plain touch.
+  if (error && MISSING_COLUMN.has(error.code) && row.status !== "attempt") ({ error } = await db.from("care_touches").insert(row));
   if (error) {
     console.warn(`Touch not logged: ${error.code}`);
+    if (row.status === "attempt") return { error: "\"No answer\" needs one setup step first (0029 SQL). Ask the owner." };
     return { error: MISSING_TABLE.has(error.code ?? "") ? "The journey needs one setup step first (0028 SQL). Ask the owner." : "Couldn't save that." };
   }
-  if (!skip && channel) {
-    // Done = we talked to them: a check-in, so health and "last contact" stay right.
+  if (how && how.status === "done") {
+    // Done = we reached them: a check-in, so health and "last contact" stay right.
     const { error: ci } = await db.from("check_ins").insert({
       client_id: clientId,
       happened_on: day,
       note: `${touch.title}${note ? `: ${note}` : ""}`.slice(0, 500),
-      kind: CHECK_IN_KIND[channel],
+      kind: CHECK_IN_KIND[how.channel],
       ...(mood ? { mood } : {}),
     });
     if (ci) console.warn(`Touch check-in not logged: ${ci.code}`);
@@ -1446,6 +1468,143 @@ export async function saveClientMemory(_prev: JourneyFormState, form: FormData):
   }
   refreshOps(text(form, "slug", 90));
   return { ok: true };
+}
+
+/**
+ * Owner only: restart every active client's journey, a few kickoffs per working day, most
+ * important first (VIP, top tier, biggest). Old touches stay in history; nothing is deleted.
+ * The screen shows the same schedule as a preview before this runs.
+ */
+export async function restartAllJourneys(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const from = anyDate(text(form, "from", 10)) ?? localToday();
+  const perDay = Math.min(10, Math.max(1, Number(text(form, "perDay", 2)) || RESTART_PER_DAY));
+  const clients = (await getRoster()).filter((c) => c.status === "active" && c.dbId).sort(byImportance);
+  const db = await createDatabaseClient();
+  for (const { client, start } of restartSchedule(clients, from, perDay)) {
+    const { error } = await db.from("clients").update({ care_started_on: start }).eq("id", client.dbId!);
+    if (error) {
+      console.warn(`Journey restart refused: ${error.code}`);
+      continue;
+    }
+    await logActivity(db, { client_id: client.dbId!, kind: "owner_changed", summary: `Journey restarted: touch 1 on ${start}` });
+  }
+  revalidatePath("/", "layout");
+  redirect("/clients");
+}
+
+/** Owner only: one person's daily goal in points (0029). */
+export async function saveCareTarget(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const userId = text(form, "userId", 40);
+  const points = Number(text(form, "points", 4));
+  if (!isUuid(userId) || !Number.isInteger(points) || points < 1 || points > 200) return;
+  const db = await createDatabaseClient();
+  const upd = await db.from("care_targets").update({ daily_points: points }).eq("user_id", userId).select("user_id");
+  if (upd.error) {
+    console.warn(`Goal refused: ${upd.error.code}`);
+    return;
+  }
+  if (!upd.data?.length) {
+    const ins = await db.from("care_targets").insert({ user_id: userId, daily_points: points });
+    if (ins.error) console.warn(`Goal refused: ${ins.error.code}`);
+  }
+  revalidatePath("/", "layout");
+}
+
+type CareAiState = { error?: string; moves?: { slug: string; name: string; why: string; leadWith: string }[]; draft?: string; cost?: string } | undefined;
+
+/**
+ * AI helper: up to 5 clients to contact first today, with why and what to lead with.
+ * Built only from facts in Atlas (journey, health, mood, client memory); names become codes.
+ * Suggestions only: nothing is saved or sent.
+ */
+export async function suggestNextMoves(_prev: CareAiState): Promise<{ error?: string; moves?: { slug: string; name: string; why: string; leadWith: string }[]; cost?: string }> {
+  await notWhilePreviewing();
+  void _prev; // useActionState passes the last result; a new run doesn't need it
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const [roster, journeys, { actions }, team] = await Promise.all([getRoster(), getJourneys(), getActions(), getTeam()]);
+  if (!journeys.ready) return { error: "The journey needs one setup step first (0028 SQL)." };
+  const today = getToday();
+  const soon = new Date(Date.parse(`${today}T00:00:00Z`) + 2 * 86_400_000).toISOString().slice(0, 10);
+  const book = buildCodebook(roster);
+  const staff = buildStaffBook(team.members.map((m) => ({ id: m.id, name: m.name })));
+  const clean = (t: string | null | undefined) => (t ? redactStaff(redact(t, book), staff).slice(0, 120) : null);
+  const due = roster
+    .filter((c) => c.status === "active" && journeys.bySlug.get(c.id)?.next && journeys.bySlug.get(c.id)!.next!.due <= soon)
+    .sort((a, b) => journeys.bySlug.get(a.id)!.next!.due.localeCompare(journeys.bySlug.get(b.id)!.next!.due) || byImportance(a, b))
+    .slice(0, 25);
+  if (!due.length) return { moves: [] };
+  const data = {
+    today,
+    clients: due.map((c) => {
+      const j = journeys.bySlug.get(c.id)!;
+      const h = getClientHealth(c, actions);
+      return {
+        code: book.codeOf.get(c.id),
+        stage: JOURNEY_STAGES[j.stage],
+        next_touch: j.next!.title,
+        due: j.next!.due,
+        overdue: j.next!.overdue,
+        unanswered_calls: j.next!.attempts,
+        important: isImportant(c),
+        tier: c.plans?.map((p) => `${p.service} ${p.name}`).join(", ") || null,
+        health: h ? { level: h.level, score: h.score } : null,
+        last_mood: c.lastMood?.mood ?? null,
+        days_since_contact: c.lastContact ? Math.round((Date.parse(today) - Date.parse(c.lastContact)) / 86_400_000) : null,
+        goal: clean(c.memory?.goal),
+        tone: clean(c.memory?.tone),
+        next_ask: clean(c.memory?.nextAsk),
+      };
+    }),
+  };
+  const result = await askAi({ task: CARE_MOVES_TASK, data, schema: CARE_MOVES_SCHEMA, maxOutputTokens: 1500, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "care_suggestions", result);
+  if (!result.ok) return { error: result.message };
+  const raw = (result.data as { moves?: { client?: unknown; why?: unknown; lead_with?: unknown }[] }).moves ?? [];
+  const moves: { slug: string; name: string; why: string; leadWith: string }[] = [];
+  for (const m of raw.slice(0, 5)) {
+    const hit = restoreClients([m.client], book)[0];
+    if (!hit || moves.some((x) => x.slug === hit.slug)) continue;
+    moves.push({ slug: hit.slug, name: hit.name, why: restore(String(m.why ?? ""), book).slice(0, 240), leadWith: restore(String(m.lead_with ?? ""), book).slice(0, 240) });
+  }
+  return { moves, cost: `$${result.costUsd.toFixed(3)}` };
+}
+
+/**
+ * AI helper: rewrite one touch's message using the client memory. The business name goes in
+ * as a code and is put back after. Copy-only: nothing is saved or sent.
+ */
+export async function draftTouchMessage(_prev: CareAiState, form: FormData): Promise<{ error?: string; draft?: string; cost?: string }> {
+  await notWhilePreviewing();
+  const pre = await aiPreflight();
+  if ("error" in pre) return pre;
+  const slug = text(form, "slug", 90);
+  const touch = touchByStep(Number(text(form, "step", 4)));
+  if (!touch) return { error: "Unknown touch." };
+  const [roster, team] = await Promise.all([getRoster(), getTeam()]);
+  const client = roster.find((c) => c.id === slug);
+  if (!client) return { error: "Unknown client." };
+  // Only this client gets a code (C1); every other client and staff name is swapped out of notes.
+  const book = buildCodebook([client, ...roster.filter((c) => c.id !== client.id)]);
+  const staff = buildStaffBook(team.members.map((m) => ({ id: m.id, name: m.name })));
+  const clean = (t: string | null | undefined) => (t ? redactStaff(redact(t, book), staff).slice(0, 120) : null);
+  const data = {
+    touch: { title: touch.title, how: touch.how, purpose: touch.say, ask_for: touch.ask ?? null, template: touch.template ? touch.template.replaceAll("[Business]", "[C1]") : null },
+    client: { code: "C1", tier: client.plans?.map((p) => `${p.service} ${p.name}`).join(", ") || null, goal: clean(client.memory?.goal), tone: clean(client.memory?.tone), next_ask: clean(client.memory?.nextAsk), last_mood: client.lastMood?.mood ?? null },
+  };
+  const result = await askAi({ task: CARE_DRAFT_TASK, data, schema: CARE_DRAFT_SCHEMA, maxOutputTokens: 800, remainingUsd: pre.remaining });
+  const db = await createDatabaseClient();
+  await logAiUsage(db, "care_draft", result);
+  if (!result.ok) return { error: result.message };
+  const draft = restore(String((result.data as { message?: unknown }).message ?? ""), book).slice(0, 1200);
+  return { draft, cost: `$${result.costUsd.toFixed(3)}` };
 }
 
 /** Who owns a client (owner only; the database enforces this too). */
@@ -2025,7 +2184,7 @@ export async function decideContactMatch(form: FormData) {
 // log every request's exact cost, and save the answer for people to review.
 // ---------------------------------------------------------------------------
 
-async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add", r: AiResult) {
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add" | "care_suggestions" | "care_draft", r: AiResult) {
   if (!r.startedAt) return; // never sent (budget stop, not set up): not a run, nothing charged
   const known = r.usage !== undefined && r.costUsd !== undefined;
   const row = {

@@ -7,7 +7,7 @@ import { NextMoveForm } from "@/components/forms/NextMoveForm";
 import { cn, formatDate } from "@/lib/format";
 import { draftMessage, GROW_STAGE, JOURNEY_STAGES, JOURNEY_TOUCHES, touchByStep, type JourneyState } from "@/lib/journey";
 
-export function JourneyCard({ journey, clientDbId, slug, business, canEdit }: { journey: JourneyState; clientDbId: string; slug: string; business: string; canEdit: boolean }) {
+export function JourneyCard({ journey, clientDbId, slug, business, canEdit, canUseAi = false }: { journey: JourneyState; clientDbId: string; slug: string; business: string; canEdit: boolean; canUseAi?: boolean }) {
   const next = journey.next ? touchByStep(journey.next.step) : undefined;
   const neverStarted = !journey.startedOn;
   return (
@@ -71,7 +71,7 @@ export function JourneyCard({ journey, clientDbId, slug, business, canEdit }: { 
               {next.ask}
             </p>
           )}
-          {canEdit && <NextMoveForm clientId={clientDbId} slug={slug} step={next.step} defaultChannel={next.channel} draft={draftMessage(next, business)} />}
+          {canEdit && <NextMoveForm clientId={clientDbId} slug={slug} step={next.step} defaultChannel={next.channel} draft={draftMessage(next, business)} attempts={journey.next.attempts} canUseAi={canUseAi} />}
           <p className="mt-2 text-[11px] text-faint">Nothing sends from Atlas. Copy, send from GoHighLevel, then tap Done.</p>
         </div>
       )}

@@ -15,13 +15,19 @@ import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { WinLossSection } from "@/components/cards/WinLossSection";
 import { describeTenure, formatDate, formatUsdExact } from "@/lib/format";
 import { byImportance } from "@/lib/ops";
+import { CareGoalCard, GrowthLine, JourneyBoard } from "@/components/cards/CareWidgets";
+import { activeByMonth } from "@/lib/care";
+import { touchesDue } from "@/lib/journey";
+import { getCareToday } from "@/lib/data-source";
 import { getJourneys } from "@/lib/data-source";
 import { journeyRow } from "@/lib/journey-view";
 import type { HealthLevel } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Clients" };
 
-export default async function ClientsPage() {
+export default async function ClientsPage({ searchParams }: { searchParams: Promise<{ stage?: string }> }) {
+  const stageParam = Number((await searchParams).stage);
+  const activeStage = Number.isInteger(stageParam) && stageParam >= 0 && stageParam <= 5 ? stageParam : null;
   if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="Clients" />;
   const today = getToday();
   const summary = await getRosterSummary();
@@ -55,6 +61,14 @@ export default async function ClientsPage() {
     .filter((c) => c.status === "active" && (!c.ownerId || noNextIds.has(c.id)))
     .sort((a, b) => Number(Boolean(a.ownerId)) - Number(Boolean(b.ownerId)) || byImportance(a, b));
   const money = summary.moneyShown;
+  // Journey (0028) and today's goal (0029): hidden until those setup steps are run.
+  const allClients = withHealth.map(({ c }) => c);
+  const growth = activeByMonth(allClients, today, 12);
+  const stageCounts = [0, 0, 0, 0, 0, 0];
+  for (const j of journeys.bySlug.values()) stageCounts[j.stage]! += 1;
+  const nexts = [...journeys.bySlug.values()].map((j) => j.next).filter((n) => n !== null);
+  const due = journeys.ready ? touchesDue(allClients.filter((c) => c.status === "active"), journeys.bySlug, null, today) : [];
+  const goal = await getCareToday();
 
   return (
     <>
@@ -62,19 +76,27 @@ export default async function ClientsPage() {
         title="Clients"
         subtitle={`${summary.activeCount} active · ${summary.total} total`}
         action={
-          usesDatabase() && member && isLead(member.role) ? (
-            <Link href="/clients/new" className="pressable flex min-h-11 items-center gap-1 rounded-2xl bg-violet-deep px-3 text-xs font-semibold">
-              <Plus aria-hidden className="size-4" /> Add client
-            </Link>
-          ) : (
-            <Provenance kind={summary.source !== "demo" ? "real" : "demo"} />
-          )
+          <span className="flex items-center gap-3">
+            <GrowthLine points={growth} />
+            {usesDatabase() && member && isLead(member.role) ? (
+              <Link href="/clients/new" className="pressable flex min-h-11 items-center gap-1 rounded-2xl bg-violet-deep px-3 text-xs font-semibold">
+                <Plus aria-hidden className="size-4" /> Add client
+              </Link>
+            ) : (
+              <Provenance kind={summary.source !== "demo" ? "real" : "demo"} />
+            )}
+          </span>
         }
       />
 
-      {/* Wide screens: the totals with the owner's setup links beside them. */}
-      <div className={member?.role === "owner" ? "lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-x-8 lg:gap-y-3 xl:gap-x-10" : undefined}>
-      <GlassCard className="grid grid-cols-3 gap-2 text-center lg:row-span-3 lg:items-center">
+      {journeys.ready && (
+        <div className="mb-3 grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-x-8 xl:gap-x-10">
+          <JourneyBoard counts={stageCounts} overdue={nexts.filter((n) => n.overdue).length} dueToday={nexts.filter((n) => n.due === today).length} active={activeStage} />
+          {goal && <CareGoalCard {...goal} />}
+        </div>
+      )}
+
+      <GlassCard className="grid grid-cols-3 gap-2 text-center">
         <div>
           <p className="font-display text-xl font-bold lg:text-3xl">{money ? formatUsdExact(summary.activeMrr) : summary.activeCount}</p>
           <p className="text-[11px] text-muted">{money ? "Active / month" : "Active"}</p>
@@ -89,27 +111,21 @@ export default async function ClientsPage() {
         </div>
       </GlassCard>
 
+      {/* The owner's setup screens, in one row of small buttons. */}
       {member?.role === "owner" && (
-        <Link href="/clients/setup" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl border border-violet/30 px-4 text-sm">
-          <span className="font-semibold">Set up clients</span>
-          <span className="text-xs text-violet">Owners, tiers, VIP →</span>
-        </Link>
+        <nav aria-label="Client setup" className="mt-2.5 flex flex-wrap gap-2">
+          {([
+            ["/clients/setup", "Set up clients"],
+            ["/clients/plans", "Plan tiers"],
+            ["/clients/restart", "Restart journeys · goals"],
+            ["/clients/ghl-matches", "Match GoHighLevel contacts"],
+          ] as const).map(([href, label]) => (
+            <Link key={href} href={href} className="pressable flex min-h-10 items-center rounded-xl border border-line bg-white/[0.03] px-3 text-xs font-semibold text-violet">
+              {label}
+            </Link>
+          ))}
+        </nav>
       )}
-
-      {member?.role === "owner" && (
-        <Link href="/clients/plans" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl px-4 text-sm">
-          <span>Plan tiers</span>
-          <span className="text-xs text-violet">Starter, Growth, Pro… →</span>
-        </Link>
-      )}
-
-      {member?.role === "owner" && (
-        <Link href="/clients/ghl-matches" className="pressable glass mt-3 flex min-h-11 lg:mt-0 items-center justify-between rounded-2xl px-4 text-sm">
-          <span>Match clients to GoHighLevel contacts</span>
-          <span className="text-xs text-violet">For call &amp; message times →</span>
-        </Link>
-      )}
-      </div>
 
       {/* Wide screens: risks and owners on the left; services, health, check-ins and win-backs on the right. */}
       <Columns single={!usesDatabase() && !ops.ready}>
@@ -170,6 +186,31 @@ export default async function ClientsPage() {
         filters below.
       </p>
 
+      {journeys.ready ? (
+        <section id="checkins" className="scroll-mt-16">
+          <SectionTitle aside={`${due.length} today or overdue`}>Touches due</SectionTitle>
+          <GlassCard padding="none">
+            {due.length > 0 ? (
+              <ul className="divide-y divide-line">
+                {due.slice(0, 12).map((t) => (
+                  <li key={t.slug}>
+                    <Link href={`/clients/${t.slug}`} className="pressable flex items-center justify-between gap-3 px-4 py-3">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">{t.name}</span>
+                        <span className="block truncate text-[11px] text-muted">{t.title}</span>
+                      </span>
+                      <span className={`shrink-0 text-xs font-semibold ${t.overdue ? "text-rose" : "text-amber"}`}>{t.overdue ? `Since ${formatDate(t.due)}` : "Today"}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="px-4 py-3 text-sm text-muted">Nothing due today.</p>
+            )}
+            <p className="border-t border-line px-4 py-2 text-[11px] text-faint">From each client&apos;s journey: the 27 first-90-day touches, then the monthly rhythm.</p>
+          </GlassCard>
+        </section>
+      ) : (
       <section id="checkins" className="scroll-mt-16">
         <SectionTitle aside={<BellRing aria-hidden className="size-4 text-faint" />}>Check-ins due</SectionTitle>
         <GlassCard padding="none">
@@ -201,6 +242,7 @@ export default async function ClientsPage() {
           </p>
         </GlassCard>
       </section>
+      )}
 
       {winBack.length > 0 && (
         <section id="winback" className="scroll-mt-16">
@@ -237,8 +279,8 @@ export default async function ClientsPage() {
         </p>
       )}
 
-      <div className="mt-5">
-        <RosterBrowser clients={rows} showMoney={money} />
+      <div id="list" className="mt-5 scroll-mt-16">
+        <RosterBrowser clients={rows} showMoney={money} stage={activeStage} />
       </div>
 
       <WinLossSection winLoss={winLoss} real={rosterSource !== "demo"} />
