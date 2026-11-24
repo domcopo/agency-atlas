@@ -992,3 +992,80 @@ describe("PDFs in Smart add + Our agency work orders (0022)", () => {
   });
 });
 
+
+describe("Scout (0024): prospects for walk-ins, no contact details, no network, database-enforced caps", () => {
+  const read = (f: string) => readFileSync(join(ROOT, f), "utf8");
+  const actions = read("src/app/actions.ts");
+  const fn = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const next = actions.indexOf("\nexport async function ", start + 10);
+    return actions.slice(start, next === -1 ? undefined : next);
+  };
+  const scoutFiles = ["src/lib/scout.ts", "src/lib/scout-intake.ts", "src/lib/scout-prompt.ts", ...readdirSync(join(ROOT, "src/components/scout")).map((f) => `src/components/scout/${f}`)];
+
+  it("the Scout rules, checker, prompt and components make no network calls and use no AI or GoHighLevel", () => {
+    for (const f of scoutFiles) {
+      const t = read(f);
+      expect(t, f).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|@\/lib\/ghl|@\/lib\/ai|askAi|createDatabaseClient|\.rpc\(/);
+    }
+    // The pure modules import nothing but each other and the shared contact-details check.
+    for (const f of ["src/lib/scout.ts", "src/lib/scout-intake.ts", "src/lib/scout-prompt.ts"]) {
+      const imports = [...read(f).matchAll(/from "([^"]+)"/g)].map((m) => m[1]);
+      for (const i of imports) expect(["@/lib/scout", "@/lib/work-orders"], `${f} imports ${i}`).toContain(i);
+    }
+  });
+
+  it("every Scout action starts with notWhilePreviewing and runs as the signed-in person", () => {
+    for (const name of ["startScoutRun", "attachScoutResults", "claimProspect", "assignProspects", "skipProspect", "logScoutVisit", "saveScoutSettings"]) {
+      const body = fn(name);
+      expect(body.length, name).toBeGreaterThan(100);
+      expect(body.split("\n")[1], name).toMatch(/await notWhilePreviewing\(\);/);
+      expect(body, name).toMatch(/getCurrentMember\(\)/);
+    }
+    expect(fn("assignProspects")).toMatch(/me\.role !== "owner"/);
+    expect(fn("saveScoutSettings")).toMatch(/me\.role !== "owner"/);
+  });
+
+  it("a run's estimate goes into the capped ledger before the run can be used, and results are checked strictly", () => {
+    const start = fn("startScoutRun");
+    expect(start.indexOf('from("scout_spend").insert')).toBeGreaterThan(start.indexOf('from("scout_runs").insert'));
+    expect(start).toMatch(/scoutLeft\(/);
+    const attach = fn("attachScoutResults");
+    expect(attach).toMatch(/parseScoutResults\(raw, runId\)/);
+    expect(attach).toMatch(/from\("scout_spend"\)\.select\("id"\)\.eq\("run_id", runId\)/);
+    // Salespeople's finds are theirs; nobody else's.
+    expect(attach).toMatch(/const assigned = me\.role === "sales" \? me\.userId : null;/);
+  });
+
+  it("Scout never stores phone numbers: no phone field anywhere in the Scout code or the migration's columns", () => {
+    for (const f of [...scoutFiles, "supabase/migrations/0024_scout.sql"]) {
+      // Code only (comments may explain the rule): no phone field, column or tel: link.
+      const code = read(f).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|--)/.test(l)).join("\n");
+      expect(code, f).not.toMatch(/\bphone(_number)?\??\s*:|"phone"|\bphone\s+text|tel:/i);
+    }
+    expect(read("supabase/migrations/0024_scout.sql")).toMatch(/private\.scout_clean\(name\)/);
+  });
+
+  it("visits and spend are add-only from the app; nothing deletes prospects", () => {
+    expect(actions).not.toMatch(/from\("scout_(visits|spend|do_not_contact)"\)\.(update|upsert|delete)/);
+    expect(actions).not.toMatch(/from\("scout_prospects"\)\.delete/);
+  });
+
+  it("the name-matching word list is the same in the app and the database", () => {
+    const sql = read("supabase/migrations/0024_scout.sql");
+    const m = sql.match(/' \(([a-z |]+)\)\(\?= \)'/);
+    expect(m).toBeTruthy();
+    const words = m![1]!.split("|");
+    const ts = read("src/lib/scout.ts").match(/NAME_STOP_WORDS = \[([^\]]+)\]/)![1]!.match(/"([^"]+)"/g)!.map((w) => w.slice(1, -1));
+    expect(words).toEqual(ts);
+  });
+
+  it("the prospect and run pages read only through getScout (the database decides)", () => {
+    for (const f of ["src/app/(app)/sales/scout/page.tsx", "src/app/(app)/sales/scout/[id]/page.tsx", "src/app/(app)/sales/scout/runs/[id]/page.tsx", "src/app/(app)/sales/scout/new/page.tsx"]) {
+      const t = read(f);
+      expect(t, f).toMatch(/getScout\(\)/);
+      expect(t, f).not.toMatch(/createDatabaseClient|@\/lib\/ghl|dangerouslySetInnerHTML/);
+    }
+    expect(read("src/app/(app)/sales/scout/[id]/page.tsx")).toMatch(/if \(!p\) notFound\(\);/);
+  });
+});

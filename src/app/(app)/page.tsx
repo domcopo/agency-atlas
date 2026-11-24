@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { autoPublishOwnerSummary, autoRefreshLeads, recordHealthSnapshot } from "@/app/actions";
 import { TodayPlan } from "@/components/sales/TodayPlan";
+import { WalkInsToday } from "@/components/scout/WalkInsToday";
 import { isLead } from "@/lib/roles";
 import { lastTouchByLead, nyDay, splitLeadFollowUps, targetProgress, todaysPlan, touchesOn } from "@/lib/sales";
 import { AiMeter } from "@/components/cards/AiMeter";
@@ -136,6 +137,7 @@ export default async function MissionControlPage() {
         ) : (
           <TodayPlan items={plan} progress={progress} lastByLead={lastTouchByLead(sales.touches)} today={day} />
         )}
+        <WalkInsToday />
         {sales.ready && !me.ghlUserId && (
           <p className="mt-3 px-1 text-[11px] text-faint">Your login isn&apos;t linked to your GoHighLevel user yet, so this plan covers everyone&apos;s leads. Ask the owner to link it.</p>
         )}

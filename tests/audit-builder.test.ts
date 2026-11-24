@@ -277,7 +277,7 @@ describe("Audits area (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md Phase 1)", () => 
     ]) {
       expect(config).toContain(`{ source: "${from}", destination: "${to}", permanent: false }`);
     }
-    for (const file of ["src/components/sales/AuditsCard.tsx", "src/app/actions.ts", "src/app/audit/[id]/page.tsx", "src/app/(app)/sales/lead/[id]/page.tsx", "src/app/(app)/growth/audits/page.tsx"]) {
+    for (const file of ["src/components/sales/AuditsCard.tsx", "src/app/(app)/sales/scout/[id]/page.tsx", "src/app/actions.ts", "src/app/audit/[id]/page.tsx", "src/app/(app)/sales/lead/[id]/page.tsx", "src/app/(app)/growth/audits/page.tsx"]) {
       expect(read(file), file).not.toContain("/sales/audits");
     }
   });
