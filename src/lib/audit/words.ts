@@ -32,10 +32,12 @@ export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
         revenue: { type: "string" },
       },
     },
-    fixes: { type: "array", maxItems: 5, items: { type: "object", additionalProperties: false, required: ["title", "detail"], properties: { title: { type: "string" }, detail: { type: "string" } } } },
+    // No maxItems: structured outputs refuse array-length rules (a 400). The counts are asked for
+    // in the descriptions and enforced when the answer is read (applyWords).
+    fixes: { type: "array", description: "Up to 5 fixes, most important first.", items: { type: "object", additionalProperties: false, required: ["title", "detail"], properties: { title: { type: "string" }, detail: { type: "string" } } } },
     scorecard: {
       type: "array",
-      maxItems: 6,
+      description: "Up to 6 rows.",
       items: { type: "object", additionalProperties: false, required: ["signal", "competitors", "client", "grade"], properties: { signal: { type: "string" }, competitors: { type: "string" }, client: { type: "string" }, grade: { type: "string", enum: ["gap", "partial", "good"] } } },
     },
   },

@@ -2,7 +2,7 @@
 // model, homepage check. Pure functions; every business and number here is fictional (.example).
 
 import { describe, expect, it } from "vitest";
-import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, readInspection, readRanked, readSuggestions } from "@/lib/audit/depth";
+import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, nearbyMarkets, readInspection, readRanked, readSuggestions } from "@/lib/audit/depth";
 
 const markets = auditMarkets("Denver", ["Arvada", "Lakewood", "Jefferson County"], "CO");
 const answer = (items: unknown[]) => ({ result: [{ items }] });
@@ -28,6 +28,31 @@ describe("markets", () => {
     expect(groupOf("we buy houses near me", markets, "CO")).toBe("Near me");
     expect(groupOf("cash home buyers colorado", markets, "CO")).toBe("Colorado");
     expect(groupOf("we buy houses", markets, "CO")).toBe("General");
+  });
+});
+
+describe("the wider area", () => {
+  const others = new Set(["denver", "arvada", "lakewood", "aurora", "colorado springs", "jefferson county", "golden"]);
+  const near = nearbyMarkets(["Golden", "Arvada", "Wheat Ridge"], markets, "CO");
+
+  it("nearby towns: the audit's own markets aren't repeated", () => {
+    expect(near.map((m) => [m.label, m.term, m.nearby])).toEqual([["Golden", "golden", true], ["Wheat Ridge", "wheat ridge", true]]);
+  });
+
+  it("the state's name counts only when no other town of the state is named", () => {
+    expect(isLocal("we buy houses colorado", markets, "CO", others)).toBe(true);
+    expect(isLocal("we buy houses colorado springs colorado", markets, "CO", others)).toBe(false);
+    expect(isLocal("we buy houses aurora colorado", markets, "CO", others)).toBe(false);
+    expect(isLocal("we buy houses denver colorado", markets, "CO", others)).toBe(true); // its own market wins
+    expect(namesOtherPlace("sell house fast golden co", markets, others)).toBe(true);
+    expect(namesOtherPlace("sell house fast golden co", [...markets, ...near], others)).toBe(false);
+  });
+
+  it("rankings in nearby towns add visits but aren't listed as the audit's towns", () => {
+    const r = [{ keyword: "we buy houses golden", position: 1, path: "/golden/", usVolume: 100 }];
+    const m = modelSite(r, () => null, () => null, [...markets, ...near], "CO", others);
+    expect([m.visits, m.markets, m.pages]).toEqual([28, [], ["/golden/"]]);
+    expect(groupOf("we buy houses golden", [...markets, ...near], "CO")).toBe("Golden");
   });
 });
 

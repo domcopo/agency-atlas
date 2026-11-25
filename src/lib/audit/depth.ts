@@ -54,10 +54,39 @@ export interface Market {
   label: string;
   /** How people type it in a search ("warren", "sharon"). */
   term: string;
+  /** A town near the home town that isn't one of the audit's own markets (searches only). */
+  nearby?: boolean;
 }
 
+const termOf = (label: string, state: string) => placeState(label, state).name.toLowerCase().replace(/\s+county$/, " county");
+
 export function auditMarkets(hqTown: string, cities: string[], state: string): Market[] {
-  return [hqTown, ...cities].map((label) => ({ label, term: placeState(label, state).name.toLowerCase().replace(/\s+county$/, " county") }));
+  return [hqTown, ...cities].map((label) => ({ label, term: termOf(label, state) }));
+}
+
+/** Towns within ~30 miles of the home town (from the place list), minus the audit's own markets. */
+export function nearbyMarkets(labels: string[], own: Market[], state: string): Market[] {
+  const taken = new Set(own.map((m) => m.term));
+  const out: Market[] = [];
+  for (const label of labels) {
+    const term = termOf(label, state);
+    if (term.length < 3 || taken.has(term)) continue;
+    taken.add(term);
+    out.push({ label, term, nearby: true });
+  }
+  return out;
+}
+
+/**
+ * The wider area searched for an audit: its markets (+ nearby towns), the state, and every
+ * other place name in that state (so "we buy houses columbus ohio" isn't counted for a
+ * Youngstown audit just because it says "ohio").
+ */
+export interface Area {
+  markets: Market[];
+  state: string;
+  /** Lower-case place names in the state (cities, townships, counties). */
+  others?: ReadonlySet<string>;
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -78,9 +107,24 @@ export function localPattern(markets: Market[], state: string): string {
   return names.map(escape).join("|");
 }
 
-export function isLocal(keyword: string, markets: Market[], state: string): boolean {
+/** Does the search name a place in the state that isn't one of these markets? */
+export function namesOtherPlace(keyword: string, markets: Market[], others: ReadonlySet<string> | undefined): boolean {
+  if (!others?.size) return false;
+  const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
+  const own = new Set(markets.map((m) => m.term));
+  for (let n = 1; n <= 3; n++)
+    for (let i = 0; i + n <= words.length; i++) {
+      const g = words.slice(i, i + n).join(" ");
+      if (others.has(g) && !own.has(g)) return true;
+    }
+  return false;
+}
+
+export function isLocal(keyword: string, markets: Market[], state: string, others?: ReadonlySet<string>): boolean {
   const k = ` ${keyword.toLowerCase()} `;
-  return markets.some((m) => k.includes(` ${m.term} `)) || k.includes(` ${stateName(state).toLowerCase()} `) || k.includes(" near me ");
+  if (markets.some((m) => k.includes(` ${m.term} `)) || k.includes(" near me ")) return true;
+  // The state's name alone counts only when no other town of the state is named.
+  return k.includes(` ${stateName(state).toLowerCase()} `) && !namesOtherPlace(keyword, markets, others);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +155,7 @@ export function readSuggestions(a: DfsAnswer | undefined): Suggestion[] {
  * houses warren"), plus suggestions that name a town, the state or "near me" (most searched
  * first). Informational-only searches ("how to …") are left out.
  */
-export function buildUniverse(seeds: string[], markets: Market[], state: string, suggestions: Suggestion[], extra: string[] = []): string[] {
+export function buildUniverse(seeds: string[], markets: Market[], state: string, suggestions: Suggestion[], extra: string[] = [], others?: ReadonlySet<string>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (k: string) => {
@@ -125,7 +169,7 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
   for (const k of extra) add(k);
   for (const s of seeds) for (const m of markets) add(`${s} ${m.term}`);
   const local = suggestions
-    .filter((g) => isLocal(g.keyword, markets, state) && !/^(how|what|why|when|is|can|does|do)\b/.test(g.keyword) && g.intent !== "navigational")
+    .filter((g) => isLocal(g.keyword, markets, state, others) && !/^(how|what|why|when|is|can|does|do)\b/.test(g.keyword) && g.intent !== "navigational")
     .sort((a, b) => (b.usVolume ?? 0) - (a.usVolume ?? 0));
   for (const g of local) add(g.keyword);
   return out;
@@ -179,7 +223,7 @@ export interface SiteModel {
   visits: number;
   /** What those visits would cost as ads (visits × cost per click). */
   valueUsd: number;
-  /** Towns where it ranks in the top 20 (audit labels). */
+  /** The audit's own towns where it ranks in the top 20 (nearby towns left out). */
   markets: string[];
   /** Best position per search (for the ranking tables). */
   positions: Map<string, number>;
@@ -192,10 +236,10 @@ export interface SiteModel {
  * for the state when known, else DataForSEO's US figure for that town-named search) × the
  * click share of its position.
  */
-export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string): SiteModel {
+export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>): SiteModel {
   const best = new Map<string, Ranked>();
   for (const r of ranked) {
-    if (!isLocal(r.keyword, markets, state)) continue;
+    if (!isLocal(r.keyword, markets, state, others)) continue;
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
   }
@@ -229,7 +273,7 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     positionedFor: Math.round(positionedFor),
     visits: Math.round(visits),
     valueUsd: Math.round(valueUsd),
-    markets: markets.filter((m) => marketSet.has(m.label)).map((m) => m.label),
+    markets: markets.filter((m) => !m.nearby && marketSet.has(m.label)).map((m) => m.label),
     positions: new Map([...best].map(([k, r]) => [k, r.position])),
     pages: [...pageValue].sort((a, b) => b[1] - a[1]).slice(0, DEPTH_RULES.pagesPerSite).map(([p]) => p),
   };

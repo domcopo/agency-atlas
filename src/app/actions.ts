@@ -89,7 +89,7 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -3527,6 +3527,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let calls = 0;
   let aiUsd: number | null = null;
   let wordsNote: string | null = null;
+  // What this run may spend in total (its estimate, set aside before it started). A failed
+  // lookup is retried once only while the spend stays inside it.
+  let budgetUsd = 0;
   const saveSteps = () => db.from("audit_runs").update({ steps: [...state].map(([label, s]) => ({ label, state: s })) }).eq("id", runId);
   const finish = async (status: "done" | "failed", error: string | null) => {
     if (status === "done") state.set("Checking and saving", "done");
@@ -3548,14 +3551,23 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         if (Date.now() > deadline) break;
         await Promise.all(
           group.slice(i, i + 6).map(async (l) => {
-            calls++;
-            try {
-              const a = await dfsLookup(l.path, l.task);
-              answers.set(l.id, a);
-              costUsd += a.costUsd ?? DFS_PRICE[l.path];
-            } catch (e) {
-              costUsd += DFS_PRICE[l.path];
-              if (problems.length < 3) problems.push(e instanceof DfsError ? e.message : "A lookup failed.");
+            for (let attempt = 0; attempt < 2; attempt++) {
+              calls++;
+              try {
+                const a = await dfsLookup(l.path, l.task);
+                answers.set(l.id, a);
+                costUsd += a.costUsd ?? DFS_PRICE[l.path];
+                return;
+              } catch (e) {
+                costUsd += DFS_PRICE[l.path];
+                // Their side hiccuped (e.g. 40101): one more try after a short pause, if the budget allows.
+                if (attempt === 0 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                  continue;
+                }
+                if (problems.length < 3) problems.push(e instanceof DfsError ? e.message : "A lookup failed.");
+                return;
+              }
             }
           }),
         );
@@ -3572,6 +3584,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.ads!.intake!;
       const sections = audit.ads!.sections;
       const plan = planAdsRun(intake, sections);
+      budgetUsd = plan.estimateUsd;
       await runLookups(plan.first);
       const serps = adsMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
       const extra: Lookup[] = [];
@@ -3591,20 +3604,26 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       await saveRunResults(db, audit.id, block, {}, checked.summary.retrieved);
     } else {
       const intake = audit.intake!;
-      const plan = planSeoRun(intake, audit.sections);
+      // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
+      // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 20).map((t) => t.label), others: statePlaces(intake.state) };
+      const plan = planSeoRun(intake, audit.sections, area);
+      budgetUsd = plan.estimateUsd;
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
-      const universe = seoUniverse(intake, answers, plan.seeds.length);
+      const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
+      // The town-by-town searches count too, so one failed search can't leave the audit with no competitors.
+      const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors(serps, intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
-      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe });
+      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");
       await saveSteps();
@@ -3616,7 +3635,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         if (result.ok) {
           block = applyWords(block, result.data, input.codes);
           aiUsd = result.costUsd;
-        }
+        } else wordsNote = `Claude's notes weren't written (${result.message})`;
       }
       state.set("Writing the notes", "done");
       state.set("Checking and saving", "working");

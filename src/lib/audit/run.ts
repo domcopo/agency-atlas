@@ -7,7 +7,23 @@
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
 import { normalizeDomain, type AuditIntake } from "./intake";
-import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, readInspection, readRanked, readSuggestions } from "./depth";
+import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, type Market } from "./depth";
+
+/**
+ * The places around an audit, looked up by the caller (the place list is server data and
+ * stays out of this file so pages can import it): towns within ~30 miles of the home town,
+ * and every place name in the state. Left out = only the audit's own markets.
+ */
+export interface SeoArea {
+  nearby?: string[];
+  others?: readonly string[];
+}
+
+function areaOf(intake: AuditIntake, area?: SeoArea): { own: Market[]; all: Market[]; others: ReadonlySet<string> } {
+  const own = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const near = nearbyMarkets(area?.nearby ?? [], own, intake.state);
+  return { own, all: [...own, ...near], others: new Set((area?.others ?? []).map((x) => x.toLowerCase())) };
+}
 import { placeState } from "./places";
 import type { AuditSectionId } from "./sections";
 import type { DfsAnswer, DfsPath } from "./sources/dataforseo";
@@ -116,10 +132,10 @@ export function seedSearches(intake: { services: string[]; niche: string }): str
   return [...new Set(list)].slice(0, DEPTH_RULES.seeds);
 }
 
-export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionId[]): SeoPlan {
+export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionId[], area?: SeoArea): SeoPlan {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const markets = areaOf(intake, area).all;
   const seeds = seedSearches(intake);
   const first: Lookup[] = seeds.map((keyword, i) => ({
     id: `suggest:${i}`,
@@ -312,21 +328,23 @@ export interface SeoAnswers {
   calls: number;
   /** The searches this audit is about (D1); left out = the plain service × town list. */
   universe?: string[];
+  /** Nearby towns and the state's place names (same as given to planSeoRun / seoUniverse). */
+  area?: SeoArea;
 }
 
 /** Seeds + suggestions that name a town, the state or "near me" (the D1 keyword universe). */
-export function seoUniverse(intake: AuditIntake, answers: Map<string, DfsAnswer>, seedCount: number): string[] {
-  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+export function seoUniverse(intake: AuditIntake, answers: Map<string, DfsAnswer>, seedCount: number, area?: SeoArea): string[] {
+  const { all: markets, others } = areaOf(intake, area);
   const seeds = seedSearches(intake);
   const suggestions = Array.from({ length: seedCount }, (_, i) => readSuggestions(answers.get(`suggest:${i}`))).flat();
   const plain = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities], intake.state).map((k) => k.keyword);
-  return buildUniverse(seeds, markets, intake.state, suggestions, plain);
+  return buildUniverse(seeds, markets, intake.state, suggestions, plain, others);
 }
 
 export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSectionId[], run: SeoAnswers): Record<string, unknown> {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const { all: markets, others } = areaOf(intake, run.area);
   const universe = run.universe ?? moneyKeywords(intake.services, cities, intake.state).map((k) => k.keyword);
   const volume = readVolume(run.answers.get("volume"));
   const difficulty = readDifficulty(run.answers.get("difficulty"));
@@ -337,7 +355,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const cpc = (k: string) => volume.get(k)?.cpc ?? null;
 
   // Each site's local rankings → the click-through model (D1). No answer = numbers "not found".
-  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state)]));
+  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state, others)]));
 
   const demand = cities.map((city) => {
     const known = universe.filter((k) => marketOf(k, markets)?.label === city).map(searches).filter((v): v is number => typeof v === "number");

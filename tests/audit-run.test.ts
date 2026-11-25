@@ -9,7 +9,7 @@ import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/int
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
 import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
-import { applyWords, wordsInput } from "@/lib/audit/words";
+import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
 
 const TODAY = "2026-11-25";
 const seoIntake = (() => {
@@ -141,6 +141,22 @@ describe("SEO: answers → block → checker", () => {
     expect(r.data.sourcesUsed).toEqual(["dataforseo"]);
   });
 
+  it("the notes format uses only what structured outputs accept (no length or number limits)", () => {
+    expect(JSON.stringify(AUDIT_WORDS_SCHEMA)).not.toMatch(/"(maxItems|minItems|minLength|maxLength|minimum|maximum|multipleOf)"/);
+  });
+
+  it("with the wider area: nearby towns join the searches; other towns of the state stay out", () => {
+    const area = { nearby: ["Lakewood", "Arvada"], others: ["Denver", "Arvada", "Lakewood", "Aurora", "Boulder"] };
+    const sug = new Map<string, DfsAnswer>([["suggest:0", ans([{ items: [{ keyword: "we buy houses aurora colorado", keyword_info: { search_volume: 900 } }, { keyword: "we buy houses lakewood colorado", keyword_info: { search_volume: 80 } }, { keyword: "we buy houses colorado", keyword_info: { search_volume: 250 } }] }])]]);
+    const u = seoUniverse(seoIntake, sug, 1, area);
+    expect(u).toContain("we buy houses lakewood");
+    expect(u).toContain("we buy houses lakewood colorado");
+    expect(u).toContain("we buy houses colorado");
+    expect(u).not.toContain("we buy houses aurora colorado");
+    const plan = planSeoRun(seoIntake, ["summary"], area);
+    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|lakewood|colorado|near me"]] });
+  });
+
   it("the AI gets codes, not names or websites; its words come back with names", () => {
     const input = wordsInput(block, seoIntake.company, seoIntake.niche);
     const sent = JSON.stringify(input.data);
@@ -205,6 +221,15 @@ describe("Google Ads: answers → block → checker", () => {
 
 describe("run audit wiring", () => {
   const read = (p: string) => readFileSync(p, "utf8");
+  it("retries a lookup once only when DataForSEO's side failed and the set-aside budget allows; competitors also come from the town searches", () => {
+    const a = read("src/app/actions.ts");
+    const fn = a.slice(a.indexOf("async function runAuditInBackground"));
+    expect(fn).toMatch(/attempt < 2/);
+    expect(fn).toMatch(/e\.retryable && costUsd \+ DFS_PRICE\[l\.path\] <= budgetUsd/);
+    expect(fn).toMatch(/findCompetitors\(\[\.\.\.serps, \.\.\.packSerps\]/);
+    expect(fn).toMatch(/Claude's notes weren't written/);
+  });
+
   it("checks role, cap and setup first, writes the money row BEFORE any lookup, then works in the background", () => {
     const a = read("src/app/actions.ts");
     const fn = a.slice(a.indexOf("export async function startAuditRun"), a.indexOf("async function runAuditInBackground"));
