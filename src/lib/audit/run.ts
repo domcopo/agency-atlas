@@ -7,7 +7,7 @@
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
 import { normalizeDomain, type AuditIntake } from "./intake";
-import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, type Market } from "./depth";
+import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, topicOf, topicPattern, type Market } from "./depth";
 
 /**
  * The places around an audit, looked up by the caller (the place list is server data and
@@ -128,7 +128,9 @@ export interface SeoPlan {
 
 /** Short seed searches: the first few services as people type them ("we buy houses"). */
 export function seedSearches(intake: { services: string[]; niche: string }): string[] {
-  const list = (intake.services.length ? intake.services : [intake.niche]).map(searchPhrase).filter((t): t is string => !!t && t.split(" ").length <= 6);
+  // The business type first ("car rental"): it is usually the most-searched term, and the
+  // services alone ("daily car rental") miss it.
+  const list = [intake.niche, ...intake.services].map(searchPhrase).filter((t): t is string => !!t && t.split(" ").length <= 6);
   return [...new Set(list)].slice(0, DEPTH_RULES.seeds);
 }
 
@@ -158,12 +160,17 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
     return list;
   };
   const pattern = localPattern(markets, intake.state);
+  // Only searches about this business (a topic word) and not "near me" (left out of the model):
+  // big brands rank for thousands of local searches, most about something else.
+  const topic = topicPattern(topicOf([intake.niche, ...intake.services], markets));
+  const rankedFilters: unknown[] = [["keyword_data.keyword", "regex", pattern], "and", ["keyword_data.keyword", "not_regex", "near me"]];
+  if (topic) rankedFilters.push("and", ["keyword_data.keyword", "regex", topic]);
   const perSite = (domain: string, name: string | null, business: boolean): Lookup[] => [
     {
       id: `ranked:${domain}`,
       step: "Competitors",
       path: "/v3/dataforseo_labs/google/ranked_keywords/live",
-      task: { target: domain, location_code: US, language_code: "en", limit: DEPTH_RULES.rankedPerSite, filters: [["keyword_data.keyword", "regex", pattern]], order_by: ["keyword_data.keyword_info.search_volume,desc"] },
+      task: { target: domain, location_code: US, language_code: "en", limit: DEPTH_RULES.rankedPerSite, filters: rankedFilters, order_by: ["keyword_data.keyword_info.search_volume,desc"] },
     },
     { id: `maps:${domain}`, step: "Google profiles", path: "/v3/serp/google/maps/live/advanced", task: { keyword: `${name ?? domain} ${intake.hqTown}`.slice(0, 80), location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: 10 } },
     ...(business ? [{ id: `instant:${domain}`, step: "Checking their website", path: "/v3/on_page/instant_pages" as const, task: { url: `https://${domain}`, enable_javascript: false } }] : []),
@@ -185,7 +192,8 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
 
 /** The money searches checked live from the home town: each service + home town, then "near me". */
 export function seoMoneyTerms(intake: { services: string[]; hqTown: string; niche: string }): string[] {
-  const svc = intake.services.length ? intake.services : [intake.niche];
+  // The business type first ("car rental cleveland"): the search most people type.
+  const svc = [intake.niche, ...intake.services];
   const terms = [...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(searchPhrase).filter((t): t is string => !!t);
   return [...new Set(terms)].slice(0, RUN_RULES.moneyTerms);
 }
@@ -419,7 +427,8 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const cpc = (k: string) => volume.get(k)?.cpc ?? null;
 
   // Each site's local rankings → the click-through model (D1). No answer = numbers "not found".
-  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state, others)]));
+  const topic = { ...topicOf([intake.niche, ...intake.services], markets), known: new Set(universe) };
+  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state, others, topic)]));
 
   const demand = cities.map((city) => {
     const known = universe.filter((k) => marketOf(k, markets)?.label === city).map(searches).filter((v): v is number => typeof v === "number");

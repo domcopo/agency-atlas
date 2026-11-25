@@ -35,19 +35,19 @@ const hqSerp = serp([
 describe("planning a run", () => {
   it("money keywords: every service in every city, plus near me", () => {
     expect(moneyKeywords(["We buy houses"], ["Denver", "Arvada"]).map((k) => k.keyword)).toEqual(["we buy houses denver", "we buy houses arvada", "we buy houses near me"]);
-    expect(seoMoneyTerms(seoIntake)).toEqual(["we buy houses denver", "we buy houses near me"]);
+    expect(seoMoneyTerms(seoIntake)).toEqual(["home buyers denver", "we buy houses denver", "home buyers near me", "we buy houses near me"]); // business type first
   });
 
   it("the estimate is the worst case of every lookup, competitors included", () => {
     const plan = planSeoRun(seoIntake, ["summary", "heatmap", "keywords"]);
-    expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "serp:0", "serp:1", "maps:area", "pack:0", "pack:1"]);
+    expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "suggest:1", "serp:0", "serp:1", "serp:2", "serp:3", "maps:area", "pack:0", "pack:1"]);
     expect(plan.second(["we buy houses denver"]).map((l) => l.id)).toEqual(["volume", "difficulty"]);
     expect(plan.perSite("milehighhomes.example", "Mile High Homes (fictional)", true).map((l) => l.id)).toEqual(["ranked:milehighhomes.example", "maps:milehighhomes.example", "instant:milehighhomes.example"]);
     expect(plan.perSite("peakoffers.example", "Peak Offers (fictional)", false).map((l) => l.id)).toEqual(["ranked:peakoffers.example", "maps:peakoffers.example"]);
     const P = DFS_PRICE;
     const expected =
-      P["/v3/dataforseo_labs/google/keyword_suggestions/live"] +
-      4 * P["/v3/serp/google/organic/live/advanced"] +
+      2 * P["/v3/dataforseo_labs/google/keyword_suggestions/live"] + // business type + the service
+      6 * P["/v3/serp/google/organic/live/advanced"] + // 4 money searches + 2 towns' 3-packs
       P["/v3/serp/google/maps/live/advanced"] + // Google Maps from the home town (competitors)
       2 * P["/v3/keywords_data/google_ads/search_volume/live"] +
       P["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] +
@@ -55,9 +55,10 @@ describe("planning a run", () => {
       P["/v3/on_page/instant_pages"];
     expect(plan.estimateUsd).toBeCloseTo(expected, 2);
     expect(plan.estimateUsd).toBeLessThan(5); // well under the default per-audit cap
-    expect(plan.first[1]?.task).toMatchObject({ keyword: "we buy houses denver", location_name: "Denver,Colorado,United States" });
-    // Rankings are read only for searches that name this audit's towns, the state or "near me".
-    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|colorado|near me"]] });
+    expect(plan.first[2]?.task).toMatchObject({ keyword: "home buyers denver", location_name: "Denver,Colorado,United States" });
+    // Rankings are read only for searches that name this audit's towns or the state (not "near
+    // me", which the model leaves out) and are about what the business sells.
+    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|colorado|near me"], "and", ["keyword_data.keyword", "not_regex", "near me"], "and", ["keyword_data.keyword", "regex", "home|buyer|buy|house"]] });
   });
 
   it("checkpoints decide the lookups (no heat map = no city packs)", () => {
@@ -185,7 +186,7 @@ describe("SEO: answers → block → checker", () => {
     expect(u).toContain("we buy houses colorado");
     expect(u).not.toContain("we buy houses aurora colorado");
     const plan = planSeoRun(seoIntake, ["summary"], area);
-    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|lakewood|colorado|near me"]] });
+    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|lakewood|colorado|near me"], "and", ["keyword_data.keyword", "not_regex", "near me"], "and", ["keyword_data.keyword", "regex", "home|buyer|buy|house"]] });
   });
 
   it("the AI gets codes, not names or websites; its words come back with names", () => {

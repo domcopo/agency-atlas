@@ -13,7 +13,8 @@
 
 const BASE = "https://api.dataforseo.com";
 const TIMEOUT_MS = 30_000;
-const MAX_BYTES = 3_000_000;
+// 1,000 ranking rows run ~4 MB (each row carries keyword facts); 3 MB threw big brands away.
+const MAX_BYTES = 8_000_000;
 
 /** The only lookups this app may ask for (all read-only "live" endpoints). */
 const ALLOWED = [

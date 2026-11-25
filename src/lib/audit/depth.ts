@@ -8,7 +8,7 @@
 // Search counts always come from Google Ads for the state (DataForSEO keyword data);
 // DataForSEO Labs is US-wide, so it is used to FIND searches and rankings, not to count them.
 
-import { stateName } from "./geo";
+import { stateName, US_STATES } from "./geo";
 import { contactDetailIn, normalizeDomain } from "./intake";
 import { placeState } from "./places";
 
@@ -120,11 +120,68 @@ export function namesOtherPlace(keyword: string, markets: Market[], others: Read
   return false;
 }
 
+// Two-letter codes that are also everyday words at the end of a search ("near me", "rent a car
+// co") are not read as a state.
+const CODE_WORDS = new Set(["me", "in", "or", "hi", "ok", "co"]);
+
+/**
+ * Does the search name ANOTHER state ("car rental brooklyn ny", "lakewood new jersey")? Many
+ * towns share a name with a bigger place elsewhere (Brooklyn OH / NY, Lakewood OH / NJ), so a
+ * search that names another state is never counted for this audit's town of the same name.
+ */
+export function namesOtherState(keyword: string, state: string, markets: Market[] = []): boolean {
+  const k = ` ${keyword.toLowerCase().replace(/[.,]/g, " ").replace(/\s+/g, " ").trim()} `;
+  const own = markets.map((m) => m.term);
+  for (const [code, name] of Object.entries(US_STATES)) {
+    if (code === state.toUpperCase()) continue;
+    const n = name.toLowerCase();
+    if (k.includes(` ${n} `) && !own.some((t) => t.includes(n))) return true;
+  }
+  const last = k.trim().split(" ").pop() ?? "";
+  return last.length === 2 && !CODE_WORDS.has(last) && last.toUpperCase() !== state.toUpperCase() && last.toUpperCase() in US_STATES && k.trim().split(" ").length > 1;
+}
+
 export function isLocal(keyword: string, markets: Market[], state: string, others?: ReadonlySet<string>): boolean {
   const k = ` ${keyword.toLowerCase()} `;
+  if (namesOtherState(keyword, state, markets)) return false;
   if (markets.some((m) => k.includes(` ${m.term} `)) || k.includes(" near me ")) return true;
   // The state's name alone counts only when no other town of the state is named.
   return k.includes(` ${stateName(state).toLowerCase()} `) && !namesOtherPlace(keyword, markets, others);
+}
+
+// ---------------------------------------------------------------------------
+// What the business sells: a search must be about it to count for anyone
+// ---------------------------------------------------------------------------
+
+const STOP = new Set(["a", "an", "the", "for", "my", "we", "our", "your", "and", "of", "to", "in", "near", "me", "best", "top", "cheap", "local", "service", "services", "company", "companies"]);
+const stem = (w: string) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+
+export interface Topic {
+  /** Word stems of the business type and services ("car", "rental", "daily"…), towns left out. */
+  words: string[];
+  /** How many of those words a search must contain: 2, or 1 when a seed is a single word ("plumber"). */
+  need: number;
+  /** Searches already judged relevant (the audit's keyword universe) always count. */
+  known?: ReadonlySet<string>;
+}
+
+export function topicOf(phrases: string[], markets: Market[]): Topic {
+  const towns = new Set(markets.flatMap((m) => m.term.split(" ")));
+  const per = phrases.map((p) => [...new Set(p.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOP.has(w) && !towns.has(w)).map(stem))]).filter((w) => w.length);
+  const words = [...new Set(per.flat())].slice(0, 30);
+  return { words, need: Math.max(1, Math.min(2, ...per.map((w) => w.length))) };
+}
+
+/** Is the search about what this business sells? ("hotels cleveland" isn't, for a car rental.) */
+export function onTopic(keyword: string, topic: Topic): boolean {
+  if (!topic.words.length || topic.known?.has(keyword.toLowerCase())) return true;
+  const have = new Set(keyword.toLowerCase().split(/[^a-z0-9]+/).map(stem));
+  return topic.words.filter((w) => have.has(w)).length >= topic.need;
+}
+
+/** A loose filter for DataForSEO (any one topic word); onTopic() makes the exact call afterwards. */
+export function topicPattern(topic: Topic): string {
+  return topic.words.filter((w) => w.length >= 3).map(escape).join("|");
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +251,8 @@ export interface Ranked {
   /** Path of the ranking page ("/sell-my-house-fast-warren/"), when given. */
   path: string | null;
   usVolume: number | null;
+  /** US cost per click for the search (used when the state's figure is missing). */
+  cpc: number | null;
 }
 
 export function readRanked(a: DfsAnswer | undefined, domain: string): Ranked[] {
@@ -207,7 +266,7 @@ export function readRanked(a: DfsAnswer | undefined, domain: string): Ranked[] {
     const itemDomain = typeof item.domain === "string" ? normalizeDomain(item.domain) : domain;
     if (!keyword || position === null || position < 1 || position > 100 || itemDomain !== domain) continue;
     const rel = str(item.relative_url, 160);
-    out.push({ keyword, position: Math.round(position), path: rel && rel.startsWith("/") ? rel.replace(/[^A-Za-z0-9/_.~%-]/g, "") : null, usVolume: num(obj(kd.keyword_info).search_volume) });
+    out.push({ keyword, position: Math.round(position), path: rel && rel.startsWith("/") ? rel.replace(/[^A-Za-z0-9/_.~%-]/g, "") : null, usVolume: num(obj(kd.keyword_info).search_volume), cpc: num(obj(kd.keyword_info).cpc) });
   }
   return out;
 }
@@ -236,12 +295,14 @@ export interface SiteModel {
  * for the state when known, else DataForSEO's US figure for that town-named search) × the
  * click share of its position.
  */
-export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>): SiteModel {
+export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>, topic?: Topic): SiteModel {
   const best = new Map<string, Ranked>();
   for (const r of ranked) {
     // "near me" results depend on where the searcher stands; a US-wide ranking says nothing
     // about this area, so those searches stay out of the model (they still count as demand).
     if (!isLocal(r.keyword, markets, state, others) || ` ${r.keyword} `.includes(" near me ")) continue;
+    // A travel site ranking for "hotels cleveland" says nothing about car rentals.
+    if (topic && !onTopic(r.keyword, topic)) continue;
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
   }
@@ -256,7 +317,7 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     const v = volume(r.keyword) ?? r.usVolume ?? 0;
     const clicks = v * ctr(r.position);
     visits += clicks;
-    valueUsd += clicks * (cpc(r.keyword) ?? 0);
+    valueUsd += clicks * (cpc(r.keyword) ?? r.cpc ?? 0);
     if (r.position <= 10) {
       positionedFor += v;
       top10++;

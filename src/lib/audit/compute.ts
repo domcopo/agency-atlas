@@ -67,6 +67,16 @@ export function revenueScenarios(config: AuditConfig, demand: number | null): Sc
   });
 }
 
+/**
+ * The scenario to aim for: the baseline, or the next larger one when the business already gets
+ * that many visits. Never a "goal" below today (null when every scenario is below today).
+ */
+export function goalScenario(rows: ScenarioRow[] | null, now: number | null): ScenarioRow | null {
+  if (!rows) return null;
+  const at = Math.max(0, rows.findIndex((r) => r.baseline));
+  return rows.slice(at).find((r) => now === null || r.visits > now) ?? null;
+}
+
 /** What extra visits per month would be worth, through the same funnel. */
 export function prizeFor(config: AuditConfig, extraVisits: number) {
   const leads = extraVisits * config.funnel.leadRate.value;

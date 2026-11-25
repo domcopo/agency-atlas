@@ -57,10 +57,12 @@ export function Leaderboard({ rows, showSemrush, goal }: { rows: LeaderRow[]; sh
               </tr>
             );
           }
-          place++;
+          // Not measured = no place: listing it below the client would claim the client beats it.
+          const measured = r.visits !== null;
+          if (measured) place++;
           return (
             <tr key={r.domain} className={r.isClient ? "you" : undefined}>
-              <td>{place}</td>
+              <td>{measured ? place : "–"}</td>
               <td>{r.name}</td>
               <td>
                 <div className={`audit-bar${r.isClient ? " you" : ""}`}>

@@ -3651,7 +3651,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems[0]}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
   }
