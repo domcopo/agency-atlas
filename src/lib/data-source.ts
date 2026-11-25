@@ -14,6 +14,8 @@ import { businesses } from "@/fixtures/businesses";
 import { sampleAuditConfig, sampleAuditData } from "@/fixtures/audit-sample";
 import { sampleAdsData, sampleAdsIntake, sampleAdsPlans } from "@/fixtures/ads-sample";
 import { WATCH_SAMPLE_TODAY, watchSample, watchSampleOpportunities, watchSampleRoom, type SampleOpportunity } from "@/fixtures/watch-sample";
+import { watchAiSample } from "@/fixtures/watch-ai-sample";
+import type { AiData } from "@/lib/watch/ai";
 import { WATCH_RULES, type RankCheck, type VolumeMonth, type WatchClient, type WatchData, type WatchMarket } from "@/lib/watch/compute";
 import { fromAudit, type AuditImport } from "@/lib/watch/lists";
 import { parseAuditConfig } from "@/lib/audit/config";
@@ -2843,6 +2845,11 @@ export interface WatchPreview {
  */
 export function getWatchPreview(): WatchPreview {
   return { sample: true, today: WATCH_SAMPLE_TODAY, data: watchSample, opportunities: watchSampleOpportunities, room: watchSampleRoom };
+}
+
+/** AI Search Watch preview (docs/AI_VISIBILITY_PLAN.md, G1): fictional answers only, nothing fetched. */
+export function getWatchAiPreview(): { sample: true; clients: WatchData["clients"]; ai: AiData } {
+  return { sample: true, clients: watchSample.clients, ai: watchAiSample };
 }
 
 // ---------------------------------------------------------------------------

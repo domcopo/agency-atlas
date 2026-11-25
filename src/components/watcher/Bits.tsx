@@ -24,6 +24,7 @@ const LINKS = [
   { href: WATCH_BASE, label: "Board" },
   { href: `${WATCH_BASE}/demand`, label: "Search demand" },
   { href: `${WATCH_BASE}/opportunities`, label: "Opportunities" },
+  { href: `${WATCH_BASE}/ai`, label: "AI search" },
 ] as const;
 
 export function WatchTabs({ active }: { active: (typeof LINKS)[number]["label"] }) {

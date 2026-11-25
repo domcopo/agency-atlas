@@ -1,6 +1,6 @@
 # Plan: role guides ("READMEs"), personal goals and an ideas inbox in Kit
 
-Status: **approved 2026-11-25 with all four recommended answers** (owner alone reads every idea; owner + managers set goals and people tick their own done; only the owner edits the owner's guide; ideas are signed). G1 + G2 built; 0036 written, not run.
+Status: **approved 2026-11-25 with all four recommended answers** (owner alone reads every idea; owner + managers set goals and people tick their own done; only the owner edits the owner's guide; ideas are signed). G1 + G2 built; 0036 run by the owner in the SQL Editor on 2026-11-25 (reported success).
 Migration number: **0036** (checked 2026-11-25: `supabase/migrations/` ends at `0035_audit_runs.sql`).
 
 ## The idea in one line
