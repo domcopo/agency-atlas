@@ -42,3 +42,66 @@ export function cleanPlaces(entries: string[], state: string): string[] {
   for (const e of entries) for (const p of splitPlace(e, state)) if (!out.some((o) => o.toLowerCase() === p.toLowerCase())) out.push(p);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Checking names against Google's own list (DataForSEO's free locations file; the
+// state lists live in us-places.json, read only on the server: src/lib/audit/places-list.ts)
+// ---------------------------------------------------------------------------
+
+/** Spelling-insensitive key: "St. Clairsville" = "Saint Clairsville", case and punctuation ignored. */
+export function placeKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\bst\.?\s/g, "saint ")
+    .replace(/\bmt\.?\s/g, "mount ")
+    .replace(/\bft\.?\s/g, "fort ")
+    .replace(/\btwp\.?$/g, "township")
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function distance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 3) return 9;
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j]!;
+      row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length]!;
+}
+
+export interface PlaceBook {
+  /** The exact name Google uses, or null if it isn't a place in this state. */
+  canonical(name: string): string | null;
+  /** Up to 3 close names (typos, "Trumbull" → "Trumbull County"). */
+  suggest(name: string): string[];
+}
+
+/** A lookup over one state's places (cities, townships and counties). */
+export function placeBook(names: readonly string[]): PlaceBook {
+  const byKey = new Map(names.map((n) => [placeKey(n), n]));
+  return {
+    canonical: (name) => byKey.get(placeKey(name)) ?? byKey.get(placeKey(`${name} Township`)) ?? null,
+    suggest: (name) => {
+      const k = placeKey(name);
+      if (!k) return [];
+      const scored: [number, string][] = [];
+      for (const [key, n] of byKey) {
+        const d = key.startsWith(`${k} `) ? 0.5 : distance(k, key);
+        if (d <= (k.length > 6 ? 2 : 1)) scored.push([d, n]);
+      }
+      return scored.sort((a, b) => a[0] - b[0] || a[1].length - b[1].length).slice(0, 3).map(([, n]) => n);
+    },
+  };
+}
+
+/** "isn't a place" message, starting with the field name (the builder jumps to that step). */
+export function unknownPlaceMessage(label: string, name: string, state: string, suggestions: string[]): string {
+  return `${label}: "${name}" isn't a place Google knows in ${stateName(state)}.${suggestions.length ? ` Did you mean ${suggestions.join(", ")}?` : " Use the town's own name (one per entry)."}`;
+}

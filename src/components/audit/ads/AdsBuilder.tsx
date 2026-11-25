@@ -12,6 +12,7 @@ import { ADS_STEP_WORDS, errorStep, SectionToggle, SourceToggle } from "@/compon
 import { ADS_DEFAULTS, ADS_LIMITS, ADS_PAGE_LABEL, ADS_PRESETS, ADS_SECTIONS, adsDeckPages, type AdsIntake, type AdsSectionId } from "@/lib/audit/ads";
 import { INTAKE_LIMITS } from "@/lib/audit/intake";
 import { US_STATES } from "@/lib/audit/geo";
+import { PlaceCheckList, PlaceDatalist, useStatePlaces } from "@/components/audit/PlaceHelpers";
 import { cn } from "@/lib/format";
 
 const field = "mt-1 min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink placeholder:text-faint";
@@ -45,6 +46,8 @@ export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, ca
     startTransition(() => action(data));
   };
   const [step, setStep] = useState(0);
+  const places = useStatePlaces(intake?.state);
+  const [citiesText, setCitiesText] = useState((Array.isArray(intake?.cities) ? intake.cities : []).join(", "));
   const [sections, setSections] = useState<Set<AdsSectionId>>(new Set(initial));
   const [compRows, setCompRows] = useState(Math.max(2, intake?.competitors?.length ?? 0));
   const i = intake ?? {};
@@ -171,11 +174,11 @@ export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, ca
               <div className="grid grid-cols-[1fr_7.5rem] gap-2">
                 <label className={label}>
                   Home town
-                  <input name="hqTown" maxLength={INTAKE_LIMITS.text} defaultValue={i.hqTown ?? ""} className={field} />
+                  <input name="hqTown" list="audit-places" autoComplete="off" maxLength={INTAKE_LIMITS.text} defaultValue={i.hqTown ?? ""} className={field} />
                 </label>
                 <label className={label}>
                   State
-                  <select name="state" defaultValue={i.state ?? ""} className={field}>
+                  <select name="state" defaultValue={i.state ?? ""} onChange={(e) => places.load(e.target.value)} className={field}>
                     <option value="" disabled>
                       Pick…
                     </option>
@@ -188,9 +191,11 @@ export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, ca
                 </label>
               </div>
               <label className={label}>
-                Other cities they serve <span className="text-faint">(comma between each, up to {INTAKE_LIMITS.cities})</span>
-                <textarea name="cities" rows={2} defaultValue={(Array.isArray(i.cities) ? i.cities : []).join(", ")} placeholder="e.g. Dublin, Westerville" className={cn(field, "py-2")} />
+                Other cities they serve <span className="text-faint">(one town, township or county per entry, comma between each, up to {INTAKE_LIMITS.cities})</span>
+                <textarea name="cities" rows={2} defaultValue={(Array.isArray(i.cities) ? i.cities : []).join(", ")} onChange={(e) => setCitiesText(e.target.value)} placeholder="e.g. Dublin, Westerville" className={cn(field, "py-2")} />
               </label>
+              <PlaceCheckList text={citiesText} state={places.state} book={places.book} />
+              <PlaceDatalist id="audit-places" names={places.names} />
               <label className={label}>
                 Average job ($)
                 <input name="avgJobUsd" inputMode="numeric" defaultValue={i.avgJobUsd ?? ""} placeholder="650" className={field} />

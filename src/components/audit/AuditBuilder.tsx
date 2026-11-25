@@ -11,6 +11,7 @@ import type { AuditIntake } from "@/lib/audit/intake";
 import { INTAKE_DEFAULTS, INTAKE_LIMITS } from "@/lib/audit/intake";
 import { US_STATES, STATES } from "@/lib/audit/geo";
 import { AUDIT_PRESETS, AUDIT_SECTIONS, deckPages, type AuditSectionId } from "@/lib/audit/sections";
+import { PlaceCheckList, PlaceDatalist, useStatePlaces } from "@/components/audit/PlaceHelpers";
 import { cn } from "@/lib/format";
 
 const field = "mt-1 min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink placeholder:text-faint";
@@ -51,6 +52,8 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
     startTransition(() => action(data));
   };
   const [step, setStep] = useState(0);
+  const places = useStatePlaces(intake?.state);
+  const [citiesText, setCitiesText] = useState((Array.isArray(intake?.cities) ? intake.cities : []).join(", "));
   const [sections, setSections] = useState<Set<AuditSectionId>>(new Set(initial));
   const [compRows, setCompRows] = useState(Math.max(2, intake?.competitors?.length ?? 0));
   const i = intake ?? {};
@@ -167,11 +170,11 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
               <div className="grid grid-cols-[1fr_7.5rem] gap-2">
                 <label className={label}>
                   Home town
-                  <input name="hqTown" maxLength={INTAKE_LIMITS.text} defaultValue={i.hqTown ?? ""} className={field} />
+                  <input name="hqTown" list="audit-places" autoComplete="off" maxLength={INTAKE_LIMITS.text} defaultValue={i.hqTown ?? ""} className={field} />
                 </label>
                 <label className={label}>
                   State
-                  <select name="state" defaultValue={i.state ?? ""} className={field}>
+                  <select name="state" defaultValue={i.state ?? ""} onChange={(e) => places.load(e.target.value)} className={field}>
                     <option value="" disabled>
                       Pick…
                     </option>
@@ -184,9 +187,11 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
                 </label>
               </div>
               <label className={label}>
-                Other cities they serve <span className="text-faint">(comma between each, up to {INTAKE_LIMITS.cities})</span>
-                <textarea name="cities" rows={2} defaultValue={(Array.isArray(i.cities) ? i.cities : []).join(", ")} placeholder="e.g. Folsom, Roseville, Davis" className={cn(field, "py-2")} />
+                Other cities they serve <span className="text-faint">(one town, township or county per entry, comma between each, up to {INTAKE_LIMITS.cities})</span>
+                <textarea name="cities" rows={2} defaultValue={(Array.isArray(i.cities) ? i.cities : []).join(", ")} onChange={(e) => setCitiesText(e.target.value)} placeholder="e.g. Folsom, Roseville, Davis" className={cn(field, "py-2")} />
               </label>
+              <PlaceCheckList text={citiesText} state={places.state} book={places.book} />
+              <PlaceDatalist id="audit-places" names={places.names} />
               <p className="text-[11px] text-faint">State outlines on the map so far: {Object.values(STATES).map((s) => s.name).join(", ")}. Other states still work; the map says the outline is coming.</p>
               <div className="grid grid-cols-2 gap-2">
                 <label className={label}>

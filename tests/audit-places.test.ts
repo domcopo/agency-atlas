@@ -39,3 +39,36 @@ describe("cleaning typed places", () => {
     expect(r.ok && [r.intake.hqTown, r.intake.cities]).toEqual(["Austintown", ["Boardman", "Trumbull County", "Columbiana County", "Warren", "Niles"]]);
   });
 });
+
+describe("checking names against Google's place list", () => {
+  it("knows real towns, townships and counties, in Google's spelling", async () => {
+    const { placeBookFor } = await import("@/lib/audit/places-list");
+    const oh = placeBookFor("OH")!;
+    expect(oh.canonical("austintown")).toBe("Austintown");
+    expect(oh.canonical("Mahoning County")).toBe("Mahoning County");
+    expect(oh.canonical("Trumbull")).toBeNull();
+    expect(oh.suggest("Trumbull")).toContain("Trumbull County");
+    const co = placeBookFor("CO")!;
+    expect(co.canonical("Westminster")).toBe("Westminster");
+    expect(co.suggest("Denverr")).toContain("Denver");
+    expect(placeBookFor("XX")).toBeNull();
+  });
+
+  it("saving refuses a place Google doesn't know and suggests the fix; reading old audits doesn't check", async () => {
+    const { placeBookFor } = await import("@/lib/audit/places-list");
+    const form = { company: "Sample Homes (fictional)", domain: "samplehomes.example", niche: "Home buyers", hqTown: "Denverr", state: "CO", cities: "Westminster & Thornton", avgJobUsd: 10000 };
+    const saving = parseIntake(form, { places: placeBookFor });
+    expect(saving.ok).toBe(false);
+    expect(!saving.ok && saving.errors[0]).toMatch(/^Home town: "Denverr" isn't a place Google knows in Colorado\. Did you mean Denver/);
+    expect(parseIntake(form).ok).toBe(true); // reading a saved audit: no place check
+    const fixed = parseIntake({ ...form, hqTown: "denver, co" }, { places: placeBookFor });
+    expect(fixed.ok && [fixed.intake.hqTown, fixed.intake.cities]).toEqual(["Denver", ["Westminster", "Thornton"]]);
+  });
+
+  it("the full list stays on the server (builders get one state at a time)", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const f of ["src/components/audit/AuditBuilder.tsx", "src/components/audit/ads/AdsBuilder.tsx", "src/components/audit/PlaceHelpers.tsx", "src/lib/audit/places.ts", "src/lib/audit/intake.ts"]) {
+      expect(readFileSync(f, "utf8"), f).not.toMatch(/from "[^"]*(us-places|places-list)/);
+    }
+  });
+});

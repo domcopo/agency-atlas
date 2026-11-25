@@ -9,7 +9,7 @@
 import { AUDIT_DEFAULTS, type AuditConfig, type AuditPlan, type RoadmapPhase } from "./config";
 import type { AuditData, Fig, SiteMetrics } from "./data";
 import { stateName, US_STATES } from "./geo";
-import { cleanPlaces, splitPlace } from "./places";
+import { cleanPlaces, splitPlace, unknownPlaceMessage, type PlaceBook } from "./places";
 
 export interface IntakeCompetitor {
   name: string;
@@ -89,7 +89,16 @@ export function splitList(raw: string): string[] {
  * Checks intake from anywhere (the form, the database) and returns a clean copy or
  * plain-English problems. Unknown fields are dropped.
  */
-export function parseIntake(raw: unknown): IntakeResult {
+export interface IntakeOptions {
+  /**
+   * Saving from the form only: check the home town and cities against Google's place list
+   * (src/lib/audit/places-list.ts) and use Google's exact spelling. Left out when reading
+   * saved audits, so an older audit never becomes unreadable.
+   */
+  places?: (state: string) => PlaceBook | null;
+}
+
+export function parseIntake(raw: unknown, opts: IntakeOptions = {}): IntakeResult {
   const errors: string[] = [];
   const r = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
   if (!r) return { ok: false, errors: ["Intake must be an object."] };
@@ -141,11 +150,24 @@ export function parseIntake(raw: unknown): IntakeResult {
   const state = clean(r.state).toUpperCase();
   // One clean place name (e.g. "Warren, OH" → "Warren"); see src/lib/audit/places.ts.
   const hqTyped = text(r.hqTown, "Home town");
-  const hqTown = US_STATES[state] && hqTyped ? (splitPlace(hqTyped, state)[0] ?? hqTyped) : hqTyped;
+  let hqTown = US_STATES[state] && hqTyped ? (splitPlace(hqTyped, state)[0] ?? hqTyped) : hqTyped;
+  const book = US_STATES[state] && opts.places ? opts.places(state) : null;
+  if (book && hqTown) {
+    const exact = book.canonical(hqTown);
+    if (exact) hqTown = exact;
+    else errors.push(unknownPlaceMessage("Home town", hqTown, state, book.suggest(hqTown)));
+  }
   if (!US_STATES[state]) errors.push("Pick the state.");
   // "Westminster & Thornton", "Trumbull and Columbiana County" → one place per entry.
   const typedCities = names(r.cities, "Other cities", INTAKE_LIMITS.cities * 2);
-  const cities = (US_STATES[state] ? cleanPlaces(typedCities, state) : typedCities).filter((c) => c.toLowerCase() !== hqTown.toLowerCase());
+  const cities = (US_STATES[state] ? cleanPlaces(typedCities, state) : typedCities)
+    .map((c) => {
+      if (!book) return c;
+      const exact = book.canonical(c);
+      if (!exact) errors.push(unknownPlaceMessage("Other cities", c, state, book.suggest(c)));
+      return exact ?? c;
+    })
+    .filter((c, i, all) => c.toLowerCase() !== hqTown.toLowerCase() && all.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i);
   if (cities.length > INTAKE_LIMITS.cities) errors.push(`Other cities: at most ${INTAKE_LIMITS.cities} (after splitting combined entries).`);
   const servicesTyped = names(r.services, "Services", INTAKE_LIMITS.services);
   const services = servicesTyped.length ? servicesTyped : niche ? [niche] : [];

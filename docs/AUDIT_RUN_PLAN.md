@@ -66,3 +66,9 @@ Status: **E1 approved and built 2026-11-25** on branch `audit-results` (with Att
 - `RunAudit.tsx` on both audit pages (above the prompt, which is now "Or run it yourself"): cost first, steps while running (page refreshes every 4 s), the real cost after.
 - `0035_audit_runs.sql`: `audit_runs`, `audit_words` AI feature (salespeople log their own), `ai_month_budget` view. Break-in tests 7cd.
 - Known gaps: cities DataForSEO doesn't recognize (e.g. "Westminster & Thornton") come back "not found" for that city; enter one city per name. Call button / form on the landing page stay "not found" (no reliable read-only check yet).
+
+## Places (2026-11-25)
+- Google's own US place names (cities, townships, counties) from DataForSEO's free locations file (2026-11-02), kept as `src/lib/audit/us-places.json` (names only, ~316 KB, server-side) and rebuilt with `scripts/build-us-places.py` (`python3 -I scripts/build-us-places.py <csv> src/lib/audit/us-places.json`).
+- Typing is cleaned (`src/lib/audit/places.ts`): "Westminster & Thornton" → two places; "Trumbull and Columbiana County" → Trumbull County, Columbiana County; "Warren, OH" → Warren.
+- Builders suggest names for the home town and show ✓ / "did you mean …" under the cities (one state's list at a time via `getStatePlaces`). Saving checks every place on the server and uses Google's spelling; reading older audits never checks, so nothing old breaks.
+

@@ -9,7 +9,7 @@
 // (supabase/migrations/0029_ads_audits.sql); a test makes sure they match.
 
 import type { Fig, SourceId } from "./data";
-import { parseIntake, type AuditIntake } from "./intake";
+import { parseIntake, type AuditIntake, type IntakeOptions } from "./intake";
 
 // ---------------------------------------------------------------------------
 // Checkpoints
@@ -110,12 +110,12 @@ function share(v: unknown, fallback: number): number {
  * competitor fields use the SEO audit's own check (same rules: no emails or phones, real
  * domains, US state); the Ads-only fields are checked here. Unknown fields are dropped.
  */
-export function parseAdsIntake(raw: unknown): AdsIntakeResult {
+export function parseAdsIntake(raw: unknown, opts: IntakeOptions = {}): AdsIntakeResult {
   const r = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
   if (!r) return { ok: false, errors: ["Intake must be an object."] };
   const mo = r.modules && typeof r.modules === "object" ? (r.modules as Record<string, unknown>) : {};
   const on = (v: unknown, dflt: boolean) => (v === undefined ? dflt : v === true || v === "on");
-  const base = parseIntake({ ...r, visitToJobRate: 0.03, wantsAds: false, modules: { dataforseo: true, leadsnap: false, semrush: false } });
+  const base = parseIntake({ ...r, visitToJobRate: 0.03, wantsAds: false, modules: { dataforseo: true, leadsnap: false, semrush: false } }, opts);
   const errors = base.ok ? [] : [...base.errors];
 
   const rate = (v: unknown, fallback: number, label: string, min: number, max: number) => {
