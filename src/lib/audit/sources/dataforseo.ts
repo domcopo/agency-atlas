@@ -95,11 +95,13 @@ export async function dfsLookup(path: DfsPath, task: Record<string, unknown>): P
   if (!t) throw new DfsError("DataForSEO's answer had no result.");
   const code = typeof t.status_code === "number" ? t.status_code : 0;
   const cost = typeof t.cost === "number" && Number.isFinite(t.cost) && t.cost >= 0 && t.cost < 50 ? t.cost : typeof o.cost === "number" && o.cost >= 0 && o.cost < 50 ? o.cost : null;
+  // 40106 = "completed with partial results; you have not been charged": keep what came back.
+  if (code === 40106 && Array.isArray(t.result) && t.result.length) return { result: t.result, costUsd: cost };
   if (code !== 20000) {
     // e.g. 40501 = unknown location. The message is DataForSEO's own short text, cut short.
     const msg = typeof t.status_message === "string" ? t.status_message.replace(/[^\w .,:'()-]/g, "").slice(0, 120) : "unknown problem";
     // 40101-40103 ("internal SE server error" and similar) and 5xxxx are their side: worth one more try.
-    throw new DfsError(`DataForSEO couldn't do that lookup (${code}: ${msg}).`, (code >= 40100 && code <= 40103) || code >= 50000);
+    throw new DfsError(`DataForSEO couldn't do that lookup (${code}: ${msg}).`, (code >= 40100 && code <= 40106) || code >= 50000);
   }
   return { result: Array.isArray(t.result) ? t.result : [], costUsd: cost };
 }
