@@ -63,6 +63,11 @@ const DOMAIN = /^(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,6
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}/;
 const PHONE = /(^|[^0-9])\(?[0-9]{3}\)?[-. ]?[0-9]{3}[-. ][0-9]{4}([^0-9]|$)/;
 
+/** "email address" / "phone number" when the text holds one (no personal contact details anywhere). */
+export function contactDetailIn(text: string): string | null {
+  return EMAIL.test(text) ? "email address" : PHONE.test(text) ? "phone number" : null;
+}
+
 /** "https://www.Example.com/about?x=1" → "example.com". Anything odd stays as typed so the check can refuse it. */
 export function normalizeDomain(raw: string): string {
   let d = raw.trim().toLowerCase();

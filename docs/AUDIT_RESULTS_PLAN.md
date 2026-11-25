@@ -1,6 +1,6 @@
 # Plan: attach audit results (SEO + Google Ads)
 
-Status: **draft for the owner's review (2026-11-25). Nothing built.** This is "Phase B" of `docs/AUDIT_BUILDER_PLAN.md` and the matching step for Google Ads audits (`docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`). Rules from `docs/SEO_AUDIT_PLAN.md` still apply: no made-up numbers, every figure has a source and a date, missing = "not found", money is a labeled model.
+Status: **approved 2026-11-25. B1 built** on branch `audit-results` (no database change). B2 not started. This is "Phase B" of `docs/AUDIT_BUILDER_PLAN.md` and the matching step for Google Ads audits (`docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`). Rules from `docs/SEO_AUDIT_PLAN.md` still apply: no made-up numbers, every figure has a source and a date, missing = "not found", money is a labeled model.
 
 ## The problem (seen by the team 2026-11-24)
 A rep builds an audit in Atlas, copies the custom prompt, runs it in Claude (with DataForSEO), and gets a report back. But there is **no way to bring those numbers back into the saved audit**, so its pages keep saying "not found". The prompt's last step also asks for "the AuditConfig / AuditData shapes", which a normal Claude chat doesn't know, so what comes back is a free-form report (e.g. a `.md` file), not something Atlas can read.
@@ -52,3 +52,10 @@ Pasted results are **untrusted data**: they come from a chat, not from us. Atlas
 - A rep runs the prompt, pastes Claude's reply into Attach results, and the audit's pages show the real numbers with sources and dates, for both SEO and Google Ads audits.
 - Bad or wrong-business results are refused with a clear reason; nothing is saved until they pass.
 - `npm run check` and `npm run test:rls` pass.
+
+## B1 as built (2026-11-25)
+- `src/lib/audit/results.ts`: `extractResultsBlock` (finds `ATLAS-RESULTS v1` + the JSON object after it, even inside a long reply; 400 KB max), `parseSeoResults` → AuditData + competitors (rep's first, then the run's, up to 5), `parseAdsResults` → AdsData, `seoResultsTemplate` / `adsResultsTemplate` (the prompts' new last step). A bare number in the block uses the block's own `source` + `retrieved`; a figure can name its own. Cities must be this audit's cities (others skipped with a warning); ranks only for the business and its competitors.
+- `attachAuditResults` (actions.ts): mode "check" (preview) or "save"; re-checks on the server; stores `audits.data = { v: 1, block }`, `config = { competitors }` (SEO), `data_retrieved`. Pages re-check the stored block on every read (`getSavedAuditBundle`, `getSavedAdsBundle`), so only what passes the rules is ever drawn.
+- `AttachResults.tsx` on both audit pages (owner/managers; a salesperson on their own, not archived). Viewer note says "Results from <date> (<sources>) … spot-check".
+- Break-in tests 7cc; unit tests `tests/audit-results.test.ts`.
+- Not yet: map pins from results (cities still have no map position), B2 (reuse + spend).

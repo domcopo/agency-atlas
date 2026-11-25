@@ -2580,6 +2580,44 @@ select test.expect('select * from public.va_requests', 0, 'VA without two-factor
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7cc. Attach audit results (no migration; docs/AUDIT_RESULTS_PLAN.md B1): results go in
+--      audits.data / config / data_retrieved under the 0023 rules. A salesperson attaches
+--      only to their own audits that aren't archived; owner/managers to any; developers none.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$update public.audits set data = '{"v":1,"block":{"atlas":"results-v1"}}', config = '{"competitors":[]}', data_retrieved = '2026-11-24' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'sales attaches results to their own audit');
+select test.expect($$insert into public.audits (id, title, intake) values ('00000000-0000-0000-0000-00000000ae31', 'To be archived (fictional)', '{}')$$, 1, 'sales saves another audit');
+select test.expect($$update public.audits set data = '[1,2]' where id = '00000000-0000-0000-0000-00000000ad01'$$, -2, 'results must be an object');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect($$update public.audits set data = '{"v":1}', data_retrieved = '2026-11-24' where id = '00000000-0000-0000-0000-00000000ad01'$$, 0, 'a salesperson cannot attach results to someone else''s audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.audits set archived_at = now() where id = '00000000-0000-0000-0000-00000000ae31'$$, 1, 'owner archives an audit');
+select test.expect($$update public.audits set data = '{"v":1}', data_retrieved = '2026-11-25' where id = '00000000-0000-0000-0000-00000000ad01'$$, 1, 'owner attaches results to any audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$update public.audits set data = '{"v":1}', data_retrieved = '2026-11-25' where id = '00000000-0000-0000-0000-00000000ae31'$$, 0, 'sales cannot attach results to an archived audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$update public.audits set data = '{"v":1}'$$, 0, 'developers cannot attach results');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

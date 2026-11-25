@@ -20,6 +20,8 @@ import { parseAuditConfig } from "@/lib/audit/config";
 import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
 import { deckPages, parseSections, type AuditSectionId } from "@/lib/audit/sections";
+import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
+import { nyDate } from "@/lib/audit/spend";
 import { adsDeckPages, emptyAdsData, parseAdsIntake, parseAdsPlans, parseAdsSections, type AdsBundle, type AdsIntake, type AdsPlan, type AdsSectionId } from "@/lib/audit/ads";
 import { AUDIT_CAP_DEFAULTS, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
 import { demoRosterRaw, demoTeam } from "@/fixtures/demo-roster";
@@ -2616,7 +2618,22 @@ export async function getSavedAuditBundle(audit: SavedAudit): Promise<AuditBundl
   const settings = await getAuditSettings();
   const day = audit.createdAt.slice(0, 10);
   const config = buildAuditConfig(audit.intake, settings.agency, day);
+  const block = audit.hasResults ? await getAuditResultsBlock(audit.id) : null;
+  if (block) {
+    // Checked again on every read: only what passes the same rules is ever drawn.
+    const r = parseSeoResults(block, { intake: audit.intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today: nyDate(new Date()) });
+    if (r.ok) return { id: audit.id, sample: false, config: { ...config, competitors: r.competitors }, data: r.data };
+  }
   return { id: audit.id, sample: false, config, data: emptyAuditData(config, day) };
+}
+
+/** The attached results block for one audit (read as the signed-in person), or null. */
+async function getAuditResultsBlock(id: string): Promise<unknown | null> {
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("audits").select("data").eq("id", id).maybeSingle();
+  if (error || !data?.data || typeof data.data !== "object") return null;
+  const stored = data.data as { v?: unknown; block?: unknown };
+  return stored.v === 1 ? (stored.block ?? null) : null;
 }
 
 /** The pages for a saved Google Ads audit: settings from the intake + owner's Ads plans, every figure "not pulled yet". */
@@ -2632,7 +2649,11 @@ export async function getSavedAdsBundle(audit: SavedAudit): Promise<AdsBundle | 
     agencyWebsite: settings.agency.agencyWebsite,
     intake,
     plans: settings.adsPlans,
-    data: emptyAdsData(intake, day),
+    data: await (async () => {
+      const block = audit.hasResults ? await getAuditResultsBlock(audit.id) : null;
+      const r = block ? parseAdsResults(block, { intake, today: nyDate(new Date()) }) : null;
+      return r?.ok ? r.data : emptyAdsData(intake, day);
+    })(),
   };
 }
 

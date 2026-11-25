@@ -56,6 +56,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Developer view and preview | `docs/DEVELOPER_VIEW_PLAN.md`, `docs/DEVELOPER_SIMPLIFY_PLAN.md` |
 | Home by job (switcher) | `docs/ROLE_HOME_PLAN.md` |
 | Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
+| Attach audit results (paste Claude's reply; `ATLAS-RESULTS v1` block checked field by field) | `docs/AUDIT_RESULTS_PLAN.md`, `src/lib/audit/results.ts` |
 | Audits area (SEO + Google Ads doors), audit builder (checkpoints, saved audits, caps, custom prompt), Google Ads audit (`0029`, `src/lib/audit/ads.ts`), sales leaderboard (`0026` view, `src/lib/leaderboard.ts`) | `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`, `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, journey (27 touches), status changes, client memory, restart + daily goals, AI next moves/drafts | `docs/CLIENT_CARE_PLAN.md` (`0025`, `0028`, `0031`–`0033`), `src/lib/care.ts`, `src/lib/journey.ts` |

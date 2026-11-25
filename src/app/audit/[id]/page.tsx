@@ -13,7 +13,8 @@ import { AdsDeck } from "@/components/audit/ads/AdsDeck";
 import { PrintButton } from "@/components/audit/PrintButton";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import type { AdsBundle, AdsSectionId } from "@/lib/audit/ads";
-import type { AuditBundle } from "@/lib/audit/data";
+import { SOURCE_LABELS, type AuditBundle } from "@/lib/audit/data";
+import { fmtDate } from "@/lib/audit/format";
 import type { AuditSectionId } from "@/lib/audit/sections";
 import { getAdsPreview, getAuditPreview, getMember, getSavedAdsBundle, getSavedAudit, getSavedAuditBundle, SAMPLE_ADS_AUDIT_ID, SAMPLE_AUDIT_ID, usesDatabase } from "@/lib/data-source";
 import { isLead } from "@/lib/roles";
@@ -54,6 +55,9 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
   }
   if (!bundle && !adsBundle) notFound();
   const sample = bundle?.sample ?? adsBundle?.sample ?? false;
+  const used = bundle?.data.sourcesUsed ?? adsBundle?.data.sourcesUsed ?? [];
+  const retrieved = used.length ? (bundle?.data.retrieved ?? adsBundle?.data.retrieved ?? null) : null;
+  const sourceNames = used.map((s) => SOURCE_LABELS[s]).join(", ");
   return (
     <div className="audit audit-print-root">
       <div className="audit-viewer">
@@ -67,9 +71,13 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
           <p className="audit-toolbar w-full max-w-[1280px] rounded-xl border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
             Template preview: a fictional business with made-up numbers, so you can check the layout. Nothing was fetched and nothing was spent.
           </p>
+        ) : retrieved ? (
+          <p className="audit-toolbar w-full max-w-[1280px] rounded-xl border border-line bg-white/5 px-3 py-2 text-sm text-muted">
+            Results from {fmtDate(retrieved)} ({sourceNames}). Every figure shows its source; spot-check a couple before sending this to anyone.
+          </p>
         ) : (
           <p className="audit-toolbar w-full max-w-[1280px] rounded-xl border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
-            No data pulled yet: every figure says &quot;not found&quot; until results are attached. Copy the custom prompt from the audit page to run it.
+            No data pulled yet: every figure says &quot;not found&quot; until results are attached. Copy the custom prompt from the audit page, run it, then use Attach results.
           </p>
         )}
         {bundle ? <AuditDeck bundle={bundle} sections={sections} /> : adsBundle ? <AdsDeck bundle={adsBundle} sections={adsSections} /> : null}

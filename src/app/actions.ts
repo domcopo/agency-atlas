@@ -38,6 +38,7 @@ import {
   getToday,
   getScout,
   getDeveloperActions,
+  getSavedAudit,
   getLeaderboard,
   getMyClientContacts,
   getSales,
@@ -82,6 +83,8 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
+import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
+import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
@@ -3432,6 +3435,60 @@ export async function saveAdsPlans(_prev: { error?: string; ok?: boolean } | und
   }
   revalidatePath("/audits", "layout");
   return { ok: true };
+}
+
+/** What "Attach results" shows: problems, or what was found (and whether it was saved). */
+export type ResultsState = { error?: string; errors?: string[]; warnings?: string[]; summary?: ResultsSummary; saved?: boolean } | undefined;
+
+/**
+ * Attach results (docs/AUDIT_RESULTS_PLAN.md B1): "check" shows what the pasted results hold;
+ * "save" checks them again (never trusting the browser) and stores them on the audit. The
+ * pasted text is untrusted: only the ATLAS-RESULTS block is read, field by field.
+ */
+export async function attachAuditResults(_prev: ResultsState, form: FormData): Promise<ResultsState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can attach results." };
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return { error: "Unknown audit." };
+  const pasted = typeof form.get("results") === "string" ? String(form.get("results")) : "";
+  // The database decides which audits this person can read (a salesperson: only their own).
+  const audit = await getSavedAudit(id);
+  if (!audit) return { error: "Couldn't find that audit." };
+  if (!isLead(me.role) && (audit.createdBy !== me.userId || audit.archived)) return { error: "You can attach results only to your own audits that aren't archived." };
+  const found = extractResultsBlock(pasted);
+  if (!found.ok) return { error: found.error };
+  const today = nyDate(new Date());
+  let checked: { ok: true; warnings: string[]; summary: ResultsSummary; config: Record<string, unknown> } | { ok: false; errors: string[] };
+  if (audit.kind === "ads") {
+    const intake = audit.ads?.intake;
+    if (!intake) return { error: "Fix the audit's saved details first (Edit), then attach results." };
+    const r = parseAdsResults(found.block, { intake, today });
+    checked = r.ok ? { ok: true, warnings: r.warnings, summary: r.summary, config: {} } : r;
+  } else {
+    if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then attach results." };
+    const settings = await getAuditSettings();
+    const config = buildAuditConfig(audit.intake, settings.agency, audit.createdAt.slice(0, 10));
+    const r = parseSeoResults(found.block, { intake: audit.intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today });
+    checked = r.ok ? { ok: true, warnings: r.warnings, summary: r.summary, config: { competitors: r.competitors } } : r;
+  }
+  if (!checked.ok) return { errors: checked.errors };
+  if (form.get("mode") !== "save") return { warnings: checked.warnings, summary: checked.summary };
+  // Store the checked block itself; every read checks it again before drawing a page.
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("audits")
+    .update({ data: { v: 1, block: found.block }, config: checked.config, data_retrieved: checked.summary.retrieved })
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error || !data) {
+    console.warn(`Audit results not saved: ${error?.code ?? "no row"}`);
+    return { error: MISSING_TABLE.has(error?.code ?? "") ? AUDITS_SETUP : error?.code === "23514" ? "The results are too big to store. Ask Claude for fewer keywords." : "Couldn't save the results (the audit may be archived, or not yours)." };
+  }
+  revalidatePath("/audits", "layout");
+  revalidatePath(`/audit/${id}`);
+  return { warnings: checked.warnings, summary: checked.summary, saved: true };
 }
 
 /** Owner and managers: hide an audit (or bring it back). Never deleted. */

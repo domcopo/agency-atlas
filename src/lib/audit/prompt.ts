@@ -6,6 +6,7 @@
 import type { AuditPlan } from "./config";
 import { stateName } from "./geo";
 import type { AuditIntake } from "./intake";
+import { seoResultsTemplate } from "./results";
 import { AUDIT_SECTIONS, deckPages, type AuditSectionId } from "./sections";
 
 const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
@@ -128,10 +129,6 @@ export function buildAuditPrompt(intake: AuditIntake, sections: readonly AuditSe
   if (intake.wantsAds) {
     add("", "## Google Ads (noted, not part of this audit yet)", "The rep also asked for a Google Ads audit. Don't build it here; just note any obvious paid-search observations (who runs ads on the money terms) in one short list at the end.");
   }
-  add(
-    "",
-    "## 6. Results for Agency Atlas",
-    "At the end, give me the settings in the AuditConfig shape and the data in the AuditData shape (src/lib/audit/config.ts and src/lib/audit/data.ts) as one JSON file, so it can be attached to this saved audit. Keep the client's data out of the code and out of Git.",
-  );
+  add("", seoResultsTemplate(intake, cities), "", "A person pastes your whole reply into Agency Atlas (Attach results); Atlas checks every figure before using it.");
   return lines.join("\n");
 }

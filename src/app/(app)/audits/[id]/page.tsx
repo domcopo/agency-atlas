@@ -7,6 +7,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { archiveAudit } from "@/app/actions";
 import { AdsAuditView } from "@/components/audit/ads/AdsAuditView";
+import { AttachResults } from "@/components/audit/AttachResults";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -130,6 +131,11 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
                 </details>
               </div>
             </>
+          )}
+          {i && canEdit && (
+            <div className="mt-3">
+              <AttachResults id={audit.id} attachedOn={audit.dataRetrieved} />
+            </div>
           )}
         </div>
       </div>

@@ -5,6 +5,7 @@
 
 import { ADS_SECTIONS, adsDeckPages, type AdsIntake, type AdsPlan, type AdsSectionId } from "./ads";
 import { stateName } from "./geo";
+import { adsResultsTemplate } from "./results";
 
 const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
 const usd = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
@@ -77,10 +78,6 @@ export function buildAdsPrompt(intake: AdsIntake, sections: readonly AdsSectionI
         : 'Management plans: our prices are not set in Agency Atlas yet — say "prices not set" (never guess a price).',
     );
   }
-  add(
-    "",
-    "## 6. Results for Agency Atlas",
-    "At the end, give me the data in the AdsData shape (src/lib/audit/ads.ts) as one JSON file, so it can be attached to this saved audit: every figure as { value, source, retrieved }. Keep the client's data out of the code and out of Git.",
-  );
+  add("", adsResultsTemplate(intake), "", "A person pastes your whole reply into Agency Atlas (Attach results); Atlas checks every figure before using it.");
   return lines.join("\n");
 }
