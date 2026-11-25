@@ -247,3 +247,59 @@ Size limit: about 45,000 characters of facts (≈15,000 tokens); if there's more
 ### Not in Phase 2
 
 Developers and sales (Phase 3), work order drafts from BizToad (Phase 3), voice (Phase 4), saving conversations (not planned).
+
+---
+
+## 11. Look update 2 and voice (built 2026-11-24, owner's request)
+
+- **Happier, white eyes:** the eyes are now white with a round dark pupil and a sparkle (no gold), the lids are more relaxed, he has a gentle smile and soft rosy cheeks. Same jacket and bow tie; Tuck away unchanged.
+- **Push-to-talk (Phase 4, free):** a **Talk** button in the chat uses the browser's own speech-to-text. The words land in the question box for the person to check; nothing is sent until they tap Ask. Hidden where the browser doesn't support it (e.g. Firefox). The panel says that Chrome sends the audio to Google (Safari may use Apple) to turn it into text.
+- **Read aloud (free):** each answer has **Read aloud / Stop**. It reads the answer and its points (not links, sources or cost) with a voice that runs on the device when one exists (`pickVoice`), and the frog's mouth moves while he talks (still with reduce motion). Closing the panel stops listening and talking.
+- Nothing is recorded or saved by the app. Pure helpers `speechText` and `pickVoice` in `src/lib/toad.ts` are tested.
+- Not checked yet in real use: microphone permission prompts and speech quality on the team's actual phones and computers.
+
+## 12. Phase 3 in detail: developers and salespeople ask, and work order drafts
+
+**Written 2026-11-24, waiting for the owner's go-ahead.** This is where roles beyond owner/managers get answers, so the main risk is one person seeing another's data. The lock stays the same: every fact is read as the signed-in person through `data-source.ts`, so the database decides what's included.
+
+### What each role's BizToad can see
+
+| Role | Facts given to the AI | Never given |
+|---|---|---|
+| **Developer** | Their own work orders and steps (`getDeveloperActions` / `my_work`), due dates, review status; contact dates for the clients on their work (`getMyClientContacts`); the screens they can open | Other people's work, client health and risk, team load, sales, any money |
+| **Salesperson** | Their own leads and follow-ups (`getSales`), their upcoming appointments, Scout prospects they can see (their own + the shared pool, counts and reasons), their daily target and progress as counts, the leaderboard as **deal counts only** | Client health or work orders, team load, other reps' leads, any money (Won values, deal values, prices) |
+| Owner / managers | Unchanged from Phase 2 | Unchanged |
+
+Each role gets its own small fact builder in `src/lib/ai/toad-snapshot.ts`, run through the same money and contact scrubbing as Phase 2.
+
+### Database update `0033_biztoad_phase3.sql` (small)
+
+- Lets each person **read their own** `ask_toad` cost rows, so developers and salespeople see "you've used $X of $5" (today only owner/managers can read the cost log). Nothing else in the cost log becomes readable.
+- No other change: the "which roles may ask" switch already exists in `toad_settings` (Phase 2).
+- Break-in tests: a developer reads only their own BizToad cost rows and no other AI rows; a salesperson can't read a developer's; nobody can edit or delete them.
+
+### Your switches (Safety page, BizToad card)
+
+Tick boxes for **Managers**, **Developers** and **Salespeople** (owner is always on). Recommended: switch on developers and salespeople one role at a time and ask a few questions as each before telling the team.
+
+### Work order drafts
+
+- Owner and managers only (the roles that add work orders today). When you ask something like "make a work order to fix the homepage title", BizToad's answer can include **one draft**: title, client, steps, priority, suggested person, due date.
+- It shows a **Review and add** button that opens the existing Smart add confirm card with the draft filled in. Nothing is saved until a person taps Confirm, exactly like Smart add today.
+- Drafts never include contact details (the same check Smart add uses).
+
+### Costs
+
+Same 3–6¢ a question and $5 per person. With all 7 people switched on, $25 for the team may run out mid-month if everyone uses it daily; raise it on the Safety page if that happens (and the whole-app AI budget, currently $10, with it).
+
+### Tests ("done" means all pass)
+
+- Fact builder tests per role: a developer's facts contain only their own work orders and no health, team or money fields; a salesperson's contain no client health, work orders or money; both pass the money/contact scrub.
+- Guardrails: `askToad` picks the fact builder from the **database role**, never from anything the browser sends; drafts are never saved inside `askToad`.
+- Break-in tests for `0033` (above).
+- `npm run check` and `npm run test:rls` pass.
+- Hand check after you run `0033`: you switch on developers, a developer (or you, using the existing "preview as developer" view, which is read-only and can't ask) confirms their answers mention only their own work; same for a salesperson. A few cents each.
+
+### Not in Phase 3
+
+Voice "calls" (Phase 5, paid), saving conversations, and BizToad doing anything by itself.

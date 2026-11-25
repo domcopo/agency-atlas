@@ -6,7 +6,7 @@ export const TOAD_RULES = {
   /** Eyes follow the mouse only when it's this close to an eye (CSS pixels). */
   followRadiusPx: 200,
   /** Furthest a pupil can slide from the middle of its eye (drawing units = px at 64 px).
-      Small, so the pupil stays inside the golden iris. */
+      Small, so the pupil stays inside the white of the eye. */
   maxPupilPx: 2.8,
   /** Closer than this, the pupil slides only part of the way (so it doesn't jitter on top of the eye). */
   rampPx: 40,
@@ -83,3 +83,32 @@ export function mayMove(s: {
 
 /** Things the toad must never sit on top of. If one is underneath, it tucks away. */
 export const CONTROL_SELECTOR = "a[href], button, input, select, textarea, summary, label, [role=button], [role=link], [role=tab], [role=checkbox], [contenteditable=true]";
+
+// ---------------------------------------------------------------------------
+// Voice (Phase 4): the browser's own speech-to-text and read-aloud. Free; nothing recorded
+// or saved by the app. These two helpers are pure so they can be tested.
+// ---------------------------------------------------------------------------
+
+/** What BizToad says out loud: the answer, then its points (no sources, links or costs). */
+export function speechText(answer: { answer: string; points: { text: string }[] }): string {
+  return [answer.answer, ...answer.points.map((p) => p.text)]
+    .map((t) => t.replace(/[•[\]]/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(". ")
+    .replace(/\.\s*\./g, ".")
+    .slice(0, 1500);
+}
+
+/**
+ * Which built-in voice to use: one that runs on this device (so the words aren't sent
+ * anywhere), English, preferring the person's own language setting. null = browser default.
+ */
+export function pickVoice<V extends { lang: string; localService: boolean; default?: boolean }>(voices: V[], preferredLang = "en-US"): V | null {
+  const local = voices.filter((v) => v.localService && v.lang.toLowerCase().startsWith("en"));
+  return (
+    local.find((v) => v.lang.toLowerCase() === preferredLang.toLowerCase() && v.default) ??
+    local.find((v) => v.lang.toLowerCase() === preferredLang.toLowerCase()) ??
+    local[0] ??
+    null
+  );
+}

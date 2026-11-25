@@ -305,11 +305,11 @@ body {
 .toad-pupil {
   transition: transform 120ms ease-out;
 }
-/* Heavy lids rest about half-closed (a calm, stoic look) and close fully for a blink. */
+/* Relaxed lids rest just over the top of the eye (friendly) and close fully for a blink. */
 .toad-lid {
   transform-box: fill-box;
   transform-origin: 50% 0%;
-  transform: scaleY(0.42);
+  transform: scaleY(0.08);
 }
 .toad-body,
 .toad-tie,
@@ -330,7 +330,7 @@ body {
   animation: toad-glance 900ms ease-in-out;
 }
 @keyframes toad-blink {
-  0%, 100% { transform: scaleY(0.42); }
+  0%, 100% { transform: scaleY(0.08); }
   50% { transform: scaleY(1); }
 }
 @keyframes toad-hop {
@@ -348,6 +348,18 @@ body {
   0%, 100% { transform: translateX(0); }
   25%, 40% { transform: translateX(-2.5px); }
   65%, 80% { transform: translateX(2.5px); }
+}
+/* Talking (reading an answer aloud): the mouth bobs open and shut. Off with reduce motion. */
+.toad-mouth {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+}
+.toad-talking .toad-mouth {
+  animation: toad-talk 260ms ease-in-out infinite alternate;
+}
+@keyframes toad-talk {
+  from { transform: scaleY(1); }
+  to { transform: scaleY(2.2); }
 }
 /* Thinking (waiting for an answer): eyes look up. A still pose, so it's fine with reduce motion. */
 .toad-thinking .toad-glance {

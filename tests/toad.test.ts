@@ -1,6 +1,6 @@
 // BizToad (docs/BIZTOAD_PLAN.md): motion rules (Phase 1) and what the AI is given (Phase 2).
 import { describe, expect, it } from "vitest";
-import { eyesMayFollow, mayMove, nextIdleDelay, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
+import { eyesMayFollow, mayMove, nextIdleDelay, pickVoice, speechText, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
 import { buildCodebook, buildStaffBook } from "@/lib/ai/snapshot";
 import { buildToadFacts, pipelineCounts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, scrubMoney, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
 import type { RosterClient } from "@/lib/types";
@@ -25,7 +25,7 @@ describe("eyes follow the mouse only when it's close", () => {
     expect(up.dy).toBeCloseTo(-TOAD_RULES.maxPupilPx);
   });
 
-  it("never slides further than the limit (inside the iris), wherever the mouse is", () => {
+  it("never slides further than the limit (inside the eye), wherever the mouse is", () => {
     for (let i = 0; i < 500; i++) {
       const p = { x: 100 + (Math.random() - 0.5) * 500, y: 100 + (Math.random() - 0.5) * 500 };
       const { dx, dy } = pupilOffset(eye, p);
@@ -247,5 +247,25 @@ describe("BizToad answers are checked", () => {
     expect(a.points).toHaveLength(5);
     expect(a.links).toHaveLength(1);
     expect(restoreToadAnswer(null, book, staff, TOAD_SCREENS.full).answer).toMatch(/couldn't/);
+  });
+});
+
+describe("BizToad voice (Phase 4)", () => {
+  it("reads the answer and its points, not links, sources or costs", () => {
+    const t = speechText({ answer: "Six work orders are overdue.", points: [{ text: "One is blocked." }, { text: "  Two have [no] owner • " }] });
+    expect(t).toBe("Six work orders are overdue. One is blocked. Two have no owner");
+    expect(speechText({ answer: "x".repeat(5000), points: [] }).length).toBe(1500);
+  });
+
+  it("prefers an English voice that runs on this device", () => {
+    const voices = [
+      { name: "Cloud", lang: "en-US", localService: false, default: true },
+      { name: "French", lang: "fr-FR", localService: true },
+      { name: "UK", lang: "en-GB", localService: true },
+      { name: "US", lang: "en-US", localService: true },
+    ];
+    expect(pickVoice(voices)?.name).toBe("US");
+    expect(pickVoice(voices.slice(0, 3))?.name).toBe("UK");
+    expect(pickVoice([voices[0]!, voices[1]!])).toBeNull();
   });
 });

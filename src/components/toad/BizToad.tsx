@@ -67,6 +67,7 @@ export function BizToad({
   const [move, setMove] = useState<IdleMove | null>(null);
   const [tucked, setTucked] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [talking, setTalking] = useState(false);
   const corner = variant === "corner";
 
   const shown = () => (rootRef.current?.getClientRects().length ?? 0) > 0;
@@ -211,7 +212,7 @@ export function BizToad({
     >
       <p className="mb-1 font-display text-base font-semibold">{ask ? "Ask BizToad" : "Hi, I\u2019m BizToad."}</p>
       {ask ? (
-        <ToadChat usedUsd={ask.usedUsd} capUsd={ask.capUsd} onThinking={setThinking} />
+        <ToadChat usedUsd={ask.usedUsd} capUsd={ask.capUsd} onThinking={setThinking} onTalking={setTalking} />
       ) : (
         <p className="text-muted">{note ?? "Soon you\u2019ll be able to ask me questions about your work right here."} Until then, these might help:</p>
       )}
@@ -255,6 +256,7 @@ export function BizToad({
         away && (corner ? "toad-away" : "toad-away-bar"),
         move && `toad-move-${move}`,
         thinking && "toad-thinking",
+        talking && "toad-talking",
       )}
     >
       {panel}

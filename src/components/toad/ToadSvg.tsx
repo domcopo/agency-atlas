@@ -1,9 +1,9 @@
 // BizToad, drawn by hand as SVG (docs/BIZTOAD_PLAN.md). An original design: a calm,
-// slightly realistic frog in muted storybook colors (olive skin, golden eyes with heavy
-// lids, a wide flat mouth) wearing a tweedy jacket and a black bow tie.
+// friendly, slightly realistic frog in muted storybook colors (olive skin, white eyes with
+// relaxed lids, a gentle smile) wearing a tweedy jacket and a black bow tie.
 //
 // Each part is its own layer so it can move: pupils (follow the mouse), eyelids (rest
-// half-closed, close fully for a blink), bow tie (wiggle). The drawing is decorative: the
+// slightly lowered, close fully for a blink), bow tie (wiggle). The drawing is decorative: the
 // button around it carries the label for screen readers. Drawing units = px at 64 px.
 
 import type { Ref } from "react";
@@ -18,8 +18,9 @@ const SKIN_SHADE = "#6a8449";
 const OUTLINE = "#465c33";
 const THROAT = "#b7c690";
 const SPOT = "#5c7640";
-const IRIS = "#b8913a";
-const IRIS_RIM = "#6b5420";
+const EYE_WHITE = "#f8f6ee";
+const EYE_RIM = "#5b6f47";
+const CHEEK = "#e3a08c";
 const JACKET = "#8f7148";
 const JACKET_DARK = "#6f5636";
 const SHIRT = "#ece3cb";
@@ -62,24 +63,28 @@ export function ToadSvg({
         <circle cx={16.5} cy={24.5} r={1} fill={SPOT} opacity={0.4} />
         <circle cx={32} cy={24} r={1.3} fill={SPOT} opacity={0.35} />
 
-        {/* Eyes: golden iris, a moving horizontal pupil, and a heavy lid that rests half-closed. */}
+        {/* Rosy cheeks. */}
+        <circle cx={13.5} cy={36.5} r={2.8} fill={CHEEK} opacity={0.35} />
+        <circle cx={50.5} cy={36.5} r={2.8} fill={CHEEK} opacity={0.35} />
+
+        {/* Eyes: white, a moving round pupil with a sparkle, and a relaxed lid. */}
         {TOAD_EYES.map((e, i) => (
           <g key={`eye-${e.x}`}>
-            <circle cx={e.x} cy={e.y} r={7} fill={IRIS} stroke={IRIS_RIM} strokeWidth={1} />
+            <circle cx={e.x} cy={e.y} r={7} fill={EYE_WHITE} stroke={EYE_RIM} strokeWidth={1} />
             <g className="toad-glance">
               <g ref={pupilRefs?.[i]} className="toad-pupil">
-                <ellipse cx={e.x} cy={e.y + 0.6} rx={3.6} ry={2.1} fill={INK} />
-                <circle cx={e.x - 1.6} cy={e.y - 0.3} r={0.9} fill="#fff" opacity={0.85} />
+                <circle cx={e.x} cy={e.y + 0.8} r={3.2} fill={INK} />
+                <circle cx={e.x - 1.1} cy={e.y - 0.3} r={1} fill="#fff" opacity={0.9} />
               </g>
             </g>
             <ellipse className="toad-lid" cx={e.x} cy={e.y} rx={7.8} ry={7.8} fill={SKIN} stroke={OUTLINE} strokeWidth={1} />
           </g>
         ))}
 
-        {/* Nostrils and a wide, flat, unbothered mouth. */}
+        {/* Nostrils and a wide, gentle smile. */}
         <circle cx={29} cy={29.5} r={0.8} fill={OUTLINE} />
         <circle cx={35} cy={29.5} r={0.8} fill={OUTLINE} />
-        <path d="M9 39 Q11 37.7 15.5 37.6 Q32 38.2 48.5 37.6 Q53 37.7 55 39" fill="none" stroke={OUTLINE} strokeWidth={1.5} strokeLinecap="round" />
+        <path className="toad-mouth" d="M9.5 36.2 Q12.5 38.6 17 39.2 Q32 41.8 47 39.2 Q51.5 38.6 54.5 36.2" fill="none" stroke={OUTLINE} strokeWidth={1.5} strokeLinecap="round" />
 
         {/* Black bow tie at the collar, with a faint light edge so it shows on the dark theme. */}
         <g className="toad-tie">

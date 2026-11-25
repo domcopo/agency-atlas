@@ -3,27 +3,130 @@
 // Ask BizToad (0030, docs/BIZTOAD_PLAN.md section 10). The chat lives only in this panel:
 // closing it or the tab forgets everything. Answers are plain text (never HTML) and are
 // suggestions only. The server checks the role, the caps and the budget on every question.
+//
+// Voice (Phase 4): "Talk" uses the browser's own speech-to-text (Chrome sends the audio to
+// Google, Safari may use Apple), and the words land in the box for you to check before
+// asking; nothing is sent automatically. "Read aloud" uses a voice built into this device.
+// The app records and saves nothing. Both buttons are hidden where the browser lacks them.
 
+import { Mic, MicOff, Square, Volume2 } from "lucide-react";
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { askToad } from "@/app/actions";
 import type { ToadAnswer } from "@/lib/ai/toad-snapshot";
+import { pickVoice, speechText } from "@/lib/toad";
+
+type Recognizer = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start(): void;
+  stop(): void;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+};
+type RecognizerClass = new () => Recognizer;
+const recognizerClass = (): RecognizerClass | null => {
+  const w = window as unknown as { SpeechRecognition?: RecognizerClass; webkitSpeechRecognition?: RecognizerClass };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+};
+const noSubscribe = () => () => {};
 
 type Turn = { q: string; answer?: ToadAnswer; error?: string; costUsd?: number };
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 const cents = (n: number) => (n < 0.01 ? "under 1¢" : `${Math.round(n * 100)}¢`);
 
-export function ToadChat({ usedUsd, capUsd, onThinking }: { usedUsd: number | null; capUsd: number; onThinking: (on: boolean) => void }) {
+export function ToadChat({
+  usedUsd,
+  capUsd,
+  onThinking,
+  onTalking,
+}: {
+  usedUsd: number | null;
+  capUsd: number;
+  onThinking: (on: boolean) => void;
+  /** While reading aloud (the frog's mouth moves). */
+  onTalking: (on: boolean) => void;
+}) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [text, setText] = useState("");
   const [pending, start] = useTransition();
   const listRef = useRef<HTMLOListElement>(null);
   const spentHere = turns.reduce((n, t) => n + (t.costUsd ?? 0), 0);
 
+  // --- Voice ---
+  const canListen = useSyncExternalStore(noSubscribe, () => recognizerClass() !== null, () => false);
+  const canSpeak = useSyncExternalStore(noSubscribe, () => "speechSynthesis" in window, () => false);
+  const rec = useRef<Recognizer | null>(null);
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState<number | null>(null);
+
+  // Stop listening and talking when the panel closes.
+  useEffect(
+    () => () => {
+      rec.current?.stop();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      onTalking(false);
+    },
+    [onTalking],
+  );
+
+  function talk() {
+    if (listening) {
+      rec.current?.stop();
+      return;
+    }
+    const R = recognizerClass();
+    if (!R) return;
+    const r = new R();
+    r.lang = "en-US";
+    r.interimResults = true;
+    r.continuous = false; // stops by itself when you stop talking
+    const before = text.trim();
+    r.onresult = (e) => {
+      const said = Array.from(e.results, (res) => res[0]?.transcript ?? "").join(" ").trim();
+      setText([before, said].filter(Boolean).join(" ").slice(0, 1000));
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    rec.current = r;
+    setListening(true);
+    r.start();
+  }
+
+  function stopSpeaking() {
+    window.speechSynthesis.cancel();
+    setSpeaking(null);
+    onTalking(false);
+  }
+
+  function readAloud(i: number, answer: ToadAnswer) {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    if (speaking === i) {
+      stopSpeaking();
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(speechText(answer));
+    const voice = pickVoice(synth.getVoices(), navigator.language);
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang ?? "en-US";
+    u.rate = 1;
+    u.onend = u.onerror = () => {
+      setSpeaking((now) => (now === i ? null : now));
+      onTalking(false);
+    };
+    setSpeaking(i);
+    onTalking(true);
+    synth.speak(u);
+  }
+
   function ask() {
     const q = text.trim();
     if (!q || pending) return;
+    rec.current?.stop();
     // Only finished turns go back as context (the server cleans and caps them again).
     const history = turns.filter((t) => t.answer).map((t) => ({ q: t.q, a: t.answer!.answer }));
     setText("");
@@ -77,9 +180,22 @@ export function ToadChat({ usedUsd, capUsd, onThinking }: { usedUsd: number | nu
                       ))}
                     </div>
                   )}
-                  <p className="text-[11px] text-faint">
-                    Suggestion — check before acting.{typeof t.costUsd === "number" ? ` Cost ${cents(t.costUsd)}.` : ""}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-faint">
+                      Suggestion — check before acting.{typeof t.costUsd === "number" ? ` Cost ${cents(t.costUsd)}.` : ""}
+                    </p>
+                    {canSpeak && (
+                      <button
+                        type="button"
+                        onClick={() => readAloud(i, t.answer!)}
+                        aria-pressed={speaking === i}
+                        className="pressable inline-flex min-h-9 shrink-0 items-center gap-1 rounded-xl border border-line px-2 text-[12px] font-medium text-muted hover:text-ink"
+                      >
+                        {speaking === i ? <Square aria-hidden className="size-3.5" /> : <Volume2 aria-hidden className="size-3.5" />}
+                        {speaking === i ? "Stop" : "Read aloud"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <p className="text-muted">Thinking…</p>
@@ -118,8 +234,26 @@ export function ToadChat({ usedUsd, capUsd, onThinking }: { usedUsd: number | nu
           <button type="submit" disabled={pending || !text.trim()} className="pressable min-h-11 flex-1 rounded-2xl bg-violet-deep px-3 text-sm font-semibold text-white disabled:opacity-50">
             {pending ? "Thinking…" : "Ask"}
           </button>
+          {canListen && (
+            <button
+              type="button"
+              onClick={talk}
+              aria-pressed={listening}
+              aria-label={listening ? "Stop listening" : "Talk: say your question"}
+              className={`pressable inline-flex min-h-11 items-center gap-1.5 rounded-2xl border px-3 text-[13px] font-semibold ${listening ? "border-rose/60 bg-rose/15 text-rose" : "border-line text-muted hover:text-ink"}`}
+            >
+              {listening ? <MicOff aria-hidden className="size-4" /> : <Mic aria-hidden className="size-4" />}
+              {listening ? "Stop" : "Talk"}
+            </button>
+          )}
           {turns.length > 0 && (
-            <button type="button" disabled={pending} onClick={() => setTurns([])} className="pressable min-h-11 rounded-2xl border border-line px-3 text-[13px] font-medium text-muted hover:text-ink">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                if (canSpeak) stopSpeaking();
+                setTurns([]);
+              }} className="pressable min-h-11 rounded-2xl border border-line px-3 text-[13px] font-medium text-muted hover:text-ink">
               Clear
             </button>
           )}
@@ -127,6 +261,7 @@ export function ToadChat({ usedUsd, capUsd, onThinking }: { usedUsd: number | nu
       </form>
       <p className="text-[11px] text-faint">
         {usedUsd !== null ? `You've used ${money(usedUsd + spentHere)} of ${money(capUsd)} this month.` : `Your monthly allowance is ${money(capUsd)}.`} Chats aren&apos;t saved.
+        {canListen && " Talk uses your browser's speech-to-text (Chrome sends the audio to Google; Safari may use Apple). Check the words before you ask."}
       </p>
     </div>
   );
