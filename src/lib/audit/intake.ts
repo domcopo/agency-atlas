@@ -111,7 +111,7 @@ export function parseIntake(raw: unknown): IntakeResult {
     if (list.length > max) errors.push(`${label}: at most ${max}.`);
     const out: string[] = [];
     for (const n of list.slice(0, max)) {
-      if (n.length > INTAKE_LIMITS.text) errors.push(`${label}: "${n.slice(0, 20)}…" is too long.`);
+      if (n.length > INTAKE_LIMITS.text) errors.push(`${label}: "${n.slice(0, 20)}…" is too long. Keep each one under ${INTAKE_LIMITS.text} characters and put a comma between them.`);
       noContacts(n, label);
       if (!out.some((o) => o.toLowerCase() === n.toLowerCase())) out.push(n.slice(0, INTAKE_LIMITS.text));
     }

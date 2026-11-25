@@ -290,3 +290,31 @@ describe("Audits area (docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md Phase 1)", () => 
     expect(read("src/components/audit/AuditBuilder.tsx")).not.toContain('name="wantsAds"');
   });
 });
+
+describe("audit builders keep what the rep typed (2026-11-25 fix)", () => {
+  const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+
+  it("submit by hand, so a refused save doesn't wipe the form (React resets forms after an action)", () => {
+    for (const f of ["src/components/audit/AuditBuilder.tsx", "src/components/audit/ads/AdsBuilder.tsx"]) {
+      const src = read(f);
+      expect(src, f).toContain("<form onSubmit={submit}");
+      expect(src, f).not.toContain("<form action={action}");
+      expect(src, f).toMatch(/startTransition\(\(\) => action\(data\)\)/);
+    }
+  });
+
+  it("a problem sends the rep to the step that has the box to fix", async () => {
+    const { errorStep, SEO_STEP_WORDS, ADS_STEP_WORDS } = await import("@/components/audit/AuditBuilder");
+    expect(errorStep("Home town is required.", SEO_STEP_WORDS)).toBe(1);
+    expect(errorStep('Services: "Commercial property …" is too long. Keep each one under 80 characters and put a comma between them.', SEO_STEP_WORDS)).toBe(0);
+    expect(errorStep("Competitor 1 website must be a website like example.com.", ADS_STEP_WORDS)).toBe(0);
+    expect(errorStep("Each monthly budget must be $100–$100,000.", ADS_STEP_WORDS)).toBe(1);
+    expect(errorStep("Something new", SEO_STEP_WORDS)).toBe(3);
+  });
+
+  it("the too-long message says how to fix it", () => {
+    const r = parseIntake({ company: "X (fictional)", domain: "x.example", niche: "Homes", hqTown: "Denver", state: "CO", avgJobUsd: 10000, services: "Commercial property cash offers for owners who need to sell fast in any condition anywhere in the metro" });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.errors.join(" ")).toMatch(/Keep each one under 80 characters and put a comma between them/);
+  });
+});
