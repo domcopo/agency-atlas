@@ -8,6 +8,10 @@ import { notFound } from "next/navigation";
 import { archiveAudit } from "@/app/actions";
 import { AdsAuditView } from "@/components/audit/ads/AdsAuditView";
 import { AttachResults } from "@/components/audit/AttachResults";
+import { RunAudit } from "@/components/audit/RunAudit";
+import { capsLine } from "@/lib/audit/caps-line";
+import { planSeoRun } from "@/lib/audit/run";
+import { isDataForSeoConfigured } from "@/lib/audit/sources/dataforseo";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -15,7 +19,7 @@ import { RoleNotice } from "@/components/shell/RoleNotice";
 import { stateName } from "@/lib/audit/geo";
 import { buildAuditPrompt } from "@/lib/audit/prompt";
 import { AUDIT_SECTIONS, deckPages } from "@/lib/audit/sections";
-import { getAuditSettings, getMember, getSavedAudit, usesDatabase } from "@/lib/data-source";
+import { getAuditSettings, getAuditSpend, getLatestAuditRun, getMember, getSavedAudit, usesDatabase } from "@/lib/data-source";
 import { formatShortDate } from "@/lib/format";
 import { isLead } from "@/lib/roles";
 
@@ -31,7 +35,9 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
   if (!audit) notFound();
   const settings = await getAuditSettings();
   const canEdit = isLead(me.role) || (audit.createdBy === me.userId && !audit.archived);
-  if (audit.kind === "ads") return <AdsAuditView audit={audit} settings={settings} canEdit={canEdit} canArchive={isLead(me.role)} />;
+  const [runInfo, spend] = await Promise.all([getLatestAuditRun(audit.id), getAuditSpend()]);
+  const runCard = { configured: isDataForSeoConfigured(), ready: runInfo.ready, run: runInfo.run, capsLine: capsLine(settings, spend) };
+  if (audit.kind === "ads") return <AdsAuditView audit={audit} settings={settings} canEdit={canEdit} canArchive={isLead(me.role)} runCard={runCard} />;
   const i = audit.intake;
   const prompt = i ? buildAuditPrompt(i, audit.sections, { agencyName: settings.agency.agencyName, plans: settings.agency.plans, perAuditUsd: settings.caps.perAuditUsd }) : "";
   const pages = deckPages(audit.sections).length;
@@ -120,9 +126,14 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
         </div>
 
         <div className="min-w-0">
+          {i && canEdit && (
+            <div className="mb-3 mt-4 @3xl:mt-0">
+              <RunAudit id={audit.id} {...runCard} estimateUsd={planSeoRun(i, audit.sections).estimateUsd} hasResults={audit.hasResults} />
+            </div>
+          )}
           {i && (
             <>
-              <SectionTitle aside={<CopyButton text={prompt} label="Copy the custom prompt" />}>Custom prompt</SectionTitle>
+              <SectionTitle aside={<CopyButton text={prompt} label="Copy the custom prompt" />}>Or run it yourself: custom prompt</SectionTitle>
               <div className="glass rounded-3xl p-4">
                 <p className="text-xs text-muted">Copy this into a Claude chat that has DataForSEO connected. It already has this business and only the checkpoints picked. The app never sends it anywhere.</p>
                 <details className="mt-2">

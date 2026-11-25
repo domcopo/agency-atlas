@@ -58,7 +58,11 @@ describe("Phase 1 guardrails", () => {
     expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`))).toEqual([]);
   });
 
-  it("makes no network calls from app code (except the read-only GoHighLevel module)", () => {
+  // Approved exception (owner, 2026-11-25, docs/AUDIT_RUN_PLAN.md): the DataForSEO module may
+  // also make calls; it is checked line by line in "DataForSEO read-only lookups" below.
+  const DFS_MODULE = "src/lib/audit/sources/dataforseo.ts";
+
+  it("makes no network calls from app code (except the read-only GoHighLevel and DataForSEO modules)", () => {
     const hits = findMatches([
       /\bfetch\s*\(/,
       /XMLHttpRequest/,
@@ -67,11 +71,12 @@ describe("Phase 1 guardrails", () => {
       /sendBeacon/,
       /\baxios\b/,
     ]);
-    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`))).toEqual([]);
+    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`) && !h.startsWith(`${DFS_MODULE}:`))).toEqual([]);
   });
 
-  it("contains no write-style HTTP methods", () => {
-    expect(findMatches([/method\s*:\s*["'`](POST|PUT|PATCH|DELETE)["'`]/i])).toEqual([]);
+  it("contains no write-style HTTP methods (DataForSEO's read-only POST is the one approved exception)", () => {
+    const hits = findMatches([/method\s*:\s*["'`](POST|PUT|PATCH|DELETE)["'`]/i]);
+    expect(hits).toEqual([`${DFS_MODULE}: method: "POST"`]);
   });
 
   it("contains no secret-looking values", () => {
@@ -1155,5 +1160,52 @@ describe("Scout (0024): prospects for walk-ins, no contact details, no network, 
       expect(t, f).not.toMatch(/createDatabaseClient|@\/lib\/ghl|dangerouslySetInnerHTML/);
     }
     expect(read("src/app/(app)/sales/scout/[id]/page.tsx")).toMatch(/if \(!p\) notFound\(\);/);
+  });
+});
+
+describe("DataForSEO read-only lookups (approved 2026-11-25, docs/AUDIT_RUN_PLAN.md)", () => {
+  const DFS_MODULE = "src/lib/audit/sources/dataforseo.ts";
+  const dfs = readFileSync(join(ROOT, DFS_MODULE), "utf8");
+
+  it("only the DataForSEO module reads its login or names its host", () => {
+    expect(contents.filter(({ text }) => /process\.env\.DATAFORSEO_/.test(text)).map(({ file }) => file)).toEqual([DFS_MODULE]);
+    expect(findMatches([/api\.dataforseo\.com/i]).map((h) => h.split(":")[0])).toEqual([DFS_MODULE]);
+    expect(findMatches([/NEXT_PUBLIC_DATAFORSEO/])).toEqual([]);
+  });
+
+  it("one call, POST only, one fixed host, never follows a redirect", () => {
+    expect(dfs.match(/\bfetch\s*\(/g)?.length).toBe(1);
+    expect([...dfs.matchAll(/method\s*:\s*["'`]([A-Za-z]+)["'`]/g)].map((m) => m[1])).toEqual(["POST"]);
+    expect(new Set([...dfs.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]))).toEqual(new Set(["https://api.dataforseo.com"]));
+    expect(dfs).toMatch(/redirect:\s*"error"/);
+    expect(dfs).toMatch(/if \(!ALLOWED\.includes\(path\)\) throw/);
+  });
+
+  it("the allowlist holds only read-only live lookups", () => {
+    const allowed = dfs.slice(dfs.indexOf("const ALLOWED"), dfs.indexOf("] as const;", dfs.indexOf("const ALLOWED")));
+    const paths = [...allowed.matchAll(/"(\/v3\/[^"]+)"/g)].map((m) => m[1]);
+    expect(paths.sort()).toEqual(
+      [
+        "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
+        "/v3/dataforseo_labs/google/domain_rank_overview/live",
+        "/v3/keywords_data/google_ads/search_volume/live",
+        "/v3/on_page/lighthouse/live/json",
+        "/v3/serp/google/maps/live/advanced",
+        "/v3/serp/google/organic/live/advanced",
+      ].sort(),
+    );
+    for (const p of paths) expect(p).toMatch(/\/live(\/|$)/);
+  });
+
+  it("the login is never logged or returned", () => {
+    expect(dfs).not.toMatch(/console\.(log|warn|error)/);
+    expect(dfs).not.toMatch(/return\s+(user|pass|auth)\b/);
+  });
+
+  it("only the audit run uses the module, and the AI words step sends no tools", () => {
+    const users = contents.filter(({ text }) => /sources\/dataforseo"/.test(text)).map(({ file }) => file).sort();
+    expect(users.every((f) => ["src/app/actions.ts", "src/app/(app)/audits/[id]/page.tsx", "src/lib/audit/run.ts"].includes(f))).toBe(true);
+    const words = readFileSync(join(ROOT, "src/lib/audit/words.ts"), "utf8");
+    expect(words).not.toMatch(/\btools\s*:|tool_choice|fetch\(|dfsLookup|sources\/dataforseo/);
   });
 });

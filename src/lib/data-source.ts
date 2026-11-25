@@ -21,6 +21,7 @@ import type { AuditBundle } from "@/lib/audit/data";
 import { buildAuditConfig, emptyAuditData, parseIntake, parsePlans, type AuditAgencySettings, type AuditIntake } from "@/lib/audit/intake";
 import { deckPages, parseSections, type AuditSectionId } from "@/lib/audit/sections";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
+import { RUN_RULES } from "@/lib/audit/run";
 import { nyDate } from "@/lib/audit/spend";
 import { adsDeckPages, emptyAdsData, parseAdsIntake, parseAdsPlans, parseAdsSections, type AdsBundle, type AdsIntake, type AdsPlan, type AdsSectionId } from "@/lib/audit/ads";
 import { AUDIT_CAP_DEFAULTS, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
@@ -2625,6 +2626,57 @@ export async function getSavedAuditBundle(audit: SavedAudit): Promise<AuditBundl
     if (r.ok) return { id: audit.id, sample: false, config: { ...config, competitors: r.competitors }, data: r.data };
   }
   return { id: audit.id, sample: false, config, data: emptyAuditData(config, day) };
+}
+
+/** The newest "Run audit" for one audit (0035), or null (none yet, or 0035 not run). */
+export interface AuditRunView {
+  id: string;
+  status: "running" | "done" | "failed";
+  steps: { label: string; state: "waiting" | "working" | "done" | "skipped" }[];
+  estUsd: number;
+  actualUsd: number | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  /** Started more than RUN_RULES.staleMinutes ago and never finished. */
+  stale: boolean;
+}
+
+export async function getLatestAuditRun(auditId: string): Promise<{ ready: boolean; run: AuditRunView | null }> {
+  if (!usesDatabase()) return { ready: false, run: null };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("audit_runs").select("id, status, steps, est_usd, actual_usd, error, started_at, finished_at").eq("audit_id", auditId).order("started_at", { ascending: false }).limit(1).maybeSingle();
+  if (error) return { ready: false, run: null };
+  if (!data) return { ready: true, run: null };
+  const steps = (Array.isArray(data.steps) ? data.steps : [])
+    .slice(0, 12)
+    .map((s) => (s && typeof s === "object" ? (s as Record<string, unknown>) : {}))
+    .map((s) => ({ label: String(s.label ?? "").slice(0, 40), state: (["waiting", "working", "done", "skipped"].includes(String(s.state)) ? s.state : "waiting") as AuditRunView["steps"][number]["state"] }))
+    .filter((s) => s.label);
+  const status = data.status === "done" || data.status === "failed" ? data.status : "running";
+  return {
+    ready: true,
+    run: {
+      id: data.id as string,
+      status,
+      steps,
+      estUsd: Number(data.est_usd),
+      actualUsd: data.actual_usd === null ? null : Number(data.actual_usd),
+      error: (data.error as string | null) ?? null,
+      startedAt: data.started_at as string,
+      finishedAt: (data.finished_at as string | null) ?? null,
+      stale: status === "running" && Date.now() - new Date(data.started_at as string).getTime() > RUN_RULES.staleMinutes * 60_000,
+    },
+  };
+}
+
+/** This month's AI budget left, readable by salespeople too (0035 ai_month_budget view). */
+export async function getAiBudgetLeft(): Promise<number | null> {
+  if (!usesDatabase()) return null;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("ai_month_budget").select("budget_usd, spent_usd").maybeSingle();
+  if (error || !data) return null;
+  return Math.max(0, Number(data.budget_usd) - Number(data.spent_usd));
 }
 
 /** The attached results block for one audit (read as the signed-in person), or null. */

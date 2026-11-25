@@ -1445,7 +1445,10 @@ create temp table sales_scope_check as
                           'sales_leaderboard',
                           -- 0030: BizToad's on/off + caps row, read by everyone on the team on
                           -- purpose (tested in 7f). toad_spend stays in this check.
-                          'toad_settings');
+                          'toad_settings',
+                          -- 0035: this month's AI budget total (two numbers) is meant for
+                          -- salespeople running audits; tested explicitly in 7cd.
+                          'ai_month_budget');
 do $$
 declare r record; n bigint;
 begin
@@ -2615,6 +2618,63 @@ begin;
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
 select test.expect($$update public.audits set data = '{"v":1}'$$, 0, 'developers cannot attach results');
+commit;
+
+-- ---------------------------------------------------------------------------
+-- 7cd. Audit runs (0035): see a run when you can see its audit; start one only on an
+--      audit you could edit; only the starter finishes it; never deleted. AI: salespeople
+--      log only their own 'audit_words' rows; the budget view shows two numbers only.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$insert into public.audit_runs (id, audit_id, est_usd, steps) values ('00000000-0000-0000-0000-00000000af01', '00000000-0000-0000-0000-00000000ad01', 1.2, '[{"label":"Searches per city","state":"waiting"}]')$$, 1, 'sales starts a run on their own audit');
+select test.expect($$insert into public.audit_runs (audit_id, est_usd, status) values ('00000000-0000-0000-0000-00000000ad01', 1, 'done')$$, -1, 'a run cannot start as finished');
+select test.expect($$insert into public.audit_runs (audit_id, est_usd, started_by) values ('00000000-0000-0000-0000-00000000ad01', 1, '00000000-0000-0000-0000-0000000000a7')$$, -1, 'sales cannot start a run as someone else');
+select test.expect($$insert into public.audit_runs (audit_id, est_usd) values ('00000000-0000-0000-0000-00000000ae31', 1)$$, -1, 'sales cannot run an archived audit');
+select test.expect($$insert into public.audit_runs (audit_id, est_usd) values ('00000000-0000-0000-0000-00000000ad01', 99)$$, -2, 'an estimate over $50 is refused');
+select test.expect($$update public.audit_runs set status = 'done', actual_usd = 0.42, finished_at = now() where id = '00000000-0000-0000-0000-00000000af01'$$, 1, 'the starter finishes their run');
+select test.expect($$update public.audit_runs set status = 'running' where id = '00000000-0000-0000-0000-00000000af01'$$, 0, 'a finished run cannot be reopened');
+select test.expect($$update public.audit_runs set est_usd = 0 where id = '00000000-0000-0000-0000-00000000af01'$$, -1, 'the estimate cannot be changed');
+select test.expect($$delete from public.audit_runs$$, -1, 'runs are never deleted');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('audit_words', 'test-model', 100, 50, 0.01, 'ok')$$, 1, 'sales logs the cost of their own audit words');
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'test-model', 100, 50, 0.01, 'ok')$$, -1, 'sales cannot log other AI features');
+select test.expect($$select * from public.ai_usage where feature = 'audit_words'$$, 0, 'sales still cannot read the AI cost log');
+select test.expect($$select budget_usd, spent_usd from public.ai_month_budget$$, 1, 'sales reads this month''s AI budget total');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a7","aal":"aal2"}';
+select test.expect($$select * from public.audit_runs$$, 0, 'another salesperson cannot see someone else''s runs');
+select test.expect($$insert into public.audit_runs (audit_id, est_usd) values ('00000000-0000-0000-0000-00000000ad01', 1)$$, -1, 'a salesperson cannot run someone else''s audit');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.audit_runs$$, 1, 'owner sees every run');
+select test.expect($$insert into public.audit_runs (id, audit_id, est_usd) values ('00000000-0000-0000-0000-00000000af02', '00000000-0000-0000-0000-00000000ae31', 0.5)$$, 1, 'owner may run any audit, archived too');
+select test.expect($$update public.audit_runs set status = 'failed' where id = '00000000-0000-0000-0000-00000000af01'$$, 0, 'only the starter moves a run on');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.audit_runs$$, 0, 'developers see no runs');
+select test.expect($$select * from public.ai_month_budget$$, 0, 'developers get nothing from the AI budget view');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal1"}';
+select test.expect($$select * from public.ai_month_budget$$, 0, 'no two-factor, no AI budget view');
+select test.expect($$select * from public.audit_runs$$, 0, 'no two-factor, no runs');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.ai_month_budget$$, -1, 'signed out cannot read the AI budget view');
 commit;
 
 -- ---------------------------------------------------------------------------

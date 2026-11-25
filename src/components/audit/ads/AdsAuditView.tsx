@@ -6,6 +6,8 @@ import { ExternalLink, Pencil } from "lucide-react";
 import Link from "next/link";
 import { archiveAudit } from "@/app/actions";
 import { AttachResults } from "@/components/audit/AttachResults";
+import { RunAudit, type RunAuditProps } from "@/components/audit/RunAudit";
+import { planAdsRun } from "@/lib/audit/run";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -18,7 +20,7 @@ import { formatShortDate } from "@/lib/format";
 const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
 const usd = (v: number) => `$${v.toLocaleString("en-US")}`;
 
-export function AdsAuditView({ audit, settings, canEdit, canArchive }: { audit: SavedAudit; settings: AuditSettingsView; canEdit: boolean; canArchive: boolean }) {
+export function AdsAuditView({ audit, settings, canEdit, canArchive, runCard }: { audit: SavedAudit; settings: AuditSettingsView; canEdit: boolean; canArchive: boolean; runCard: Omit<RunAuditProps, "id" | "estimateUsd" | "hasResults"> }) {
   const i = audit.ads?.intake ?? null;
   const sections = audit.ads?.sections ?? [];
   const prompt = i ? buildAdsPrompt(i, sections, { agencyName: settings.agency.agencyName, plans: settings.adsPlans, perAuditUsd: settings.caps.perAuditUsd }) : "";
@@ -101,9 +103,14 @@ export function AdsAuditView({ audit, settings, canEdit, canArchive }: { audit: 
         </div>
 
         <div className="min-w-0">
+          {i && canEdit && (
+            <div className="mb-3 mt-4 @3xl:mt-0">
+              <RunAudit id={audit.id} {...runCard} estimateUsd={planAdsRun(i, sections).estimateUsd} hasResults={audit.hasResults} />
+            </div>
+          )}
           {i && (
             <>
-              <SectionTitle aside={<CopyButton text={prompt} label="Copy the custom prompt" />}>Custom Ads prompt</SectionTitle>
+              <SectionTitle aside={<CopyButton text={prompt} label="Copy the custom prompt" />}>Or run it yourself: custom Ads prompt</SectionTitle>
               <div className="glass rounded-3xl p-4">
                 <p className="text-xs text-muted">Copy this into a Claude chat that has DataForSEO connected. It already has this business and only the checkpoints picked. The app never sends it anywhere and never touches a Google Ads account.</p>
                 <details className="mt-2">

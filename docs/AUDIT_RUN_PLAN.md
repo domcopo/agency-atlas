@@ -1,6 +1,6 @@
 # Plan: run audits inside Atlas ("Run audit", for reps on the road)
 
-Status: **draft for the owner's review (2026-11-25). Nothing built.** Owner answers (2026-11-25): the **app pulls the data and the AI only writes the words**; **owner, managers and salespeople** can run (within the caps); sources **DataForSEO, LeadSnap and sometimes Semrush**, with room for more add-ons later. This is "Phase E" of `docs/AUDIT_BUILDER_PLAN.md`; it builds on Attach results (`docs/AUDIT_RESULTS_PLAN.md`, B1), which stays as the backup (copy the prompt, paste the reply).
+Status: **E1 approved and built 2026-11-25** on branch `audit-results` (with Attach results B1). `0035` written, not run. Needs the DataForSEO login in Vercel before it can run. Owner answers (2026-11-25): the **app pulls the data and the AI only writes the words**; **owner, managers and salespeople** can run (within the caps); sources **DataForSEO, LeadSnap and sometimes Semrush**, with room for more add-ons later. This is "Phase E" of `docs/AUDIT_BUILDER_PLAN.md`; it builds on Attach results (`docs/AUDIT_RESULTS_PLAN.md`, B1), which stays as the backup (copy the prompt, paste the reply).
 
 ## How it works for a rep (phone or computer)
 1. Build and save the audit (as today), SEO or Google Ads.
@@ -57,3 +57,12 @@ Status: **draft for the owner's review (2026-11-25). Nothing built.** Owner answ
 - A rep taps Run audit on a phone, sees the cost, and a few minutes later the audit's pages show real numbers with sources and written notes, within the caps.
 - Over-cap runs are refused by the database; the copy-paste route still works.
 - `npm run check` and `npm run test:rls` pass.
+
+## E1 as built (2026-11-25)
+- `src/lib/audit/sources/dataforseo.ts`: the only DataForSEO caller (approved POST exception): one host, six allowlisted read-only "live" lookups, `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` from the server environment only, 30 s timeout, no redirects, answers size-capped. Guardrail tests pin all of it (the old "no POST anywhere" test now allows exactly this file).
+- `src/lib/audit/run.ts` (pure): money keywords (each service × city + near me), the lookups per checkpoint, worst-case prices (`DFS_PRICE`, deliberately high), readers for each answer (wrong types → null), competitor finding (directories excluded), and answers → the same `ATLAS-RESULTS v1` block. Visit numbers are DataForSEO Labs US-wide estimates (marked "national"); backlinks stay "not found" (separate subscription).
+- `src/lib/audit/words.ts`: coded numbers-only input for Claude (BUSINESS / COMPETITOR n, no websites), fixed answer shape, names put back; the checker still applies (a price or phone number in the words drops the words, keeps the numbers). SEO audits only (the Ads pages have no AI text).
+- `startAuditRun` (actions.ts): role + edit rights, DataForSEO set up, no run in progress, `audit_runs` row, then the worst-case estimate into `audit_spend` (the database refuses over-cap runs), then the work in `after()`: lookups 6 at a time with a 120 s limit, words (AI budget via `ai_month_budget`), checker, save as `audits.data = { v: 1, block, by: "run" }`. Failed lookups leave gaps, never guesses.
+- `RunAudit.tsx` on both audit pages (above the prompt, which is now "Or run it yourself"): cost first, steps while running (page refreshes every 4 s), the real cost after.
+- `0035_audit_runs.sql`: `audit_runs`, `audit_words` AI feature (salespeople log their own), `ai_month_budget` view. Break-in tests 7cd.
+- Known gaps: cities DataForSEO doesn't recognize (e.g. "Westminster & Thornton") come back "not found" for that city; enter one city per name. Call button / form on the landing page stay "not found" (no reliable read-only check yet).

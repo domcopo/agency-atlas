@@ -37,8 +37,11 @@ import {
   getRoster,
   getToday,
   getScout,
+  getAiBudgetLeft,
   getDeveloperActions,
+  getLatestAuditRun,
   getSavedAudit,
+  type SavedAudit,
   getLeaderboard,
   getMyClientContacts,
   getSales,
@@ -84,6 +87,9 @@ import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, type Lookup } from "@/lib/audit/run";
+import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
+import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
 
@@ -2372,7 +2378,7 @@ export async function decideContactMatch(form: FormData) {
 // log every request's exact cost, and save the answer for people to review.
 // ---------------------------------------------------------------------------
 
-async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add" | "ask_toad" | "care_suggestions" | "care_draft", r: AiResult) {
+async function logAiUsage(db: Awaited<ReturnType<typeof createDatabaseClient>>, feature: "briefing" | "client_profile" | "work_orders" | "work_prompt" | "quick_add" | "ask_toad" | "care_suggestions" | "care_draft" | "audit_words", r: AiResult) {
   if (!r.startedAt) return; // never sent (budget stop, not set up): not a run, nothing charged
   const known = r.usage !== undefined && r.costUsd !== undefined;
   const row = {
@@ -3435,6 +3441,194 @@ export async function saveAdsPlans(_prev: { error?: string; ok?: boolean } | und
   }
   revalidatePath("/audits", "layout");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Run audit (docs/AUDIT_RUN_PLAN.md, Phase E1, 0035). Atlas asks DataForSEO directly
+// (read-only lookups, src/lib/audit/sources/dataforseo.ts), Claude writes only the SEO
+// words from the finished numbers (no tools, coded names), and the result goes through the
+// same checker as pasted results. Real money: the worst-case estimate goes into
+// audit_spend FIRST, so the database refuses a run over the per-audit, weekly or monthly cap.
+// ---------------------------------------------------------------------------
+
+export type RunState = { error?: string; started?: boolean } | undefined;
+
+const RUN_SETUP = "Running audits needs one setup step first (0035 SQL).";
+// The page allows 180 s (maxDuration); lookups stop at 120 s so the notes and saving still fit.
+const RUN_DEADLINE_MS = 120_000;
+
+export async function startAuditRun(_prev: RunState, form: FormData): Promise<RunState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can run audits." };
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return { error: "Unknown audit." };
+  const audit = await getSavedAudit(id);
+  if (!audit) return { error: "Couldn't find that audit." };
+  if (!isLead(me.role) && (audit.createdBy !== me.userId || audit.archived)) return { error: "You can run only your own audits that aren't archived." };
+  if (!isDataForSeoConfigured()) return { error: "DataForSEO isn't connected yet. The owner adds its login in Vercel's settings." };
+  const latest = await getLatestAuditRun(id);
+  if (!latest.ready) return { error: RUN_SETUP };
+  if (latest.run?.status === "running" && !latest.run.stale) return { error: "This audit is already running. The page updates by itself." };
+
+  let estimate: number;
+  let steps: string[];
+  if (audit.kind === "ads") {
+    const intake = audit.ads?.intake;
+    if (!intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
+    const plan = planAdsRun(intake, audit.ads?.sections ?? []);
+    estimate = plan.estimateUsd;
+    steps = [...new Set([...plan.first.map((l) => l.step), ...(audit.ads?.sections.includes("ads_spend") ? ["Competitor ad spend"] : []), ...(audit.ads?.sections.includes("ads_landing") ? ["Landing page speed"] : []), "Checking and saving"])];
+  } else {
+    if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
+    const plan = planSeoRun(audit.intake, audit.sections);
+    estimate = plan.estimateUsd;
+    steps = [...new Set([...plan.first.map((l) => l.step), "Competitors", "Google profiles", "Writing the notes", "Checking and saving"])];
+  }
+
+  const db = await createDatabaseClient();
+  const { data: run, error: runError } = await db
+    .from("audit_runs")
+    .insert({ audit_id: id, est_usd: estimate, steps: steps.map((label) => ({ label, state: "waiting" })) })
+    .select("id")
+    .single();
+  if (runError || !run) {
+    console.warn(`Audit run not started: ${runError?.code}`);
+    return { error: MISSING_TABLE.has(runError?.code ?? "") ? RUN_SETUP : "Couldn't start the run (the audit may be archived, or not yours)." };
+  }
+  const runId = run.id as string;
+  // Money first: the database refuses this row if it would go over any cap.
+  const { error: spendError } = await db.from("audit_spend").insert({ audit_id: id, provider: "dataforseo", usd: Math.max(0.01, estimate) });
+  if (spendError) {
+    const m = spendError.message ?? "";
+    const reason = m.includes("per-audit") ? "the per-audit cap" : m.includes("weekly") ? "your weekly cap" : m.includes("monthly") ? "this month's cap for everyone" : null;
+    const message = reason ? `Not run: about $${estimate.toFixed(2)} would go over ${reason}. The owner can change the caps in Audits → Settings.` : "Not run: the spending check refused it.";
+    await db.from("audit_runs").update({ status: "failed", error: message, finished_at: new Date().toISOString() }).eq("id", runId);
+    revalidatePath(`/audits/${id}`);
+    return { error: message };
+  }
+  revalidatePath(`/audits/${id}`);
+  // The lookups take a minute or two: they continue after this answer is sent.
+  after(() => runAuditInBackground(runId, audit, steps).catch((e) => console.warn(`Audit run crashed: ${e instanceof Error ? e.name : "unknown"}`)));
+  return { started: true };
+}
+
+async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels: string[]) {
+  const db = await createDatabaseClient();
+  const deadline = Date.now() + RUN_DEADLINE_MS;
+  const state = new Map(stepLabels.map((l) => [l, "waiting" as "waiting" | "working" | "done" | "skipped"]));
+  const answers = new Map<string, DfsAnswer>();
+  const problems: string[] = [];
+  let costUsd = 0;
+  let calls = 0;
+  let aiUsd: number | null = null;
+  const saveSteps = () => db.from("audit_runs").update({ steps: [...state].map(([label, s]) => ({ label, state: s })) }).eq("id", runId);
+  const finish = async (status: "done" | "failed", error: string | null) => {
+    for (const [l, s] of state) if (s !== "done") state.set(l, "skipped");
+    await db
+      .from("audit_runs")
+      .update({ status, error: error ? error.slice(0, 300) : null, actual_usd: Math.min(50, Math.round(costUsd * 10000) / 10000), ai_usd: aiUsd, steps: [...state].map(([label, s]) => ({ label, state: s })), finished_at: new Date().toISOString() })
+      .eq("id", runId);
+  };
+  /** Runs lookups a few at a time; a failed lookup leaves its numbers "not found". */
+  const runLookups = async (list: Lookup[]) => {
+    const byStep = new Map<string, Lookup[]>();
+    for (const l of list) byStep.set(l.step, [...(byStep.get(l.step) ?? []), l]);
+    for (const [step, group] of byStep) {
+      if (Date.now() > deadline) break;
+      state.set(step, "working");
+      await saveSteps();
+      for (let i = 0; i < group.length; i += 6) {
+        if (Date.now() > deadline) break;
+        await Promise.all(
+          group.slice(i, i + 6).map(async (l) => {
+            calls++;
+            try {
+              const a = await dfsLookup(l.path, l.task);
+              answers.set(l.id, a);
+              costUsd += a.costUsd ?? DFS_PRICE[l.path];
+            } catch (e) {
+              costUsd += DFS_PRICE[l.path];
+              if (problems.length < 3) problems.push(e instanceof DfsError ? e.message : "A lookup failed.");
+            }
+          }),
+        );
+      }
+      state.set(step, "done");
+      await saveSteps();
+    }
+  };
+  const retrieved = nyDate(new Date());
+  const today = retrieved;
+
+  try {
+    if (audit.kind === "ads") {
+      const intake = audit.ads!.intake!;
+      const sections = audit.ads!.sections;
+      const plan = planAdsRun(intake, sections);
+      await runLookups(plan.first);
+      const serps = adsMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
+      const extra: Lookup[] = [];
+      if (sections.includes("ads_spend")) {
+        const top = [...new Set([...readBidders(serps, intake.domain).map((b) => b.domain), ...intake.competitors.map((c) => c.domain)])].slice(0, RUN_RULES.competitors);
+        extra.push(...top.map((d) => plan.perBidder(d)));
+      }
+      if (sections.includes("ads_landing")) {
+        const own = serps.flatMap((s) => s?.paid ?? []).find((p) => p.domain === intake.domain)?.url;
+        extra.push(plan.speed(own && /^https?:\/\//.test(own) ? own : `https://${intake.domain}`));
+      }
+      await runLookups(extra);
+      state.set("Checking and saving", "working");
+      const block = buildAdsBlock(intake, sections, { answers, retrieved });
+      const checked = parseAdsResults(block, { intake, today });
+      if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
+      await saveRunResults(db, audit.id, block, {}, checked.summary.retrieved);
+    } else {
+      const intake = audit.intake!;
+      const plan = planSeoRun(intake, audit.sections);
+      await runLookups(plan.first);
+      const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
+      const competitors = intake.competitors.length
+        ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
+        : findCompetitors(serps, intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+      const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
+      await runLookups(sites.flatMap((s) => plan.perSite(s.domain, s.name)));
+      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls });
+      // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
+      state.set("Writing the notes", "working");
+      await saveSteps();
+      const left = isAiConfigured() ? await getAiBudgetLeft() : null;
+      if (left !== null && left > 0.05 && Date.now() < deadline) {
+        const input = wordsInput(block, intake.company, intake.niche);
+        const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 1500, remainingUsd: left });
+        await logAiUsage(db, "audit_words", result);
+        if (result.ok) {
+          block = applyWords(block, result.data, input.codes);
+          aiUsd = result.costUsd;
+        }
+      }
+      state.set("Writing the notes", "done");
+      state.set("Checking and saving", "working");
+      const settings = await getAuditSettings();
+      const config = buildAuditConfig(intake, settings.agency, audit.createdAt.slice(0, 10));
+      let checked = parseSeoResults(block, { intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today });
+      if (!checked.ok && block.headline) {
+        // If Claude's words broke a rule (e.g. a price), keep the numbers without the words.
+        block = { ...block, headline: "", pageNotes: {}, fixes: [], scorecard: [] };
+        checked = parseSeoResults(block, { intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today });
+      }
+      if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
+      await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
+    }
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems[0]}` : null);
+  } catch (e) {
+    await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
+  }
+}
+
+async function saveRunResults(db: Awaited<ReturnType<typeof createDatabaseClient>>, auditId: string, block: Record<string, unknown>, config: Record<string, unknown>, retrieved: string) {
+  const { error } = await db.from("audits").update({ data: { v: 1, block, by: "run" }, config, data_retrieved: retrieved }).eq("id", auditId);
+  if (error) throw new Error("Couldn't save the results to the audit.");
 }
 
 /** What "Attach results" shows: problems, or what was found (and whether it was saved). */
