@@ -53,6 +53,10 @@ export function extractResultsBlock(text: string): Extracted {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "The results block must be one object in curly brackets." };
   const block = parsed as Record<string, unknown>;
   if (block.atlas !== "results-v1") return { ok: false, error: 'This isn\'t an Atlas results block (it should say "atlas": "results-v1").' };
+  // The prompt itself (its blank template) pasted back instead of Claude's answer.
+  if (block.retrieved === "YYYY-MM-DD") {
+    return { ok: false, error: "This is the prompt's blank template, not Claude's answer. Paste the prompt into Claude (with DataForSEO connected), let it run, then paste Claude's reply here. Or use Run audit above." };
+  }
   return { ok: true, block };
 }
 

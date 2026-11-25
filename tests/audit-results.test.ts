@@ -94,6 +94,7 @@ describe("finding the results block", () => {
     expect(err(`${RESULTS_MARKER}\n{"atlas": "results-v1", "kind": "seo"`)).toMatch(/cut off/);
     expect(err(`${RESULTS_MARKER}\n{"atlas": "results-v1", kind: seo}`)).toMatch(/isn't valid/);
     expect(err(`${RESULTS_MARKER}\n{"hello": 1}`)).toMatch(/isn't an Atlas results block/);
+    expect(err(seoResultsTemplate(seoIntake, ["Denver"]))).toMatch(/blank template, not Claude's answer/);
     expect(err("x".repeat(400_001))).toMatch(/too big/);
   });
 });
@@ -123,7 +124,8 @@ describe("SEO results check", () => {
     expect(seoErrors((b) => (b.website = "notthisone.example"))).toMatch(/this audit is for milehighhomes\.example/);
     expect(seoErrors((b) => (b.kind = "ads"))).toMatch(/Google Ads results/);
     expect(seoErrors((b) => (b.source = "sample"))).toMatch(/main source/);
-    expect(seoErrors((b) => (b.retrieved = "YYYY-MM-DD"))).toMatch(/real date/);
+    expect(seoErrors((b) => (b.retrieved = "YYYY-MM-DD"))).toMatch(/blank template, not Claude's answer/);
+    expect(seoErrors((b) => (b.retrieved = "2026-13-40"))).toMatch(/real date/);
     expect(seoErrors((b) => (b.retrieved = "2027-01-01"))).toMatch(/not in the future/);
   });
 
