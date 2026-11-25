@@ -8,7 +8,9 @@ import { notFound } from "next/navigation";
 import { archiveAudit } from "@/app/actions";
 import { AdsAuditView } from "@/components/audit/ads/AdsAuditView";
 import { AttachResults } from "@/components/audit/AttachResults";
+import { AuditSteps } from "@/components/audit/AuditSteps";
 import { RunAudit } from "@/components/audit/RunAudit";
+import { unknownPlaces } from "@/lib/audit/places-list";
 import { capsLine } from "@/lib/audit/caps-line";
 import { planSeoRun } from "@/lib/audit/run";
 import { isDataForSeoConfigured } from "@/lib/audit/sources/dataforseo";
@@ -125,29 +127,48 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
           )}
         </div>
 
-        <div className="min-w-0">
-          {i && canEdit && (
-            <div className="mb-3 mt-4 @3xl:mt-0">
-              <RunAudit id={audit.id} {...runCard} estimateUsd={planSeoRun(i, audit.sections).estimateUsd} hasResults={audit.hasResults} />
-            </div>
-          )}
-          {i && (
-            <>
-              <SectionTitle aside={<CopyButton text={prompt} label="Copy the custom prompt" />}>Or run it yourself: custom prompt</SectionTitle>
+        <div className="mt-4 min-w-0 @3xl:mt-0">
+          {i && canEdit ? (
+            <AuditSteps
+              id={audit.id}
+              pageCount={audit.pageCount}
+              canEdit={canEdit}
+              detailsOk
+              placeIssues={unknownPlaces(i.state, [i.hqTown, ...i.cities])}
+              hasResults={audit.hasResults}
+              retrieved={audit.dataRetrieved}
+              run={<RunAudit id={audit.id} {...runCard} estimateUsd={planSeoRun(i, audit.sections).estimateUsd} hasResults={audit.hasResults} compact />}
+              advanced={
+                <>
               <div className="glass rounded-3xl p-4">
-                <p className="text-xs text-muted">Copy this into a Claude chat that has DataForSEO connected. It already has this business and only the checkpoints picked. The app never sends it anywhere.</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs text-muted">Copy this into a Claude chat that has DataForSEO connected. It already has this business and only the checkpoints picked. The app never sends it anywhere.</p>
+                  <CopyButton text={prompt} label="Copy the custom prompt" />
+                </div>
+                <details className="mt-2">
+                  <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">Show the prompt</summary>
+                  <pre className="mt-1 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-black/20 p-3 text-[11.5px] leading-relaxed text-muted">{prompt}</pre>
+                </details>
+              </div>
+                  <AttachResults id={audit.id} attachedOn={audit.dataRetrieved} />
+                </>
+              }
+            />
+          ) : i ? (
+            <>
+              <SectionTitle>Custom prompt</SectionTitle>
+              <div className="glass rounded-3xl p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs text-muted">Copy this into a Claude chat that has DataForSEO connected. It already has this business and only the checkpoints picked. The app never sends it anywhere.</p>
+                  <CopyButton text={prompt} label="Copy the custom prompt" />
+                </div>
                 <details className="mt-2">
                   <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">Show the prompt</summary>
                   <pre className="mt-1 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-black/20 p-3 text-[11.5px] leading-relaxed text-muted">{prompt}</pre>
                 </details>
               </div>
             </>
-          )}
-          {i && canEdit && (
-            <div className="mt-3">
-              <AttachResults id={audit.id} attachedOn={audit.dataRetrieved} />
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

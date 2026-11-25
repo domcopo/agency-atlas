@@ -28,3 +28,10 @@ export function placeBookFor(state: string): PlaceBook | null {
   }
   return b;
 }
+
+/** The places in a saved audit that Google doesn't know (shown as "fix these" on the audit page). */
+export function unknownPlaces(state: string, names: string[]): { name: string; suggest: string[] }[] {
+  const book = placeBookFor(state);
+  if (!book) return [];
+  return names.filter((n) => n && !book.canonical(n)).map((name) => ({ name, suggest: book.suggest(name) }));
+}

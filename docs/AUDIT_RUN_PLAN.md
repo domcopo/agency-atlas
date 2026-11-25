@@ -72,3 +72,6 @@ Status: **E1 approved and built 2026-11-25** on branch `audit-results` (with Att
 - Typing is cleaned (`src/lib/audit/places.ts`): "Westminster & Thornton" → two places; "Trumbull and Columbiana County" → Trumbull County, Columbiana County; "Warren, OH" → Warren.
 - Builders suggest names for the home town and show ✓ / "did you mean …" under the cities (one state's list at a time via `getStatePlaces`). Saving checks every place on the server and uses Google's spelling; reading older audits never checks, so nothing old breaks.
 
+## Audit page as steps (2026-11-25, owner request)
+- `src/components/audit/AuditSteps.tsx`: 1 Check the business details (ticks itself when every place is one Google knows; otherwise lists them with "did you mean" and an Edit button), 2 Pull the numbers (the Run audit card: DataForSEO + Claude, all inside Atlas; ticks when results are in), 3 Look over the pages, 4 Save as PDF and send. The copy-prompt + Attach results route is folded under "Advanced: run it in Claude yourself".
+

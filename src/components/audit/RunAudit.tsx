@@ -20,11 +20,13 @@ export interface RunAuditProps {
   capsLine: string | null;
   run: AuditRunView | null;
   hasResults: boolean;
+  /** Inside the steps card: no heading or frame of its own. */
+  compact?: boolean;
 }
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
-export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, hasResults }: RunAuditProps) {
+export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, hasResults, compact = false }: RunAuditProps) {
   const [state, action, pending] = useActionState(startAuditRun, undefined);
   const router = useRouter();
   const running = (run?.status === "running" && !run.stale) || (pending && !state);
@@ -43,12 +45,16 @@ export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, ha
   };
 
   return (
-    <form onSubmit={submit} className="glass space-y-3 rounded-3xl p-4">
+    <form onSubmit={submit} className={compact ? "space-y-3" : "glass space-y-3 rounded-3xl p-4"}>
       <input type="hidden" name="id" value={id} />
-      <div>
-        <p className="text-sm font-semibold">Run audit</p>
-        <p className="text-xs text-muted">Atlas pulls the numbers from DataForSEO and fills the pages. Takes 1–3 minutes; you can leave this page and come back.</p>
-      </div>
+      {compact ? (
+        <p className="text-[11px] text-faint">Takes 1–3 minutes; you can leave this page and come back.</p>
+      ) : (
+        <div>
+          <p className="text-sm font-semibold">Run audit</p>
+          <p className="text-xs text-muted">Atlas pulls the numbers from DataForSEO and fills the pages. Takes 1–3 minutes; you can leave this page and come back.</p>
+        </div>
+      )}
 
       {!configured ? (
         <p className="rounded-xl bg-white/5 px-3 py-2 text-xs text-muted">Not connected yet: the owner adds the DataForSEO login in Vercel&apos;s settings. Until then, use the prompt and Attach results below.</p>
@@ -60,7 +66,7 @@ export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, ha
             Costs up to <span className="font-semibold">{usd(estimateUsd)}</span> of DataForSEO (usually less), plus a few cents of AI for the notes.
             {capsLine ? <span className="text-muted"> {capsLine}</span> : null}
           </p>
-          <button type="submit" disabled={running} className="pressable inline-flex min-h-12 w-full items-center justify-center gap-1.5 rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">
+          <button type="submit" disabled={running} className="pressable inline-flex min-h-12 w-full items-center justify-center gap-1.5 rounded-xl bg-violet-deep text-sm font-semibold text-white disabled:opacity-60">
             {running ? <Loader2 aria-hidden className="size-4 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden className="size-4" />}
             {running ? "Running…" : hasResults ? `Run again (up to ${usd(estimateUsd)})` : `Run audit (up to ${usd(estimateUsd)})`}
           </button>

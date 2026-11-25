@@ -170,3 +170,17 @@ describe("run audit wiring", () => {
     expect(bgFn).toMatch(/askAi\(\{ task: AUDIT_WORDS_TASK, data: input\.data, schema: AUDIT_WORDS_SCHEMA/);
   });
 });
+
+describe("audit page as steps", () => {
+  it("both audit pages show the steps (run inside Atlas first) with the prompt route folded under Advanced", () => {
+    for (const f of ["src/app/(app)/audits/[id]/page.tsx", "src/components/audit/ads/AdsAuditView.tsx"]) {
+      const s = readFileSync(f, "utf8");
+      expect(s, f).toContain("<AuditSteps");
+      expect(s, f).toMatch(/run=\{<RunAudit [^>]*compact \/>\}/);
+      expect(s, f).toMatch(/advanced=\{[\s\S]*<AttachResults/);
+      expect(s, f).toContain("placeIssues={unknownPlaces(i.state, [i.hqTown, ...i.cities])}");
+    }
+    const steps = readFileSync("src/components/audit/AuditSteps.tsx", "utf8");
+    expect(steps).toContain('title="Advanced: run it in Claude yourself"');
+  });
+});
