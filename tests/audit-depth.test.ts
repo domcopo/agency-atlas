@@ -2,7 +2,7 @@
 // model, homepage check. Pure functions; every business and number here is fictional (.example).
 
 import { describe, expect, it } from "vitest";
-import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
+import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, pathOtherState, variantKey, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
 import { goalScenario } from "@/lib/audit/compute";
 
 const markets = auditMarkets("Denver", ["Arvada", "Lakewood", "Jefferson County"], "CO");
@@ -206,5 +206,27 @@ describe("the goal is never below today", () => {
     expect(goalScenario(rows, 66)?.name).toBe("Stronger");
     expect(goalScenario(rows, 100)).toBeNull();
     expect(goalScenario(null, 10)).toBeNull();
+  });
+});
+
+describe("one count per group of word-order variants", () => {
+  it("variants share a key; real differences don't", () => {
+    expect(variantKey("car rental near me")).toBe(variantKey("near me car rental"));
+    expect(variantKey("car rentals in near me")).toBe(variantKey("car rental near me"));
+    expect(variantKey("cheap car rental near me")).not.toBe(variantKey("car rental near me"));
+    expect(variantKey("car rental cleveland")).not.toBe(variantKey("car rental near me"));
+  });
+
+  it("the universe keeps only the first (most searched) of each group", () => {
+    const m = auditMarkets("Cleveland", [], "OH");
+    const sug = ["car rental near me", "near me car rental", "car rental in near me", "cheap car rental near me"].map((keyword, i) => ({ keyword, usVolume: 100 - i, difficulty: null, intent: null }));
+    expect(buildUniverse(["car rental"], m, "OH", sug)).toEqual(["car rental", "car rental cleveland", "car rental near me", "cheap car rental near me"]);
+  });
+
+  it("town pages of another state aren't shown as built for this area", () => {
+    expect(pathOtherState("/united-states/car-rental-lakewood-nj.html", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/newyork/brooklyn", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/ohio/cleveland/cle", "OH")).toBe(false);
+    expect(pathOtherState("/car-rental-cleveland-oh.html", "OH")).toBe(false);
   });
 });

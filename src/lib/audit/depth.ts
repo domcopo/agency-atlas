@@ -172,6 +172,28 @@ export function topicOf(phrases: string[], markets: Market[]): Topic {
   return { words, need: Math.max(1, Math.min(2, ...per.map((w) => w.length))) };
 }
 
+/**
+ * Google Ads gives word-order variants the SAME count ("car rental near me", "near me car
+ * rental", "car rental in near me" are one group of searches). One key per group, so a total
+ * never counts the same searches three times.
+ */
+const FILLER = new Set(["a", "an", "the", "in", "on", "at", "for", "of", "to", "near", "me"]);
+export function variantKey(keyword: string): string {
+  const words = keyword.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w && !FILLER.has(w)).map(stem);
+  const near = ` ${keyword.toLowerCase()} `.includes(" near me ") ? ["@near"] : [];
+  return [...new Set([...words, ...near])].sort().join(" ");
+}
+
+/** Does a page address belong to another state ("/car-rental-lakewood-nj.html", "/newyork/brooklyn")? */
+export function pathOtherState(path: string, state: string): boolean {
+  const tokens = path.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const own = state.toUpperCase();
+  return tokens.some((t) => {
+    if (t.length === 2) return !CODE_WORDS.has(t) && t.toUpperCase() !== own && t.toUpperCase() in US_STATES;
+    return Object.entries(US_STATES).some(([code, name]) => code !== own && name.length > 4 && t === name.toLowerCase().replace(/\s+/g, ""));
+  });
+}
+
 /** Is the search about what this business sells? ("hotels cleveland" isn't, for a car rental.) */
 export function onTopic(keyword: string, topic: Topic): boolean {
   if (!topic.words.length || topic.known?.has(keyword.toLowerCase())) return true;
@@ -217,8 +239,10 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
   const seen = new Set<string>();
   const add = (k: string) => {
     const key = k.trim().toLowerCase().replace(/\s+/g, " ");
-    if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && out.length < DEPTH_RULES.universe) {
+    const group = variantKey(key);
+    if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && !seen.has(group) && out.length < DEPTH_RULES.universe) {
       seen.add(key);
+      seen.add(group);
       out.push(key);
     }
   };
@@ -326,7 +350,7 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     const m = marketOf(r.keyword, markets);
     if (m && r.position <= 20) {
       marketSet.add(m.label);
-      if (r.path && r.path !== "/") pageValue.set(r.path, (pageValue.get(r.path) ?? 0) + clicks + 0.001);
+      if (r.path && r.path !== "/" && !pathOtherState(r.path, state)) pageValue.set(r.path, (pageValue.get(r.path) ?? 0) + clicks + 0.001);
     }
   }
   return {
