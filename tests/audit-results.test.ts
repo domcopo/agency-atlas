@@ -266,3 +266,12 @@ describe("attach results wiring", () => {
     expect(card).not.toMatch(/fetch\(|XMLHttpRequest|sendBeacon/);
   });
 });
+
+describe("the price rule only stops OUR prices (2026-11-25: modeled revenue tripped it)", () => {
+  it("allows modeled revenue in the words, refuses our plan prices", () => {
+    expect(seoErrors((b) => (b.headline = "A focused plan could add $2,600/mo in modeled revenue."))).toBe("");
+    expect(seoErrors((b) => (b.pageNotes = { rankings: "Leaders earn $55,000 a month on this plan of city pages." }))).toBe("");
+    expect(seoErrors((b) => (b.headline = "Our Growth plan is $735 per month."))).toMatch(/prices come from Atlas settings/);
+    expect(seoErrors((b) => (b.fixes[0]!.detail = "We charge $500/mo for this."))).toMatch(/prices come from Atlas settings/);
+  });
+});

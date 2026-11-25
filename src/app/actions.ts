@@ -3526,6 +3526,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let costUsd = 0;
   let calls = 0;
   let aiUsd: number | null = null;
+  let wordsNote: string | null = null;
   const saveSteps = () => db.from("audit_runs").update({ steps: [...state].map(([label, s]) => ({ label, state: s })) }).eq("id", runId);
   const finish = async (status: "done" | "failed", error: string | null) => {
     if (status === "done") state.set("Checking and saving", "done");
@@ -3618,14 +3619,15 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const config = buildAuditConfig(intake, settings.agency, audit.createdAt.slice(0, 10));
       let checked = parseSeoResults(block, { intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today });
       if (!checked.ok && block.headline) {
-        // If Claude's words broke a rule (e.g. a price), keep the numbers without the words.
+        // If Claude's words broke a rule (e.g. a price), keep the numbers without the words, and say why.
+        wordsNote = `Claude's notes were left out (${checked.errors[0] ?? "they didn't pass the checks"}).`;
         block = { ...block, headline: "", pageNotes: {}, fixes: [], scorecard: [] };
         checked = parseSeoResults(block, { intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today });
       }
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems[0]}` : null);
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems[0]}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
   }

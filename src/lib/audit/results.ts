@@ -119,7 +119,7 @@ function text(c: Ctx, v: unknown, label: string, max: number = RESULTS_LIMITS.te
   const t = v.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   const found = contactDetailIn(t);
   if (found) c.errors.push(`${label}: leave out the ${found}.`);
-  if (/\$\s?\d/.test(t) && /\b(per month|\/mo|a month|monthly)\b/i.test(t) && /\b(plan|package|retainer|our fee|we charge)\b/i.test(t)) c.errors.push(`${label}: prices come from Atlas settings, not from the results.`);
+  if (/\$\s?\d/.test(t) && /\b(per month|\/mo|a month|monthly)\b/i.test(t) && /\b(our(?:\s+[\w-]+){0,3}\s+(?:plans?|packages?|fees?|prices?|programs?)|we charge|retainer)\b/i.test(t)) c.errors.push(`${label}: prices come from Atlas settings, not from the results.`);
   return t.slice(0, max);
 }
 
