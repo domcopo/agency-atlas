@@ -18,6 +18,8 @@ import { byImportance, EST_OPTIONS, isImportant, needsReview, parseSteps } from 
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
 import type { RosterClient, WorkOrderDraft, WorkOrderDrafts } from "@/lib/types";
 import { findSecrets } from "@/lib/kit";
+import { asGuideRole, canEditGuide, GUIDE_LIMITS } from "@/lib/role-guides";
+import { asIdeaStatus, checkGoal, checkIdea, IDEA_RULES } from "@/lib/ideas";
 import { matchClient } from "@/lib/billing";
 import {
   getAiStatus,
@@ -4313,4 +4315,134 @@ export async function attachWatchResults(_prev: WatchFormState, form: FormData):
   const done = await db.from("watch_runs").update({ status: "attached", actual_usd: results.costUsd, checks_saved: saved }).eq("id", runId);
   if (done.error) console.warn(`Watcher round not marked attached: ${done.error.code}`);
   return watchDone(`Saved ${saved} rank checks and ${results.volumes.length} search volumes${results.skipped ? ` (${results.skipped} rows didn't match and were left out)` : ""}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Role guides, personal goals and ideas (docs/ROLE_GUIDES_PLAN.md, 0036). The database
+// enforces every rule again (who edits which guide, own goals only, owner-only review).
+// Nothing here is sent anywhere or given to the AI.
+// ---------------------------------------------------------------------------
+
+type GuideState = { error?: string; ok?: boolean } | undefined;
+const NEEDS_0036 = "This needs one setup step first (run 0036 in Supabase).";
+
+function cleanGuideBody(form: FormData): string {
+  const raw = form.get("body");
+  return typeof raw === "string" ? raw.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, GUIDE_LIMITS.body) : "";
+}
+
+/** Owner/managers: replace a starter part of a guide, or add/edit an added section. */
+export async function saveGuidePart(_prev: GuideState, form: FormData): Promise<GuideState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  const role = asGuideRole(text(form, "role", 12));
+  if (!me || !role || !canEditGuide(me.role, role)) return { error: "Only the owner or a manager can edit this guide." };
+  const part = oneOf(["duties", "goals", "how_to", "extra"] as const, text(form, "part", 10));
+  if (!part) return { error: "Unknown part of the guide." };
+  const id = text(form, "id", 40);
+  if (id && !isUuid(id)) return { error: "Unknown section." };
+  const title = part === "extra" ? text(form, "title", GUIDE_LIMITS.title) : null;
+  if (part === "extra" && !title) return { error: "Give the section a title." };
+  const body = cleanGuideBody(form);
+  if (!body.trim()) return { error: "Write something first (or use Reset to go back to the starter text)." };
+  const secret = findSecrets(`${title ?? ""}\n${body}`);
+  if (secret) return { error: secret };
+  const db = await createDatabaseClient();
+  const res = id
+    ? await db.from("role_guide_parts").update({ title, body }).eq("id", id).eq("role", role).select("id").maybeSingle()
+    : await db.from("role_guide_parts").insert({ role, part, title, body }).select("id").single();
+  if (res.error || !res.data) {
+    console.warn(`Guide not saved: ${res.error?.code}`);
+    if (MISSING_TABLE.has(res.error?.code ?? "")) return { error: NEEDS_0036 };
+    if (res.error?.code === "23505") return { error: "Someone else just edited this part. Reload the page and try again." };
+    if (res.error?.code === "23514") return { error: "That text was refused (it may look like a password or key)." };
+    return { error: "Couldn't save it." };
+  }
+  revalidatePath("/kit", "layout");
+  return { ok: true };
+}
+
+/** Owner/managers: Reset a part to the starter text, or remove an added section (archived, never deleted). */
+export async function resetGuidePart(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  const role = asGuideRole(text(form, "role", 12));
+  const id = text(form, "id", 40);
+  if (!me || !role || !canEditGuide(me.role, role) || !isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("role_guide_parts").update({ archived: true }).eq("id", id).eq("role", role);
+  if (error) console.warn(`Guide reset refused: ${error.code}`);
+  revalidatePath("/kit", "layout");
+}
+
+/** Owner/managers: give a teammate a goal. */
+export async function addGoal(_prev: GuideState, form: FormData): Promise<GuideState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can set goals." };
+  const userId = text(form, "userId", 40);
+  if (!isUuid(userId)) return { error: "Pick who the goal is for." };
+  const checked = checkGoal(form.get("goal"), form.get("dueOn"));
+  if (!checked.ok) return { error: checked.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("person_goals").insert({ user_id: userId, goal: checked.goal, due_on: checked.dueOn });
+  if (error) {
+    console.warn(`Goal not added: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code) ? NEEDS_0036 : error.code === "23514" ? "That text was refused (it may look like a password or key)." : "Couldn't add the goal." };
+  }
+  revalidatePath("/kit", "layout");
+  return { ok: true };
+}
+
+/** Tick your own goal done (or undo). Owner/managers can also archive a goal. */
+export async function goalOp(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  const id = text(form, "id", 40);
+  const op = text(form, "op", 10);
+  if (!me || !isUuid(id)) return;
+  const patch =
+    op === "done" ? { done_at: new Date().toISOString() } : op === "undo" ? { done_at: null } : op === "archive" && isLead(me.role) ? { archived: true } : null;
+  if (!patch) return;
+  const db = await createDatabaseClient();
+  // Non-leads can only touch their own rows (the database refuses the rest anyway).
+  const q = db.from("person_goals").update(patch).eq("id", id);
+  const { error } = isLead(me.role) ? await q : await q.eq("user_id", me.userId);
+  if (error) console.warn(`Goal change refused: ${error.code}`);
+  revalidatePath("/kit", "layout");
+}
+
+/** Anyone on the team: send an idea. Saved under your own login; nothing is sent anywhere. */
+export async function sendIdea(_prev: GuideState, form: FormData): Promise<GuideState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me) return { error: "Sign in first." };
+  const checked = checkIdea({ kind: form.get("kind"), title: form.get("title"), details: form.get("details") });
+  if (!checked.ok) return { error: checked.error };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("ideas").insert(checked.idea);
+  if (error) {
+    console.warn(`Idea not saved: ${error.code}`);
+    if (MISSING_TABLE.has(error.code)) return { error: NEEDS_0036 };
+    if (error.code === "23514") return { error: `That was refused: it may look like a password or key, or you've sent ${IDEA_RULES.perDay} ideas today already.` };
+    return { error: "Couldn't save your idea." };
+  }
+  revalidatePath("/kit", "layout");
+  return { ok: true };
+}
+
+/** Owner only: set an idea's status and an optional short reply the sender sees. */
+export async function reviewIdea(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (me?.role !== "owner") return;
+  const id = text(form, "id", 40);
+  const status = asIdeaStatus(text(form, "status", 12));
+  if (!isUuid(id) || !status) return;
+  const reply = text(form, "reply", IDEA_RULES.reply);
+  if (reply && findSecrets(reply)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("ideas").update({ status, reply: reply || null }).eq("id", id);
+  if (error) console.warn(`Idea review refused: ${error.code}`);
+  revalidatePath("/kit", "layout");
 }

@@ -36,8 +36,10 @@ import { daysBetween, fingerprint, monthsBetween } from "@/lib/format";
 import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type RunLogRow } from "@/lib/bot-runs";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
+import { guidesFor, type GuideEdit } from "@/lib/role-guides";
+import { asIdeaKind, asIdeaStatus, sortGoals, type Idea, type PersonGoal } from "@/lib/ideas";
 import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPerson, type SalesPipeline } from "@/lib/sales";
-import { asMemberRole, canCare, isLead, type MemberRole } from "@/lib/roles";
+import { asMemberRole, canCare, isLead, MEMBER_ROLES, type MemberRole } from "@/lib/roles";
 import { asOutcome, asVisitKind, PROSPECT_STATUSES, SCOUT_RULES, type Prospect as ScoutProspect, type ProspectStatus, type ScoutSignals, type ScoutSpendRow, type ScoutVisit } from "@/lib/scout";
 import {
   buildPriorities,
@@ -3048,3 +3050,137 @@ export async function getWatchAuditImport(auditId: string): Promise<AuditImport 
   if (!config.ok) return null;
   return fromAudit(config.config, data.data ?? null);
 }
+
+// ---------------------------------------------------------------------------
+// Role guides, personal goals and ideas (docs/ROLE_GUIDES_PLAN.md, 0036).
+// Which guides a person gets is decided HERE from their database role (guidesFor), never
+// from the address they typed. The database (0036 RLS) enforces the same thing again.
+// ---------------------------------------------------------------------------
+
+export interface RoleGuidesView {
+  /** The signed-in person's role (null in the demo with no database). */
+  viewerRole: MemberRole | null;
+  /** Guides this person may read, in order. */
+  roles: MemberRole[];
+  /** Saved edits for those roles (live only). */
+  edits: GuideEdit[];
+  /** 0036 has been run. */
+  ready: boolean;
+  /** Look only (previewing a developer). */
+  preview: boolean;
+}
+
+export const getRoleGuides = cache(async (): Promise<RoleGuidesView> => {
+  // Demo without a database: the starter guides only (fictional, nothing private).
+  if (!usesDatabase()) return { viewerRole: null, roles: [...MEMBER_ROLES], edits: [], ready: false, preview: false };
+  const me = await getMember();
+  if (!me) return { viewerRole: null, roles: [], edits: [], ready: false, preview: false };
+  const preview = !!(await getDeveloperViewer())?.preview;
+  // Previewing a developer: exactly what a developer gets.
+  const roles = preview ? (["developer"] as MemberRole[]) : guidesFor(me.role);
+  const db = await createDatabaseClient();
+  const { data, error } = await db
+    .from("role_guide_parts")
+    .select("id, role, part, title, body, position, updated_at")
+    .eq("archived", false)
+    .in("role", roles)
+    .order("position")
+    .limit(500);
+  if (error) return { viewerRole: me.role, roles, edits: [], ready: false, preview };
+  const edits: GuideEdit[] = [];
+  for (const r of data ?? []) {
+    const role = asMemberRole(r.role);
+    const part = r.part === "duties" || r.part === "goals" || r.part === "how_to" || r.part === "extra" ? r.part : null;
+    // Belt and braces: only roles this person may read, whatever the database returned.
+    if (!role || !part || !roles.includes(role)) continue;
+    edits.push({ id: r.id, role, part, title: r.title ?? null, body: String(r.body ?? ""), position: Number(r.position) || 0, updatedAt: String(r.updated_at) });
+  }
+  return { viewerRole: me.role, roles, edits, ready: true, preview };
+});
+
+export interface GoalsView {
+  ready: boolean;
+  /** The signed-in person's own goals. */
+  mine: PersonGoal[];
+  /** Owner/managers only: everyone's goals and the people they can set goals for. */
+  team: { userId: string; name: string; role: MemberRole; goals: PersonGoal[] }[];
+  /** Targets that already exist (sales 0020, client care 0031), only this person's own. */
+  numbers: { label: string; value: string }[];
+}
+
+const goalFrom = (r: Record<string, unknown>): PersonGoal => ({
+  id: String(r.id),
+  userId: String(r.user_id),
+  goal: String(r.goal ?? ""),
+  dueOn: (r.due_on as string | null) ?? null,
+  doneAt: (r.done_at as string | null) ?? null,
+});
+
+export const getGoals = cache(async (): Promise<GoalsView> => {
+  const none: GoalsView = { ready: false, mine: [], team: [], numbers: [] };
+  if (!usesDatabase()) return none;
+  const me = await getMember();
+  if (!me) return none;
+  const preview = !!(await getDeveloperViewer())?.preview;
+  const db = await createDatabaseClient();
+  // Previewing: never show the previewing person's own goals or the team's.
+  if (preview) return { ...none, ready: true };
+  const lead = isLead(me.role);
+  const [goals, people, sales, care] = await Promise.all([
+    db.from("person_goals").select("id, user_id, goal, due_on, done_at").eq("archived", false).limit(2000),
+    lead ? db.from("team_members").select("user_id, display_name, role").order("display_name") : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    me.role === "sales" ? db.from("sales_targets").select("daily_target").eq("user_id", me.userId).maybeSingle() : Promise.resolve({ data: null }),
+    canCare(me.role) ? db.from("care_targets").select("daily_points").eq("user_id", me.userId).maybeSingle() : Promise.resolve({ data: null }),
+  ]);
+  const numbers: GoalsView["numbers"] = [];
+  if (me.role === "sales") numbers.push({ label: "Daily lead touches (sales target)", value: String((sales.data as { daily_target?: number } | null)?.daily_target ?? SALES_RULES.defaultTarget) });
+  if (canCare(me.role)) numbers.push({ label: "Daily client care points", value: String((care.data as { daily_points?: number } | null)?.daily_points ?? DEFAULT_DAILY_POINTS) });
+  if (goals.error) return { ...none, numbers };
+  const all = ((goals.data ?? []) as Record<string, unknown>[]).map(goalFrom);
+  // Belt and braces: a non-lead only ever gets their own rows back.
+  const mine = sortGoals(all.filter((g) => g.userId === me.userId));
+  const team = lead
+    ? ((people.data ?? []) as Record<string, unknown>[])
+        .map((p) => ({ userId: String(p.user_id), name: String(p.display_name ?? "Teammate"), role: asMemberRole(p.role) }))
+        .filter((p): p is { userId: string; name: string; role: MemberRole } => p.role !== null)
+        .map((p) => ({ ...p, goals: sortGoals(all.filter((g) => g.userId === p.userId)) }))
+    : [];
+  return { ready: true, mine, team, numbers };
+});
+
+export interface IdeasView {
+  ready: boolean;
+  /** The owner's inbox (everyone's ideas, with who sent them). Empty for everyone else. */
+  inbox: Idea[];
+  /** Ideas the signed-in person sent. */
+  mine: Idea[];
+  isOwner: boolean;
+}
+
+export const getIdeas = cache(async (): Promise<IdeasView> => {
+  const none: IdeasView = { ready: false, inbox: [], mine: [], isOwner: false };
+  if (!usesDatabase()) return none;
+  const me = await getMember();
+  if (!me) return none;
+  if ((await getDeveloperViewer())?.preview) return { ...none, ready: true };
+  const isOwner = me.role === "owner";
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("ideas").select("id, created_by, kind, title, details, status, reply, created_at").order("created_at", { ascending: false }).limit(500);
+  if (error) return { ...none, isOwner };
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const names = new Map<string, string>();
+  if (isOwner) {
+    const ids = [...new Set(rows.map((r) => String(r.created_by)))];
+    const { data: people } = ids.length ? await db.from("team_members").select("user_id, display_name").in("user_id", ids) : { data: [] };
+    for (const p of people ?? []) names.set(p.user_id as string, p.display_name as string);
+  }
+  const ideas: Idea[] = rows.flatMap((r) => {
+    const kind = asIdeaKind(r.kind);
+    const status = asIdeaStatus(r.status);
+    if (!kind || !status) return [];
+    const mine = r.created_by === me.userId;
+    return [{ id: String(r.id), kind, status, title: String(r.title ?? ""), details: String(r.details ?? ""), reply: (r.reply as string | null) ?? null, createdAt: String(r.created_at), from: isOwner ? (names.get(String(r.created_by)) ?? "A former teammate") : null, mine }];
+  });
+  // Belt and braces: only the owner gets anyone else's ideas.
+  return { ready: true, inbox: isOwner ? ideas : [], mine: ideas.filter((i) => i.mine), isOwner };
+});

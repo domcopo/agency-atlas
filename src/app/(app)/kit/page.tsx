@@ -6,10 +6,12 @@ import { CopyButton } from "@/components/cards/CopyButton";
 import { KitDocForm } from "@/components/forms/KitDocForm";
 import { KitToolForm } from "@/components/forms/KitToolForm";
 import { KitText } from "@/components/kit/KitText";
+import { GuideCard } from "@/components/kit/RoleGuide";
 import { Fold } from "@/components/shell/Fold";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getKit, getDeveloperViewer, getMember, getTeam, getToday, usesDatabase } from "@/lib/data-source";
+import { getGoals, getIdeas, getKit, getDeveloperViewer, getMember, getRoleGuides, getTeam, getToday, usesDatabase } from "@/lib/data-source";
+import { isLead } from "@/lib/roles";
 import { KIT_RULES, kitKindLabel, plainText, renewsIn, reviewNote, searchKit, type KitDoc } from "@/lib/kit";
 
 export const metadata: Metadata = { title: "Kit" };
@@ -44,11 +46,24 @@ export default async function KitPage({ searchParams }: { searchParams: Promise<
   const kit = await getKit();
   const today = getToday();
   const q = ((await searchParams).q ?? "").slice(0, 80).trim();
+  // Role guides (docs/ROLE_GUIDES_PLAN.md): which guides is decided by the server from the database role.
+  const [guides, goals, ideas] = await Promise.all([getRoleGuides(), getGoals(), getIdeas()]);
+  const guideCard = (
+    <GuideCard
+      roles={guides.roles}
+      viewerRole={guides.viewerRole}
+      openGoals={goals.ready ? goals.mine.filter((g) => !g.doneAt).length : null}
+      newIdeas={ideas.isOwner ? ideas.inbox.filter((i) => i.status === "new").length : null}
+      lead={isLead(guides.viewerRole)}
+      preview={guides.preview}
+    />
+  );
 
   if (!kit.ready) {
     return (
       <>
         <PageHeader title="Kit" subtitle="Handbook, SOPs, FAQ, templates and tools" />
+        {guideCard}
         <p className="rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
           {editor ? (
             <>
@@ -81,6 +96,7 @@ export default async function KitPage({ searchParams }: { searchParams: Promise<
   return (
     <>
       <PageHeader title="Kit" subtitle="Handbook, SOPs, FAQ, templates and tools" />
+      {!q && guideCard}
 
       <form method="get" role="search" className="glass flex items-center gap-2 rounded-2xl px-3">
         <Search aria-hidden className="size-4 shrink-0 text-faint" />

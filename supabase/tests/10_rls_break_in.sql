@@ -2678,6 +2678,136 @@ select test.expect($$select * from public.ai_month_budget$$, -1, 'signed out can
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7ce. Role guides, personal goals, ideas (0036): owner/managers read every guide; everyone
+--      else reads only their own role's; managers can't edit the owner's guide. Goals: you
+--      read your own, may only tick them done. Ideas: sent as yourself, read your own; the
+--      owner reads all and alone reviews. No deletes. Two-factor everywhere.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('developer', 'duties', 'Developer duties (test)')$$, 1, 'manager rewrites the developer guide''s duties');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('sales', 'goals', 'Sales goals (test)')$$, 1, 'manager rewrites the sales goals');
+select test.expect($$insert into public.role_guide_parts (role, part, title, body) values ('va', 'extra', 'Friday list', 'VA extra (test)')$$, 1, 'manager adds a section to the VA guide');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('owner', 'duties', 'Owner duties (test)')$$, -1, 'a manager cannot edit the owner''s guide');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('developer', 'duties', 'A second live copy')$$, -3, 'one live replacement per part');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('developer', 'extra', 'No title')$$, -2, 'an added section needs a title');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('developer', 'how_to', 'password: hunter2')$$, -2, 'no passwords in a guide');
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('admin', 'duties', 'x')$$, -2, 'unknown roles are rejected');
+select test.expect($$update public.role_guide_parts set body = 'Developer duties v2 (test)' where role = 'developer' and part = 'duties'$$, 1, 'manager edits it again');
+select test.expect($$update public.role_guide_parts set role = 'owner' where role = 'developer' and part = 'duties'$$, -1, 'an edit cannot move to another role');
+select test.expect($$select * from public.role_guide_part_versions where part_id in (select id from public.role_guide_parts where role = 'developer' and part = 'duties')$$, 2, 'every save is kept in the history');
+select test.expect($$select * from public.role_guide_parts where updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 3, 'the database records who saved it');
+select test.expect($$delete from public.role_guide_parts$$, -1, 'guide edits are never deleted');
+select test.expect($$insert into public.person_goals (user_id, goal) values ('00000000-0000-0000-0000-0000000000a3', 'Finish three audits (test)')$$, 1, 'manager sets a developer''s goal');
+select test.expect($$insert into public.person_goals (user_id, goal) values ('00000000-0000-0000-0000-0000000000a5', 'Second developer''s goal (test)')$$, 1, 'manager sets another developer''s goal');
+select test.expect($$insert into public.person_goals (user_id, goal) values ('00000000-0000-0000-0000-0000000000a6', 'Sales goal (test)')$$, 1, 'manager sets a salesperson''s goal');
+select test.expect($$insert into public.person_goals (user_id, goal, created_by) values ('00000000-0000-0000-0000-0000000000a3', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'a goal cannot be set in someone else''s name');
+select test.expect($$select * from public.person_goals$$, 3, 'manager reads everyone''s goals');
+select test.expect($$select * from public.ideas$$, 0, 'manager reads no one else''s ideas');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$insert into public.role_guide_parts (role, part, body) values ('owner', 'duties', 'Owner duties (test)')$$, 1, 'owner edits the owner''s guide');
+select test.expect($$update public.role_guide_parts set archived = true where role = 'sales' and part = 'goals'$$, 1, 'owner resets the sales goals (archived, kept)');
+select test.expect($$select * from public.role_guide_parts$$, 4, 'owner reads every guide edit, archived too');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.role_guide_parts$$, 1, 'a developer reads only the developer guide');
+select test.expect($$select * from public.role_guide_parts where role in ('owner', 'manager', 'sales', 'va')$$, 0, 'a developer cannot read the owner, manager, sales or VA guides');
+select test.expect($$select * from public.role_guide_part_versions$$, 0, 'a developer cannot read guide history');
+select test.expect($$insert into public.role_guide_parts (role, part, title, body) values ('developer', 'extra', 'Mine', 'x')$$, -1, 'a developer cannot add to a guide');
+select test.expect($$update public.role_guide_parts set body = 'changed'$$, 0, 'a developer cannot edit a guide');
+select test.expect($$select * from public.person_goals$$, 1, 'a developer reads only their own goal');
+select test.expect($$select * from public.person_goals where user_id <> '00000000-0000-0000-0000-0000000000a3'$$, 0, 'a developer cannot read another person''s goals');
+select test.expect($$update public.person_goals set done_at = now() where goal = 'Finish three audits (test)'$$, 1, 'a developer ticks their own goal done');
+select test.expect($$update public.person_goals set goal = 'Easier goal' where goal = 'Finish three audits (test)'$$, -1, 'a developer cannot rewrite their goal');
+select test.expect($$update public.person_goals set due_on = '2099-01-01' where goal = 'Finish three audits (test)'$$, -1, 'a developer cannot move their goal''s date');
+select test.expect($$update public.person_goals set done_at = now() where user_id = '00000000-0000-0000-0000-0000000000a5'$$, 0, 'a developer cannot tick someone else''s goal');
+select test.expect($$insert into public.person_goals (user_id, goal) values ('00000000-0000-0000-0000-0000000000a3', 'Self-set (test)')$$, -1, 'a developer cannot add goals');
+select test.expect($$delete from public.person_goals$$, -1, 'goals are never deleted');
+select test.expect($$insert into public.ideas (kind, title, details) values ('feature', 'Dark mode for reports (test)', 'Details (test)')$$, 1, 'a developer sends an idea');
+select test.expect($$insert into public.ideas (kind, title, created_by) values ('feature', 'Spoofed', '00000000-0000-0000-0000-0000000000a6')$$, -1, 'nobody can send an idea as someone else');
+select test.expect($$insert into public.ideas (kind, title, status) values ('feature', 'Pre-approved', 'done')$$, -1, 'a new idea cannot set its own status');
+select test.expect($$insert into public.ideas (kind, title) values ('wish', 'Unknown kind')$$, -2, 'unknown idea kinds are rejected');
+select test.expect($$insert into public.ideas (kind, title, details) values ('broken', 'Login', 'password: hunter2')$$, -2, 'no passwords in an idea');
+select test.expect($$update public.ideas set status = 'planned'$$, 0, 'a developer cannot review ideas, even their own');
+select test.expect($$select * from public.ideas$$, 1, 'a developer reads their own idea');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a5","aal":"aal2"}';
+select test.expect($$select * from public.ideas$$, 0, 'another developer cannot read that idea');
+select test.expect($$select * from public.person_goals where user_id = '00000000-0000-0000-0000-0000000000a3'$$, 0, 'another developer cannot read the first developer''s goals');
+select test.expect($$select * from public.person_goals$$, 1, 'the second developer reads only their own goal');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.role_guide_parts$$, 0, 'sales reads no live sales edit (it was reset) and no other guide');
+select test.expect($$select * from public.person_goals$$, 1, 'sales reads only their own goal');
+select test.expect($$insert into public.ideas (kind, title) values ('easier', 'Faster lead logging (test)')$$, 1, 'sales sends an idea');
+select test.expect($$select * from public.ideas$$, 1, 'sales reads only their own idea');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal2"}';
+select test.expect($$select * from public.role_guide_parts$$, 1, 'a VA reads only the VA guide section');
+select test.expect($$select * from public.person_goals$$, 0, 'a VA reads no one else''s goals');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.ideas$$, 2, 'owner reads every idea');
+select test.expect($$update public.ideas set status = 'planned', reply = 'Good one, planned for next month.' where title = 'Dark mode for reports (test)'$$, 1, 'owner reviews an idea and replies');
+select test.expect($$select * from public.ideas where reviewed_by = '00000000-0000-0000-0000-0000000000a1' and reviewed_at is not null$$, 1, 'the database records who reviewed it');
+select test.expect($$update public.ideas set title = 'Rewritten'$$, -1, 'not even the owner rewrites someone''s idea');
+select test.expect($$update public.ideas set status = 'maybe'$$, -2, 'unknown statuses are rejected');
+select test.expect($$delete from public.ideas$$, -1, 'ideas are never deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.ideas where status = 'planned' and reply is not null$$, 1, 'the sender sees the owner''s reply');
+-- The daily cap: 9 more is 10 today; the 11th is refused.
+select test.expect($$insert into public.ideas (kind, title) select 'feature', 'Idea ' || g from generate_series(1, 9) g$$, 9, 'up to 10 ideas a day');
+select test.expect($$insert into public.ideas (kind, title) values ('feature', 'One too many')$$, -2, 'the 11th idea in a day is refused');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect($$insert into public.ideas (kind, title) values ('feature', 'Not on the team')$$, -1, 'someone not on the team cannot send ideas');
+select test.expect($$select * from public.role_guide_parts$$, 0, 'someone not on the team reads no guide');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect($$select * from public.role_guide_parts$$, 0, 'owner without two-factor reads no guide edits');
+select test.expect($$select * from public.person_goals$$, 0, 'owner without two-factor reads no goals');
+select test.expect($$select * from public.ideas$$, 0, 'owner without two-factor reads no ideas');
+select test.expect($$insert into public.ideas (kind, title) values ('feature', 'No 2FA')$$, -1, 'no two-factor, no sending ideas');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.ideas$$, -1, 'signed out cannot read ideas');
+select test.expect($$select * from public.person_goals$$, -1, 'signed out cannot read goals');
+select test.expect($$select * from public.role_guide_parts$$, -1, 'signed out cannot read guide edits');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
