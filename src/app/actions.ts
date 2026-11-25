@@ -3526,6 +3526,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let aiUsd: number | null = null;
   const saveSteps = () => db.from("audit_runs").update({ steps: [...state].map(([label, s]) => ({ label, state: s })) }).eq("id", runId);
   const finish = async (status: "done" | "failed", error: string | null) => {
+    if (status === "done") state.set("Checking and saving", "done");
     for (const [l, s] of state) if (s !== "done") state.set(l, "skipped");
     await db
       .from("audit_runs")

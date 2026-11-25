@@ -194,3 +194,17 @@ describe("other-state towns in a run", () => {
     expect(plan.first.find((l) => l.id === "pack:0")?.task).toMatchObject({ location_name: "Austintown,Ohio,United States" });
   });
 });
+
+describe("search phrases Google accepts (2026-11-25 run: one long phrase blocked the whole batch)", () => {
+  it("cleans symbols and skips phrases over 10 words instead of cutting them", async () => {
+    const { searchPhrase } = await import("@/lib/audit/run");
+    expect(searchPhrase("Home buying & sales Denver")).toBe("home buying and sales denver");
+    expect(searchPhrase("Roofing, gutters (repair) Austintown!")).toBe("roofing gutters repair austintown");
+    expect(searchPhrase("commercial property buying and sales denver aurora lakewood arvada westminster thornton")).toBeNull();
+    expect(moneyKeywords(["Commerrcial property buying & sales"], ["Denver Aurora Lakewood Arvada Westminster & Thornton", "Denver"], "CO").map((k) => k.keyword)).toEqual([
+      "commerrcial property buying and sales denver",
+      "commerrcial property buying and sales near me",
+    ]);
+    for (const k of moneyKeywords(["A very long service name with many words in it"], ["Denver"], "CO")) expect(k.keyword.split(" ").length).toBeLessThanOrEqual(10);
+  });
+});

@@ -55,12 +55,27 @@ const searchName = (city: string, state: string) => placeState(city, state).name
 const stateLocation = (state: string) => `${stateName(state)},United States`;
 const lower = (s: string) => s.trim().toLowerCase();
 
+/**
+ * A phrase Google Ads accepts: letters, numbers, spaces, apostrophes and dashes only ("&" →
+ * "and"), at most 10 words and 80 characters. Longer phrases are skipped (null), never cut
+ * mid-word: one bad phrase makes DataForSEO refuse the whole batch.
+ */
+export function searchPhrase(raw: string): string | null {
+  const k = lower(raw)
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9' -]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!k || k.length > 80 || k.split(" ").length > 10) return null;
+  return k;
+}
+
 /** "service city" for every service and city, plus "service near me" (deduplicated, ≤ 300). */
 export function moneyKeywords(services: string[], cities: string[], state = ""): { keyword: string; service: string; city: string | null }[] {
   const out: { keyword: string; service: string; city: string | null }[] = [];
   const seen = new Set<string>();
   const add = (keyword: string, service: string, city: string | null) => {
-    const k = lower(keyword).replace(/\s+/g, " ").slice(0, 80);
+    const k = searchPhrase(keyword);
     if (k && !seen.has(k) && out.length < 300) {
       seen.add(k);
       out.push({ keyword: k, service, city });
@@ -95,7 +110,7 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
   if (on.has("keywords")) first.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: kws.slice(0, 200).map((k) => k.keyword), location_code: US, language_code: "en" } });
   seoMoneyTerms(intake).forEach((keyword, i) => first.push({ id: `serp:${i}`, step: "Who ranks", path: "/v3/serp/google/organic/live/advanced", task: { keyword, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   if (on.has("heatmap")) {
-    const term = lower(intake.services[0] ?? intake.niche);
+    const term = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
     cities.slice(0, RUN_RULES.packCities).forEach((city, i) => first.push({ id: `pack:${i}`, step: "Local 3-pack by city", path: "/v3/serp/google/organic/live/advanced", task: { keyword: term, location_name: cityLocation(city, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   }
   const perSite = (domain: string, name: string | null): Lookup[] => [
@@ -110,7 +125,7 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
 /** The money searches checked live from the home town: each service + home town, then "near me". */
 export function seoMoneyTerms(intake: { services: string[]; hqTown: string; niche: string }): string[] {
   const svc = intake.services.length ? intake.services : [intake.niche];
-  const terms = [...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(lower);
+  const terms = [...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(searchPhrase).filter((t): t is string => !!t);
   return [...new Set(terms)].slice(0, RUN_RULES.moneyTerms);
 }
 
@@ -313,7 +328,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     };
   });
 
-  const heatTerm = lower(intake.services[0] ?? intake.niche);
+  const heatTerm = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
   const heatmaps = packs.some((p) => p.serp)
     ? [{ term: heatTerm, kind: "pack", cities: packs.map((p) => ({ city: p.city, position: p.serp ? (p.serp.pack.find((x) => x.domain === intake.domain)?.rank ?? (p.serp.hasPack ? 0 : null)) : null })) }]
     : [];
@@ -354,7 +369,7 @@ export interface AdsPlanRun {
 
 export function adsMoneyTerms(intake: { services: string[]; hqTown: string; niche: string }): string[] {
   const svc = intake.services.length ? intake.services : [intake.niche];
-  return [...new Set([...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(lower))].slice(0, RUN_RULES.adsTerms);
+  return [...new Set([...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(searchPhrase).filter((t): t is string => !!t))].slice(0, RUN_RULES.adsTerms);
 }
 
 export function planAdsRun(intake: AdsIntake, sections: readonly AdsSectionId[]): AdsPlanRun {
