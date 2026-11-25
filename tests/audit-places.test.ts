@@ -72,3 +72,62 @@ describe("checking names against Google's place list", () => {
     }
   });
 });
+
+describe("towns in other states and distances", () => {
+  it("keeps 'Sharon, PA' together and labels other-state towns", async () => {
+    const { cleanPlaces, placeState } = await import("@/lib/audit/places");
+    expect(cleanPlaces(["Boardman", "Sharon", "PA", "hermitage, pennsylvania", "Warren, OH"], "OH")).toEqual(["Boardman", "Sharon, PA", "Hermitage, PA", "Warren"]);
+    expect(placeState("Sharon, PA", "OH")).toEqual({ name: "Sharon", state: "PA" });
+    expect(placeState("Warren", "OH")).toEqual({ name: "Warren", state: "OH" });
+  });
+
+  it("miles between two towns", async () => {
+    const { milesBetween } = await import("@/lib/audit/places");
+    // Austintown OH → Sharon PA is about 14 miles
+    const m = milesBetween([41.092, -80.738], [41.234, -80.5]);
+    expect(m).toBeGreaterThan(12);
+    expect(m).toBeLessThan(17);
+  });
+});
+
+describe("nearby towns (30 miles) and the builder's place check", () => {
+  it("suggests towns around Austintown, closest first, Pennsylvania included", async () => {
+    const { nearbyTowns } = await import("@/lib/audit/places-list");
+    const near = nearbyTowns("OH", "Austintown");
+    const labels = near.map((n) => n.label);
+    expect(labels).toContain("Boardman");
+    expect(labels).toContain("Youngstown");
+    expect(labels).toContain("Canfield");
+    expect(labels.some((l) => l.endsWith(", PA"))).toBe(true);
+    expect(near.every((n) => n.miles <= 30)).toBe(true);
+    expect(near.map((n) => n.miles)).toEqual([...near.map((n) => n.miles)].sort((a, b) => a - b));
+    expect(labels).not.toContain("Mahoning County");
+  });
+
+  it("checks each typed town: Google's spelling, miles from home, other-state matches", async () => {
+    const { checkPlaces } = await import("@/lib/audit/places-list");
+    const r = checkPlaces("OH", "austintown, oh", ["Boardman", "Sharon", "Columbus", "Canfeild"]);
+    expect(r.home).toBe("Austintown");
+    const by = Object.fromEntries(r.checks.map((c) => [c.typed, c]));
+    expect(by.Boardman?.label).toBe("Boardman");
+    expect(by.Boardman?.miles).toBeLessThan(10);
+    expect(by.Columbus?.miles).toBeGreaterThan(100); // far away: the builder asks "keep it?"
+    expect(by.Canfeild?.suggest).toContain("Canfield");
+    // No Sharon in Ohio's Google list: Sharon, PA (14 miles away) is offered first
+    expect(by.Sharon?.label).toBeNull();
+    expect(by.Sharon?.suggest[0]).toBe("Sharon, PA");
+  });
+
+  it("saving accepts 'Sharon, PA' and checks it against Pennsylvania", async () => {
+    const { placeBookFor } = await import("@/lib/audit/places-list");
+    const r = parseIntake({ company: "Sample Roofing (fictional)", domain: "sampleroofing.example", niche: "Roofing", hqTown: "Austintown", state: "OH", cities: "Boardman, Sharon, PA, Hermitage, Pennsylvania", avgJobUsd: 9000 }, { places: placeBookFor });
+    expect(r.ok && r.intake.cities).toEqual(["Boardman", "Sharon, PA", "Hermitage, PA"]);
+    const bad = parseIntake({ company: "Sample Roofing (fictional)", domain: "sampleroofing.example", niche: "Roofing", hqTown: "Austintown", state: "OH", cities: "Shaaron, PA", avgJobUsd: 9000 }, { places: placeBookFor });
+    expect(!bad.ok && bad.errors[0]).toMatch(/in Pennsylvania\. Did you mean Sharon, PA/);
+  });
+
+  it("the run looks other-state towns up in their own state and searches the plain name", async () => {
+    const { moneyKeywords } = await import("@/lib/audit/run");
+    expect(moneyKeywords(["Roofing"], ["Austintown", "Sharon, PA"], "OH").map((k) => k.keyword)).toEqual(["roofing austintown", "roofing sharon", "roofing near me"]);
+  });
+});

@@ -75,3 +75,9 @@ Status: **E1 approved and built 2026-11-25** on branch `audit-results` (with Att
 ## Audit page as steps (2026-11-25, owner request)
 - `src/components/audit/AuditSteps.tsx`: 1 Check the business details (ticks itself when every place is one Google knows; otherwise lists them with "did you mean" and an Edit button), 2 Pull the numbers (the Run audit card: DataForSEO + Claude, all inside Atlas; ticks when results are in), 3 Look over the pages, 4 Save as PDF and send. The copy-prompt + Attach results route is folded under "Advanced: run it in Claude yourself".
 
+## Nearby towns (2026-11-25, owner request: "most areas are local, within ~30 miles")
+- Map positions for 94% of Google's places from the US Census Bureau 2024 Gazetteer (places, townships, counties; public), matched to Google's names: `src/lib/audit/us-place-coords.json` (~676 KB, server only), rebuilt with `scripts/build-us-place-coords.py`.
+- No AI needed: plain distance math (`milesBetween`, `NEARBY_MILES = 30` in `src/lib/audit/places.ts`).
+- Builder: "Nearby towns" chips (within 30 miles of the home town, closest first, other states included, e.g. "Sharon, PA"); each city shows its miles from home; past 30 miles it says "far from <home>, keep it only if they really serve there"; a name not in the audit's state suggests the same-name town nearby across the line first.
+- Other-state towns are written "Sharon, PA", checked against that state's list on save, and searched from that state on a run (keywords use the plain town name).
+

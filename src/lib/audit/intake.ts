@@ -9,7 +9,7 @@
 import { AUDIT_DEFAULTS, type AuditConfig, type AuditPlan, type RoadmapPhase } from "./config";
 import type { AuditData, Fig, SiteMetrics } from "./data";
 import { stateName, US_STATES } from "./geo";
-import { cleanPlaces, splitPlace, unknownPlaceMessage, type PlaceBook } from "./places";
+import { cleanPlaces, placeLabel, placeState, splitPlace, unknownPlaceMessage, type PlaceBook } from "./places";
 
 export interface IntakeCompetitor {
   name: string;
@@ -162,10 +162,14 @@ export function parseIntake(raw: unknown, opts: IntakeOptions = {}): IntakeResul
   const typedCities = names(r.cities, "Other cities", INTAKE_LIMITS.cities * 2);
   const cities = (US_STATES[state] ? cleanPlaces(typedCities, state) : typedCities)
     .map((c) => {
-      if (!book) return c;
-      const exact = book.canonical(c);
-      if (!exact) errors.push(unknownPlaceMessage("Other cities", c, state, book.suggest(c)));
-      return exact ?? c;
+      if (!book || !opts.places) return c;
+      // "Sharon, PA": checked against Pennsylvania's list; plain names against the audit's state.
+      const where = placeState(c, state);
+      const b = where.state === state ? book : opts.places(where.state);
+      if (!b) return c;
+      const exact = b.canonical(where.name);
+      if (!exact) errors.push(unknownPlaceMessage("Other cities", c, where.state, b.suggest(where.name).map((n) => placeLabel(n, where.state, state))));
+      return exact ? placeLabel(exact, where.state, state) : c;
     })
     .filter((c, i, all) => c.toLowerCase() !== hqTown.toLowerCase() && all.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i);
   if (cities.length > INTAKE_LIMITS.cities) errors.push(`Other cities: at most ${INTAKE_LIMITS.cities} (after splitting combined entries).`);

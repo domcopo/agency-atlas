@@ -7,6 +7,7 @@
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
 import { normalizeDomain, type AuditIntake } from "./intake";
+import { placeState } from "./places";
 import type { AuditSectionId } from "./sections";
 import type { DfsAnswer, DfsPath } from "./sources/dataforseo";
 
@@ -44,22 +45,43 @@ export interface Lookup {
 }
 
 const US = 2840;
-const cityLocation = (city: string, state: string) => `${city},${stateName(state)},United States`;
+/** DataForSEO's location for a town: "Sharon, PA" is looked up in Pennsylvania, plain names in the audit's state. */
+const cityLocation = (city: string, state: string) => {
+  const where = placeState(city, state);
+  return `${where.name},${stateName(where.state)},United States`;
+};
+/** The town as people search it: "plumber sharon", never "plumber sharon, pa". */
+const searchName = (city: string, state: string) => placeState(city, state).name;
 const stateLocation = (state: string) => `${stateName(state)},United States`;
 const lower = (s: string) => s.trim().toLowerCase();
 
+/**
+ * A phrase Google Ads accepts: letters, numbers, spaces, apostrophes and dashes only ("&" →
+ * "and"), at most 10 words and 80 characters. Longer phrases are skipped (null), never cut
+ * mid-word: one bad phrase makes DataForSEO refuse the whole batch.
+ */
+export function searchPhrase(raw: string): string | null {
+  const k = lower(raw)
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9' -]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!k || k.length > 80 || k.split(" ").length > 10) return null;
+  return k;
+}
+
 /** "service city" for every service and city, plus "service near me" (deduplicated, ≤ 300). */
-export function moneyKeywords(services: string[], cities: string[]): { keyword: string; service: string; city: string | null }[] {
+export function moneyKeywords(services: string[], cities: string[], state = ""): { keyword: string; service: string; city: string | null }[] {
   const out: { keyword: string; service: string; city: string | null }[] = [];
   const seen = new Set<string>();
   const add = (keyword: string, service: string, city: string | null) => {
-    const k = lower(keyword).replace(/\s+/g, " ").slice(0, 80);
+    const k = searchPhrase(keyword);
     if (k && !seen.has(k) && out.length < 300) {
       seen.add(k);
       out.push({ keyword: k, service, city });
     }
   };
-  for (const s of services) for (const c of cities) add(`${s} ${c}`, s, c);
+  for (const s of services) for (const c of cities) add(`${s} ${searchName(c, state)}`, s, c);
   for (const s of services) add(`${s} near me`, s, null);
   return out;
 }
@@ -81,14 +103,14 @@ export interface SeoPlan {
 export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionId[]): SeoPlan {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const kws = moneyKeywords(intake.services, cities);
+  const kws = moneyKeywords(intake.services, cities, intake.state);
   const first: Lookup[] = [
     { id: "volume", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: kws.map((k) => k.keyword), location_name: stateLocation(intake.state), language_code: "en" } },
   ];
   if (on.has("keywords")) first.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: kws.slice(0, 200).map((k) => k.keyword), location_code: US, language_code: "en" } });
   seoMoneyTerms(intake).forEach((keyword, i) => first.push({ id: `serp:${i}`, step: "Who ranks", path: "/v3/serp/google/organic/live/advanced", task: { keyword, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   if (on.has("heatmap")) {
-    const term = lower(intake.services[0] ?? intake.niche);
+    const term = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
     cities.slice(0, RUN_RULES.packCities).forEach((city, i) => first.push({ id: `pack:${i}`, step: "Local 3-pack by city", path: "/v3/serp/google/organic/live/advanced", task: { keyword: term, location_name: cityLocation(city, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   }
   const perSite = (domain: string, name: string | null): Lookup[] => [
@@ -103,7 +125,7 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
 /** The money searches checked live from the home town: each service + home town, then "near me". */
 export function seoMoneyTerms(intake: { services: string[]; hqTown: string; niche: string }): string[] {
   const svc = intake.services.length ? intake.services : [intake.niche];
-  const terms = [...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(lower);
+  const terms = [...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(searchPhrase).filter((t): t is string => !!t);
   return [...new Set(terms)].slice(0, RUN_RULES.moneyTerms);
 }
 
@@ -252,7 +274,7 @@ export interface SeoAnswers {
 export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSectionId[], run: SeoAnswers): Record<string, unknown> {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const kws = moneyKeywords(intake.services, cities);
+  const kws = moneyKeywords(intake.services, cities, intake.state);
   const volume = readVolume(run.answers.get("volume"));
   const difficulty = readDifficulty(run.answers.get("difficulty"));
   const money = seoMoneyTerms(intake);
@@ -306,7 +328,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     };
   });
 
-  const heatTerm = lower(intake.services[0] ?? intake.niche);
+  const heatTerm = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
   const heatmaps = packs.some((p) => p.serp)
     ? [{ term: heatTerm, kind: "pack", cities: packs.map((p) => ({ city: p.city, position: p.serp ? (p.serp.pack.find((x) => x.domain === intake.domain)?.rank ?? (p.serp.hasPack ? 0 : null)) : null })) }]
     : [];
@@ -347,12 +369,12 @@ export interface AdsPlanRun {
 
 export function adsMoneyTerms(intake: { services: string[]; hqTown: string; niche: string }): string[] {
   const svc = intake.services.length ? intake.services : [intake.niche];
-  return [...new Set([...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(lower))].slice(0, RUN_RULES.adsTerms);
+  return [...new Set([...svc.map((s) => `${s} ${intake.hqTown}`), ...svc.map((s) => `${s} near me`)].map(searchPhrase).filter((t): t is string => !!t))].slice(0, RUN_RULES.adsTerms);
 }
 
 export function planAdsRun(intake: AdsIntake, sections: readonly AdsSectionId[]): AdsPlanRun {
   const on = new Set(sections);
-  const kws = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities]);
+  const kws = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities], intake.state);
   const first: Lookup[] = [{ id: "volume", step: "Searches and cost per click", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: kws.slice(0, 100).map((k) => k.keyword), location_name: stateLocation(intake.state), language_code: "en" } }];
   const needSerp = on.has("ads_bidders") || on.has("ads_running") || on.has("ads_lsa") || on.has("ads_spend") || on.has("ads_landing");
   if (needSerp) adsMoneyTerms(intake).forEach((keyword, i) => first.push({ id: `serp:${i}`, step: "Who shows ads", path: "/v3/serp/google/organic/live/advanced", task: { keyword, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: 10 } }));
@@ -384,7 +406,7 @@ export interface AdsAnswers {
 export function buildAdsBlock(intake: AdsIntake, sections: readonly AdsSectionId[], run: AdsAnswers): Record<string, unknown> {
   const on = new Set(sections);
   const volume = readVolume(run.answers.get("volume"));
-  const kws = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities]).slice(0, 100);
+  const kws = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities], intake.state).slice(0, 100);
   const serps = adsMoneyTerms(intake).map((_, i) => readSerp(run.answers.get(`serp:${i}`)));
   const checked = serps.filter((s) => s).length;
   const found = readBidders(serps, intake.domain);
