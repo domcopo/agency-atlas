@@ -77,7 +77,7 @@ export default async function AuditPage({ params }: { params: Promise<{ id: stri
           </p>
         ) : (
           <p className="audit-toolbar w-full max-w-[1280px] rounded-xl border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
-            No data pulled yet: every figure says &quot;not found&quot; until results are attached. Copy the custom prompt from the audit page, run it, then use Attach results.
+            No numbers yet: every figure says &quot;not found&quot; until the audit is run. Go back to the audit and tap <span className="font-semibold">Run audit</span> (step 2); the pages fill in after 1–3 minutes.
           </p>
         )}
         {bundle ? <AuditDeck bundle={bundle} sections={sections} /> : adsBundle ? <AdsDeck bundle={adsBundle} sections={adsSections} /> : null}
