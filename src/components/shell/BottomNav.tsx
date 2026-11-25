@@ -28,7 +28,7 @@ export interface NavHint {
   reason: string;
 }
 
-export type NavMode = "full" | "developer" | "sales";
+export type NavMode = "full" | "developer" | "sales" | "va";
 
 export const MODE_TABS: Record<NavMode, readonly string[] | null> = {
   full: null,
@@ -36,6 +36,8 @@ export const MODE_TABS: Record<NavMode, readonly string[] | null> = {
   // (The database enforces what each role can read; this only picks the tabs.)
   developer: ["/", "/work", "/kit"],
   sales: ["/", "/sales", "/kit"],
+  // VAs (0033): client care only.
+  va: ["/", "/clients", "/kit"],
 };
 
 export function BottomNav({ hints = {}, mode = "full" }: { hints?: Record<string, NavHint>; mode?: NavMode }) {

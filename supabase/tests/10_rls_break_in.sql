@@ -2452,6 +2452,90 @@ select test.expect('select * from public.care_escalations', 0, 'owner without tw
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7cb. VA role (0033): client care only. Reads clients (never amounts), care data, client
+--      follow-ups (read-only), Kit pages for VAs; writes check-ins, touches, intake, "Needs
+--      the owner" and memory notes as themselves; ASKS to pause / mark lost (an owner or
+--      manager decides). Never: amounts, billing, work orders, leads, AI, settings, Trash.
+-- ---------------------------------------------------------------------------
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000a8', 'va@example.com');
+insert into public.team_members (user_id, display_name, role) values ('00000000-0000-0000-0000-0000000000a8', 'VA (test)', 'va');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal2"}';
+select test.expect($$select id from public.clients where slug = 'care-new'$$, 1, 'VA reads clients');
+select test.expect('select monthly_usd from public.clients', -1, 'VA cannot read the old amount column');
+select test.expect('select * from public.client_money', 0, 'VA reads no amounts');
+select test.expect($$select * from public.care_plans where name = 'Starter'$$, 1, 'VA reads plan tiers');
+select test.expect('select * from public.check_ins limit 1', 1, 'VA reads check-ins');
+select test.expect('select * from public.care_touches limit 1', 1, 'VA reads journey touches');
+select test.expect('select * from public.client_care limit 1', 1, 'VA reads contact preferences and intake');
+select test.expect('select * from public.care_escalations limit 1', 1, 'VA reads "Needs the owner" items');
+select test.expect($$select * from public.actions where kind = 'work_order'$$, 0, 'VA reads no work orders');
+select test.expect($$select * from public.actions where lead_ghl_id is not null$$, 0, 'VA reads no sales follow-ups');
+select test.expect('select * from public.ghl_opportunities', 0, 'VA reads no leads');
+select test.expect('select * from public.audits', 0, 'VA reads no audits');
+select test.expect('select * from public.ai_usage', 0, 'VA reads no AI costs');
+select test.expect('select * from public.ai_settings', 0, 'VA reads no AI settings');
+select test.expect('select * from public.client_status_changes', 0, 'VA reads no status log');
+select test.expect('select * from public.team_members', 1, 'VA sees only their own login');
+select test.expect('select * from public.kit_docs', 7, 'VA reads only the Kit pages shared with VAs (the client care playbook and templates)');
+select test.expect($$insert into public.check_ins (client_id, happened_on, note) select id, current_date, 'Called (test)' from public.clients where slug = 'care-new'$$, 1, 'VA logs a check-in');
+select test.expect($$insert into public.check_ins (client_id, happened_on, logged_by) select id, current_date, '00000000-0000-0000-0000-0000000000a2' from public.clients where slug = 'care-new'$$, -1, 'VA cannot log as someone else');
+select test.expect($$insert into public.care_touches (client_id, step, status, happened_on, channel, outcome) select id, 5, 'done', current_date, 'email', null from public.clients where slug = 'care-new'$$, 1, 'VA marks a touch done');
+select test.expect($$update public.client_care set best_times = 'Afternoons' where client_id = (select id from public.clients where slug = 'care-new')$$, 1, 'VA updates contact preferences');
+select test.expect($$insert into public.care_escalations (client_id, reason) select id, 'Wants a call back from the owner (test)' from public.clients where slug = 'care-new'$$, 1, 'VA presses "Needs the owner"');
+select test.expect($$update public.clients set memory_next_ask = 'Photos of the new van' where slug = 'care-new'$$, 1, 'VA edits client memory');
+select test.expect($$update public.clients set status = 'canceled' where slug = 'care-new'$$, -1, 'VA cannot change a client''s status directly');
+select test.expect($$update public.clients set name = 'Renamed (fictional)' where slug = 'care-new'$$, -1, 'VA cannot rename a client');
+select test.expect($$update public.clients set trashed_at = now() where slug = 'care-new'$$, -1, 'VA cannot move a client to Trash');
+select test.expect($$insert into public.client_status_changes (client_id, from_status, to_status, reason) select id, 'active', 'paused', 'price' from public.clients where slug = 'care-new'$$, -1, 'VA cannot write the status log');
+select test.expect($$insert into public.actions (client_id, title) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'VA cannot add follow-ups');
+select test.expect($$update public.actions set title = 'changed'$$, 0, 'VA cannot change follow-ups');
+select test.expect($$insert into public.care_targets (user_id, daily_points) values ('00000000-0000-0000-0000-0000000000a8', 100)$$, -1, 'VA cannot set their own goal');
+select test.expect($$insert into public.clients (slug, name, start_date, status) values ('va-add', 'VA Add (fictional)', '2026-11-20', 'active')$$, -1, 'VA cannot add clients');
+select test.expect($$insert into public.va_requests (client_id, to_status, reason, note) select id, 'paused', 'price', 'Budget pause asked on the call (test)' from public.clients where slug = 'care-new'$$, 1, 'VA asks to pause a client');
+select test.expect($$insert into public.va_requests (client_id, to_status, reason, status) select id, 'canceled', 'results', 'approved' from public.clients where slug = 'care-new'$$, 1, 'a VA cannot approve their own request (it is saved as waiting)');
+select test.expect($$select * from public.va_requests where status = 'waiting'$$, 2, 'both requests are waiting');
+select test.expect($$insert into public.va_requests (client_id, to_status, reason) select id, 'paused', 'back' from public.clients where slug = 'care-new'$$, -2, '"back" only fits bringing a client back');
+select test.expect($$insert into public.va_requests (client_id, to_status, reason, requested_by) select id, 'paused', 'price', '00000000-0000-0000-0000-0000000000a2' from public.clients where slug = 'care-new'$$, -1, 'nobody asks as someone else');
+select test.expect($$update public.va_requests set status = 'approved'$$, 0, 'VA cannot decide requests');
+select test.expect($$delete from public.va_requests$$, -1, 'requests are never deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect('select * from public.va_requests', 2, 'managers see VA requests');
+select test.expect($$select * from public.notifications where kind = 'va_request'$$, 2, 'and get a notice for each');
+select test.expect($$update public.va_requests set status = 'approved' where note like 'Budget%'$$, 1, 'a manager approves one');
+select test.expect($$update public.va_requests set status = 'declined' where note like 'Budget%'$$, -2, 'a decided request cannot be changed');
+select test.expect($$update public.va_requests set status = 'declined' where note is null$$, 1, 'a manager turns the other down');
+select test.expect($$select * from public.va_requests where decided_by = '00000000-0000-0000-0000-0000000000a2' and decided_at is not null$$, 2, 'the database records who decided');
+select test.expect($$update public.va_requests set status = 'waiting'$$, -2, 'nobody can reopen a request');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal2"}';
+select test.expect($$select * from public.notifications where kind = 'va_decided'$$, 2, 'the VA hears each decision');
+select test.expect($$select * from public.va_requests where status = 'approved'$$, 1, 'and sees which was approved');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.va_requests', 0, 'developer reads no VA requests');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal1"}';
+select test.expect('select id from public.clients', 0, 'VA without two-factor sees no clients');
+select test.expect('select * from public.va_requests', 0, 'VA without two-factor sees no requests');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

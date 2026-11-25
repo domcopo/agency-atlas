@@ -1,7 +1,7 @@
 import { RiskAlerts } from "@/components/cards/RiskAlerts";
 import { BellRing, ChevronRight, HeartPulse, Layers, Plus, RotateCcw } from "lucide-react";
 import type { Metadata } from "next";
-import { isLead } from "@/lib/roles";
+import { canCare, isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import Link from "next/link";
 import { CopyButton } from "@/components/cards/CopyButton";
@@ -28,7 +28,7 @@ export const metadata: Metadata = { title: "Clients" };
 export default async function ClientsPage({ searchParams }: { searchParams: Promise<{ stage?: string }> }) {
   const stageParam = Number((await searchParams).stage);
   const activeStage = Number.isInteger(stageParam) && stageParam >= 0 && stageParam <= 5 ? stageParam : null;
-  if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="Clients" />;
+  if (usesDatabase() && !canCare((await getMember())?.role)) return <RoleNotice title="Clients" />;
   const today = getToday();
   const summary = await getRosterSummary();
   const { actions } = await getActions();
