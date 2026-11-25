@@ -91,7 +91,7 @@ import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { checkPlaces, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
@@ -3487,7 +3487,7 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
     if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
     const plan = planSeoRun(audit.intake, audit.sections);
     estimate = plan.estimateUsd;
-    steps = [...new Set([...plan.first.map((l) => l.step), "Competitors", "Google profiles", "Writing the notes", "Checking and saving"])];
+    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", "Checking and saving"])];
   }
 
   const db = await createDatabaseClient();
@@ -3592,14 +3592,19 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
     } else {
       const intake = audit.intake!;
       const plan = planSeoRun(intake, audit.sections);
+      // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
+      // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
+      const universe = seoUniverse(intake, answers, plan.seeds.length);
+      await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
         : findCompetitors(serps, intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
-      await runLookups(sites.flatMap((s) => plan.perSite(s.domain, s.name)));
-      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls });
+      const brandLookup = plan.brand(sites.map((x) => x.name));
+      await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
+      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe });
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");
       await saveSteps();

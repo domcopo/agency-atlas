@@ -1,8 +1,10 @@
 // The client against the top competitors: reviews, rankings, visits, authority.
+// Columns with no data in this audit are left out (e.g. links before D3, pack visits in a
+// Run audit); D1 adds local "top 3 / top 10", "positioned for" and brand searches.
 
 import { totalVisits } from "@/lib/audit/compute";
-import type { SiteMetrics } from "@/lib/audit/data";
-import { fmtNum } from "@/lib/audit/format";
+import type { Fig, SiteMetrics } from "@/lib/audit/data";
+import { fmtNum, fmtUsd } from "@/lib/audit/format";
 import { FigValue, Missing } from "./Bits";
 
 export interface CompetitorRow {
@@ -12,7 +14,17 @@ export interface CompetitorRow {
   site: SiteMetrics;
 }
 
-export function CompetitorTable({ rows, showSemrush }: { rows: CompetitorRow[]; showSemrush: boolean }) {
+const has = (rows: CompetitorRow[], pick: (s: SiteMetrics) => Fig | undefined) => rows.some((r) => pick(r.site)?.value != null);
+
+export function CompetitorTable({ rows, showSemrush, local = false }: { rows: CompetitorRow[]; showSemrush: boolean; local?: boolean }) {
+  const show = {
+    packVisits: has(rows, (s) => s.packVisits),
+    tops: has(rows, (s) => s.top10),
+    positioned: has(rows, (s) => s.positionedFor),
+    brand: has(rows, (s) => s.brandSearches),
+    value: has(rows, (s) => s.trafficValueUsd),
+    links: has(rows, (s) => s.backlinkRank) || has(rows, (s) => s.referringDomains),
+  };
   return (
     <table className="audit-table compact" style={{ fontSize: 12.5 }}>
       <thead>
@@ -21,13 +33,17 @@ export function CompetitorTable({ rows, showSemrush }: { rows: CompetitorRow[]; 
           <th>Town</th>
           <th className="num">Pack</th>
           <th className="num">Google reviews</th>
-          <th className="num">Org. kws</th>
-          <th className="num">Org. visits</th>
-          <th className="num">Pack visits</th>
-          <th className="num">Total est./mo</th>
+          <th className="num">{local ? "Local kws" : "Org. kws"}</th>
+          {show.tops && <th className="num">Top 3 / 10</th>}
+          {show.positioned && <th className="num">Positioned for</th>}
+          <th className="num">{local ? "Local visits" : "Org. visits"}</th>
+          {show.packVisits && <th className="num">Pack visits</th>}
+          {show.packVisits && <th className="num">Total est./mo</th>}
+          {show.value && <th className="num">Traffic value/mo</th>}
           {showSemrush && <th className="num">Semrush visits</th>}
-          <th className="num">Backlink rank</th>
-          <th className="num">Ref. domains</th>
+          {show.brand && <th className="num">Brand searches</th>}
+          {show.links && <th className="num">Backlink rank</th>}
+          {show.links && <th className="num">Ref. domains</th>}
         </tr>
       </thead>
       <tbody>
@@ -47,12 +63,20 @@ export function CompetitorTable({ rows, showSemrush }: { rows: CompetitorRow[]; 
                 <FigValue fig={site.gbpRating} format={(v) => `${v.toFixed(1)}★`} /> / <FigValue fig={site.gbpReviews} />
               </td>
               <td className="num"><FigValue fig={site.organicKeywords} /></td>
-              <td className="num"><FigValue fig={site.organicVisits} /></td>
-              <td className="num"><FigValue fig={site.packVisits} /></td>
-              <td className="num"><b>{total === null ? <Missing /> : fmtNum(total)}</b></td>
+              {show.tops && (
+                <td className="num">
+                  <FigValue fig={site.top3} /> / <FigValue fig={site.top10} />
+                </td>
+              )}
+              {show.positioned && <td className="num"><FigValue fig={site.positionedFor} /></td>}
+              <td className="num">{show.packVisits ? <FigValue fig={site.organicVisits} /> : <b><FigValue fig={site.organicVisits} /></b>}</td>
+              {show.packVisits && <td className="num"><FigValue fig={site.packVisits} /></td>}
+              {show.packVisits && <td className="num"><b>{total === null ? <Missing /> : fmtNum(total)}</b></td>}
+              {show.value && <td className="num"><FigValue fig={site.trafficValueUsd} format={(v) => fmtUsd(v)} /></td>}
               {showSemrush && <td className="num"><FigValue fig={site.semrushVisits} /></td>}
-              <td className="num"><FigValue fig={site.backlinkRank} /></td>
-              <td className="num"><FigValue fig={site.referringDomains} /></td>
+              {show.brand && <td className="num"><FigValue fig={site.brandSearches} /></td>}
+              {show.links && <td className="num"><FigValue fig={site.backlinkRank} /></td>}
+              {show.links && <td className="num"><FigValue fig={site.referringDomains} /></td>}
             </tr>
           );
         })}

@@ -9,7 +9,9 @@ import { Slide } from "../Slide";
 export function KeywordsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const names = new Map([[config.company.domain, "You"], ...config.competitors.map((c) => [c.domain, c.name.replace(/\s*\(.*\)$/, "")] as const)]);
-  const rows = clusterRows(data.keywords);
+  const all = clusterRows(data.keywords);
+  // Run audit groups searches by town, so there can be many groups: the 9 biggest fit a page.
+  const rows = all.slice(0, 9);
   return (
     <Slide bundle={bundle} page={pageNo ?? 6} pageCount={pageCount} title={`Local ${config.company.niche.toLowerCase()} keywords & demand`} aside="by cluster">
       <div className="audit-card">
@@ -37,7 +39,9 @@ export function KeywordsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
             ))}
           </tbody>
         </table>
-        <p className="audit-note">Volumes are local search volumes, each keyword counted once. Missing figures show “not found” and are left out of totals.</p>
+        <p className="audit-note">
+          {data.keywords.length} searches checked{all.length > rows.length ? `; ${all.length - rows.length} smaller groups not shown` : ""}. Volumes are local search volumes, each keyword counted once. Missing figures show “not found” and are left out of totals.
+        </p>
       </div>
       {data.narrative.pageNotes.keywords && <div className="audit-callout"><span className="audit-tag info">Opportunity</span>{data.narrative.pageNotes.keywords}</div>}
     </Slide>
