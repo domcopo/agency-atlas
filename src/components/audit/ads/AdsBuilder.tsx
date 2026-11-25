@@ -6,9 +6,9 @@
 // saveAdsAudit; nothing is fetched and nothing costs money.
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useActionState, useState } from "react";
+import { startTransition, useActionState, useState, type FormEvent } from "react";
 import { saveAdsAudit } from "@/app/actions";
-import { SectionToggle, SourceToggle } from "@/components/audit/AuditBuilder";
+import { ADS_STEP_WORDS, errorStep, SectionToggle, SourceToggle } from "@/components/audit/AuditBuilder";
 import { ADS_DEFAULTS, ADS_LIMITS, ADS_PAGE_LABEL, ADS_PRESETS, ADS_SECTIONS, adsDeckPages, type AdsIntake, type AdsSectionId } from "@/lib/audit/ads";
 import { INTAKE_LIMITS } from "@/lib/audit/intake";
 import { US_STATES } from "@/lib/audit/geo";
@@ -35,6 +35,15 @@ const pct = (v: number | undefined, d: number) => String(Math.round((v ?? d) * 1
 
 export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, capsLine, plansSet, ready, setupNote }: AdsBuilderProps) {
   const [state, action, pending] = useActionState(saveAdsAudit, undefined);
+  // Keep what the rep typed when a save is refused. React clears every box in a form
+  // after an action runs (even a failed one), which wiped the hidden steps on phones.
+  // Submitting by hand inside a transition skips that reset; the server still checks
+  // everything (it always did).
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    startTransition(() => action(data));
+  };
   const [step, setStep] = useState(0);
   const [sections, setSections] = useState<Set<AdsSectionId>>(new Set(initial));
   const [compRows, setCompRows] = useState(Math.max(2, intake?.competitors?.length ?? 0));
@@ -68,6 +77,13 @@ export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, ca
   );
 
   const errors = state?.errors ?? (state?.error ? [state.error] : []);
+  // Phones: jump to the step with the first problem, so the rep sees the box to fix.
+  const [seenState, setSeenState] = useState(state);
+  if (state !== seenState) {
+    setSeenState(state);
+    const first = state?.errors?.[0];
+    if (first) setStep(errorStep(first, ADS_STEP_WORDS));
+  }
   const saveButton = (
     <button type="submit" disabled={pending || !ready} className="pressable min-h-12 w-full rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">
       {pending ? "Saving…" : id ? "Save changes" : "Save Ads audit"}
@@ -85,7 +101,7 @@ export function AdsBuilder({ id, leadId, leadName, intake, sections: initial, ca
   );
 
   return (
-    <form action={action} className="@container">
+    <form onSubmit={submit} className="@container">
       {id && <input type="hidden" name="id" value={id} />}
       {leadId && <input type="hidden" name="leadId" value={leadId} />}
 

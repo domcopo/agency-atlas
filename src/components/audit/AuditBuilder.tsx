@@ -5,7 +5,7 @@
 // on the right. Saving posts to saveAudit; nothing is fetched and nothing costs money.
 
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
-import { useActionState, useState } from "react";
+import { startTransition, useActionState, useState, type FormEvent } from "react";
 import { saveAudit } from "@/app/actions";
 import type { AuditIntake } from "@/lib/audit/intake";
 import { INTAKE_DEFAULTS, INTAKE_LIMITS } from "@/lib/audit/intake";
@@ -41,6 +41,15 @@ export interface BuilderProps {
 
 export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, capsLine, plansSet, ready }: BuilderProps) {
   const [state, action, pending] = useActionState(saveAudit, undefined);
+  // Keep what the rep typed when a save is refused. React clears every box in a form
+  // after an action runs (even a failed one), which wiped the hidden steps on phones.
+  // Submitting by hand inside a transition skips that reset; the server still checks
+  // everything (it always did).
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    startTransition(() => action(data));
+  };
   const [step, setStep] = useState(0);
   const [sections, setSections] = useState<Set<AuditSectionId>>(new Set(initial));
   const [compRows, setCompRows] = useState(Math.max(2, intake?.competitors?.length ?? 0));
@@ -75,6 +84,13 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
   );
 
   const errors = state?.errors ?? (state?.error ? [state.error] : []);
+  // Phones: jump to the step with the first problem, so the rep sees the box to fix.
+  const [seenState, setSeenState] = useState(state);
+  if (state !== seenState) {
+    setSeenState(state);
+    const first = state?.errors?.[0];
+    if (first) setStep(errorStep(first, SEO_STEP_WORDS));
+  }
   const saveButton = (
     <button type="submit" disabled={pending || !ready} className="pressable min-h-12 w-full rounded-xl bg-violet-deep text-sm font-semibold disabled:opacity-60">
       {pending ? "Saving…" : id ? "Save changes" : "Save audit"}
@@ -92,7 +108,7 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
   );
 
   return (
-    <form action={action} className="@container">
+    <form onSubmit={submit} className="@container">
       {id && <input type="hidden" name="id" value={id} />}
       {leadId && <input type="hidden" name="leadId" value={leadId} />}
 
@@ -295,6 +311,22 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
       {!ready && <p className="mt-3 text-xs text-amber">Saving audits needs one setup step first (0023 SQL).</p>}
     </form>
   );
+}
+
+/** Which builder step a problem belongs to, by the field name at the start of the message. */
+export const SEO_STEP_WORDS: [string, number][] = [
+  ["Website", 0], ["Business name", 0], ["Type of business", 0], ["Services", 0], ["Google Business Profile", 0],
+  ["Home town", 1], ["Pick the state", 1], ["Other cities", 1], ["Average job", 1], ["Visits that become jobs", 1], ["Competitor", 1], ["Each website", 1],
+  ["Notes", 3],
+];
+export const ADS_STEP_WORDS: [string, number][] = [
+  ["Website", 0], ["Business name", 0], ["Type of business", 0], ["Services", 0], ["Competitor", 0], ["Each website", 0],
+  ["Home town", 1], ["Pick the state", 1], ["Other cities", 1], ["Average job", 1], ["Clicks that become leads", 1], ["Leads that become jobs", 1], ["Each monthly budget", 1], ["Compare at most", 1], ["Add at least one monthly", 1],
+  ["Notes", 3],
+];
+
+export function errorStep(message: string, words: [string, number][]): number {
+  return words.find(([w]) => message.startsWith(w))?.[1] ?? 3;
 }
 
 export function SectionToggle<T extends string>({ id, label: name, detail, on, locked, onToggle }: { id: T; label: string; detail: string; on: boolean; locked?: boolean; onToggle: (id: T) => void }) {
