@@ -24,7 +24,8 @@ import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
 import { RUN_RULES } from "@/lib/audit/run";
 import { nyDate } from "@/lib/audit/spend";
 import { adsDeckPages, emptyAdsData, parseAdsIntake, parseAdsPlans, parseAdsSections, type AdsBundle, type AdsIntake, type AdsPlan, type AdsSectionId } from "@/lib/audit/ads";
-import { AUDIT_CAP_DEFAULTS, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
+import { AUDIT_CAP_DEFAULTS, nyMonthStart, spendSummary, type AuditCaps, type SpendSummary } from "@/lib/audit/spend";
+import { buildSpending, type SpendingView } from "@/lib/spending";
 import { demoRosterRaw, demoTeam } from "@/fixtures/demo-roster";
 import { caseStudyHistory, surveyQuestions, surveyResponses, trends } from "@/fixtures/growth";
 import { insights } from "@/fixtures/insights";
@@ -69,6 +70,7 @@ import { isGhlBillingConfigured, isGhlConfigured } from "@/lib/ghl/client";
 import { billingState, billingTotals, clientBilling, paymentAlerts, planVsCollected, unmatchedGroups, type BillingRecord, type BillingState, type BillingSync, type BillingTotals, type ClientBilling, type PaymentAlert } from "@/lib/billing";
 import { loadPrivateRoster, loadPrivateTeam, parseRoster } from "@/lib/private-data";
 import { createDatabaseClient, getCurrentMember, getTwoFactorState, isDatabaseConfigured } from "@/lib/supabase/server";
+import { readAllRows } from "@/lib/paging";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import type {
@@ -205,7 +207,14 @@ type CheckInRow = { id: string; client_id: string; happened_on: string; note: st
  */
 const readAllCheckIns = cache(async (db: DbClient): Promise<CheckInRow[]> => {
   const order = { ascending: false } as const;
-  const read = (cols: string) => db.from("check_ins").select(cols).order("happened_on", order).order("created_at", order);
+  // Paged: past 1,000 check-ins a single read would drop the oldest, and a client last
+  // contacted long ago would look "never contacted".
+  const read = (cols: string) =>
+    readAllRows(
+      (from, to, withCount) =>
+        db.from("check_ins").select(cols, { count: withCount ? "exact" : undefined }).order("happened_on", order).order("created_at", order).order("id", order).range(from, to),
+      20000,
+    );
   type Raw = { id: string; client_id: string; happened_on: string; note: string | null; mood?: unknown; kind?: unknown; removed_at?: string | null };
   const map = (rows: unknown) => ((rows ?? []) as Raw[]).map((r) => ({ id: r.id, client_id: r.client_id, happened_on: r.happened_on, note: r.note, mood: asMood(r.mood), kind: asKind(r.kind), removed: Boolean(r.removed_at) }));
   for (const cols of ["id, client_id, happened_on, note, mood, kind, removed_at", "id, client_id, happened_on, note, mood, kind", "id, client_id, happened_on, note, mood", "id, client_id, happened_on, note"]) {
@@ -976,7 +985,11 @@ export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClie
   if (!usesDatabase()) return { ready: false, byClient };
   const db = await createDatabaseClient();
   const since = new Date(Date.parse(today()) - 21 * 86_400_000).toISOString().slice(0, 10);
-  const { data, error } = await db.from("client_health_daily").select("client_id, day, score, level").gte("day", since).limit(5000);
+  const { data, error } = await readAllRows(
+    (from, to, withCount) =>
+      db.from("client_health_daily").select("client_id, day, score, level", { count: withCount ? "exact" : undefined }).gte("day", since).order("day").order("client_id").range(from, to),
+    5000,
+  );
   if (error) return { ready: false, byClient };
   for (const r of data ?? []) {
     const list = byClient.get(r.client_id) ?? [];
@@ -1741,8 +1754,9 @@ export const getGhlSummary = cache(async (now: Date = new Date()): Promise<GhlSu
   const db = await createDatabaseClient();
   const [syncs, opps, appts] = await Promise.all([
     db.from("ghl_syncs").select("ran_at, location_name, opportunities, appointments").order("ran_at", { ascending: false }).limit(1),
-    db.from("ghl_opportunities").select("status, stage_name, monetary_value, ghl_created_at, status_changed_at").limit(5000),
-    db.from("ghl_appointments").select("status, starts_at").limit(5000),
+    // Paged: these are counted, so a capped read would undercount past 1,000 rows.
+    readAllRows((from, to, withCount) => db.from("ghl_opportunities").select("status, stage_name, monetary_value, ghl_created_at, status_changed_at", { count: withCount ? "exact" : undefined }).order("ghl_id").range(from, to), 5000),
+    readAllRows((from, to, withCount) => db.from("ghl_appointments").select("status, starts_at", { count: withCount ? "exact" : undefined }).order("ghl_id").range(from, to), 5000),
   ]);
   if (syncs.error) return emptyGhl(configured, false); // tables not created yet
   const s = emptyGhl(configured, true);
@@ -1906,7 +1920,11 @@ export async function getSalesSetup(): Promise<SalesSetup | null> {
   if (me?.role !== "owner") return null;
   const db = await createDatabaseClient();
   const [opps, tm, users] = await Promise.all([
-    db.from("ghl_opportunities").select("pipeline_id, pipeline_name, stage_name").not("pipeline_id", "is", null).limit(10000),
+    readAllRows(
+      (from, to, withCount) =>
+        db.from("ghl_opportunities").select("pipeline_id, pipeline_name, stage_name", { count: withCount ? "exact" : undefined }).not("pipeline_id", "is", null).order("ghl_id").range(from, to),
+      10000,
+    ),
     db.from("team_members").select("user_id, display_name, role, ghl_user_id").order("display_name"),
     db.from("ghl_users").select("ghl_user_id, name").order("name").limit(500),
   ]);
@@ -1978,6 +1996,7 @@ const emptyAi = (configured: boolean, tablesReady: boolean): AiStatus => ({
   outputTokens: 0,
   requests: 0,
   recent: [],
+  byFeature: {},
 });
 
 // ---------------------------------------------------------------------------
@@ -2038,12 +2057,18 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
   const db = await createDatabaseClient();
   const [settings, usage] = await Promise.all([
     db.from("ai_settings").select("monthly_budget_usd").eq("id", 1).maybeSingle(),
-    db
-      .from("ai_usage")
-      .select("created_at, feature, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome")
-      .gte("created_at", monthStartIso())
-      .order("created_at", { ascending: false })
-      .limit(2000),
+    // Paged: past 1,000 requests a month a single read would undercount the budget meter.
+    readAllRows(
+      (from, to, withCount) =>
+        db
+          .from("ai_usage")
+          .select("created_at, feature, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, outcome", { count: withCount ? "exact" : undefined })
+          .gte("created_at", monthStartIso())
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, to),
+      20000,
+    ),
   ]);
   if (settings.error || usage.error) return emptyAi(configured, false);
   const s = emptyAi(configured, true);
@@ -2054,6 +2079,9 @@ export const getAiStatus = cache(async (): Promise<AiStatus> => {
     s.inputTokens += (u.input_tokens ?? 0) + (u.cache_read_tokens ?? 0) + (u.cache_write_tokens ?? 0);
     s.outputTokens += u.output_tokens ?? 0;
     s.requests++;
+    const f = (s.byFeature[u.feature] ??= { requests: 0, usd: 0 });
+    f.requests++;
+    f.usd = Math.round((f.usd + Number(u.cost_usd ?? 0)) * 10_000) / 10_000;
   }
   s.spentUsd = Math.round(s.spentUsd * 10_000) / 10_000;
   const b = budgetState(s.spentUsd, s.budgetUsd);
@@ -2140,7 +2168,7 @@ export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> 
     getTeam(),
     getAiStatus(),
     getDetections(),
-    db.from("ghl_opportunities").select("ghl_created_at").limit(5000),
+    readAllRows((from, to, withCount) => db.from("ghl_opportunities").select("ghl_created_at", { count: withCount ? "exact" : undefined }).order("ghl_id").range(from, to), 5000),
     db.from("ai_usage").select("created_at, feature, outcome").order("created_at", { ascending: false }).limit(300),
     // 0018: the run log for "recent_runs". Only these columns: no prompts or answers exist here.
     db
@@ -2186,7 +2214,12 @@ export async function getOwnerSummaryInput(): Promise<OwnerSummaryInput | null> 
 
 /** When each work order's status last changed, from the database's own history (0017). null before 0017. */
 async function workOrderStatusSince(db: DbClient): Promise<Map<string, string> | null> {
-  const { data, error } = await db.from("work_order_history").select("action_id, at").in("field", ["status", "created"]).order("at", { ascending: true }).limit(20000);
+  // Paged: oldest first and "later rows win", so a capped single read would keep stale statuses.
+  const { data, error } = await readAllRows(
+    (from, to, withCount) =>
+      db.from("work_order_history").select("action_id, at", { count: withCount ? "exact" : undefined }).in("field", ["status", "created"]).order("at", { ascending: true }).order("id").range(from, to),
+    20000,
+  );
   if (error) return null;
   const out = new Map<string, string>();
   for (const r of data ?? []) out.set(r.action_id as string, r.at as string); // later rows win
@@ -2360,7 +2393,15 @@ export const getBilling = cache(async (): Promise<BillingView | null> => {
   const configured = isGhlBillingConfigured();
   const [syncRes, recRes, summary] = await Promise.all([
     db.from("billing_syncs").select("started_at, finished_at, ok, invoices_read, payments_read, unmatched, error_code").order("started_at", { ascending: false }).limit(10),
-    db.from("billing_records").select("kind, provider_id, provider_contact_id, client_id, unmatched_label, amount_cents, amount_due_cents, currency, status, issued_on, due_on, paid_on, synced_at").limit(5000),
+    readAllRows(
+      (from, to, withCount) =>
+        db
+          .from("billing_records")
+          .select("kind, provider_id, provider_contact_id, client_id, unmatched_label, amount_cents, amount_due_cents, currency, status, issued_on, due_on, paid_on, synced_at", { count: withCount ? "exact" : undefined })
+          .order("id")
+          .range(from, to),
+      5000,
+    ),
     getRosterSummary(),
   ]);
   const tablesReady = !syncRes.error && !recRes.error;
@@ -2729,6 +2770,53 @@ export const getAuditSpend = cache(async (): Promise<SpendSummary | null> => {
   });
 });
 
+/**
+ * "Spending & limits" on Data Safety (docs/REVIEW_2026-11.md, item 3): every money cap with this
+ * month's spending. Owner and managers only (they already read every cost row; the database
+ * decides). Months are New York months, like the database caps. null for everyone else.
+ */
+export const getSpending = cache(async (): Promise<SpendingView | null> => {
+  if (!usesDatabase()) return null;
+  const me = await getMember();
+  if (!me || !isLead(me.role)) return null;
+  const db = await createDatabaseClient();
+  const now = new Date();
+  const month = nyMonthStart(now);
+  const since = new Date(now.getTime() - 40 * 86_400_000).toISOString();
+  const thisMonth = (at: unknown) => typeof at === "string" && nyDate(new Date(at)) >= month;
+  const [ai, toad, auditSettings, auditSpend, scoutSet, scoutSpend, watchSet, watchRuns] = await Promise.all([
+    getAiStatus(),
+    getToadStatus(),
+    getAuditSettings(),
+    getAuditSpend(),
+    db.from("scout_settings").select("monthly_usd, per_rep_monthly_usd").limit(1).maybeSingle(),
+    readAllRows((from, to, withCount) => db.from("scout_spend").select("usd, at", { count: withCount ? "exact" : undefined }).gte("at", since).order("at").order("id").range(from, to), 20000),
+    db.from("watch_settings").select("monthly_usd").limit(1).maybeSingle(),
+    db.from("watch_runs").select("est_usd, actual_usd, created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(1000),
+  ]);
+  const scoutRows = (scoutSpend.data ?? []) as { usd: unknown; at: unknown }[];
+  return buildSpending({
+    ai: { ready: ai.tablesReady, budgetUsd: ai.budgetUsd, spentUsd: ai.spentUsd, byFeature: ai.byFeature },
+    toad: toad.ready ? { enabled: toad.enabled, monthlyUsd: toad.monthlyUsd, perPersonUsd: toad.perPersonUsd, spentUsd: ai.byFeature.ask_toad?.usd ?? 0 } : null,
+    audits: auditSettings.ready && auditSpend ? { monthUsed: auditSpend.monthUsed, monthCap: auditSpend.monthCap, weekCap: auditSettings.caps.weeklyUsd } : null,
+    scout:
+      scoutSet.error || !scoutSet.data || scoutSpend.error
+        ? null
+        : {
+            monthUsed: scoutRows.filter((r) => thisMonth(r.at)).reduce((n, r) => n + Number(r.usd ?? 0), 0),
+            monthCap: Number(scoutSet.data.monthly_usd),
+            perRepCap: Number(scoutSet.data.per_rep_monthly_usd),
+          },
+    watcher:
+      watchSet.error || !watchSet.data || watchRuns.error
+        ? null
+        : {
+            monthUsed: (watchRuns.data ?? []).filter((r) => thisMonth(r.created_at)).reduce((n, r) => n + Number(r.actual_usd ?? r.est_usd ?? 0), 0),
+            monthCap: Number(watchSet.data.monthly_usd),
+          },
+  });
+});
+
 /** Owner: salespeople, for setting a weekly cap per person. */
 export async function getSalespeople(): Promise<{ userId: string; name: string }[]> {
   if (!usesDatabase()) return [];
@@ -2933,11 +3021,33 @@ export const getWatch = cache(async (): Promise<WatchLive> => {
   if (names.error) return { ...WATCH_EMPTY, role: me.role }; // before 0027
   const lead = isLead(me.role);
   const [kw, mk, cp, checks, vols, settings, runs] = await Promise.all([
-    db.from("watch_keywords").select("id, client_id, keyword, money, active").order("created_at").limit(5000),
+    // Paged (src/lib/paging.ts): Supabase sends at most 1,000 rows a request, so a single read
+    // sorted oldest first would silently drop the NEWEST rankings once a few rounds are in.
+    readAllRows((from, to, withCount) => db.from("watch_keywords").select("id, client_id, keyword, money, active", { count: withCount ? "exact" : undefined }).order("created_at").order("id").range(from, to), 5000),
     db.from("watch_markets").select("id, client_id, city, state, lat, lng, location_code, active").order("created_at").limit(1000),
     db.from("watch_competitors").select("id, client_id, domain, source, active").order("created_at").limit(1000),
-    db.from("watch_rank_checks").select("client_id, keyword_id, market_id, checked_on, organic, pack, others, source").gte("checked_on", new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)).order("checked_on").limit(50000),
-    db.from("watch_volumes").select("market_id, keyword, month, volume, source").gte("month", new Date(Date.now() - 800 * 86_400_000).toISOString().slice(0, 10)).order("month").limit(50000),
+    readAllRows(
+      (from, to, withCount) =>
+        db
+          .from("watch_rank_checks")
+          .select("client_id, keyword_id, market_id, checked_on, organic, pack, others, source", { count: withCount ? "exact" : undefined })
+          .gte("checked_on", new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10))
+          .order("checked_on")
+          .order("id")
+          .range(from, to),
+      50000,
+    ),
+    readAllRows(
+      (from, to, withCount) =>
+        db
+          .from("watch_volumes")
+          .select("market_id, keyword, month, volume, source", { count: withCount ? "exact" : undefined })
+          .gte("month", new Date(Date.now() - 800 * 86_400_000).toISOString().slice(0, 10))
+          .order("month")
+          .order("id")
+          .range(from, to),
+      50000,
+    ),
     lead ? db.from("watch_settings").select("monthly_usd, keywords_per_client, markets_per_client, competitors_per_client").maybeSingle() : Promise.resolve({ data: null }),
     lead ? db.from("watch_runs").select("id, client_ids, pairs, volumes, est_usd, actual_usd, status, checks_saved, created_at, attached_at").order("created_at", { ascending: false }).limit(100) : Promise.resolve({ data: [] as Record<string, unknown>[] }),
   ]);

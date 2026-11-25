@@ -96,6 +96,7 @@ import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/l
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
+import { readAllRows } from "@/lib/paging";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
 
@@ -2113,12 +2114,16 @@ export async function refreshLeads(): Promise<{ error?: string; message?: string
   await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can refresh leads." };
-  const r = await runLeadRefresh(me.role);
+  const r = await runLeadRefresh(me.role, await createDatabaseClient());
   revalidatePath("/", "layout");
   return r;
 }
 
-/** Called when someone opens Sales: refreshes in the background if the copy is over an hour old. */
+/**
+ * Called when someone opens Home or Sales: if the copy is over an hour old, refreshes it in the
+ * background AFTER the page is sent (like autoSyncGhl), so nobody waits for GoHighLevel.
+ * The next visit shows the result.
+ */
 export async function autoRefreshLeads(): Promise<void> {
   await notWhilePreviewing(); // callers catch this; a preview never refreshes anything
   const me = await getCurrentMember();
@@ -2130,13 +2135,18 @@ export async function autoRefreshLeads(): Promise<void> {
   ]);
   if (last.error) return; // before 0020
   const newest = [last.data?.[0]?.ran_at, sync.data?.[0]?.ran_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
-  if (!refreshDue(newest, new Date())) return;
-  await runLeadRefresh(me.role).catch(() => undefined);
+  if (!refreshDue(newest, new Date()) || !isGhlConfigured()) return;
+  // Sign-in and role are read now; after() can't read cookies from a page.
+  const role = me.role;
+  after(async () => {
+    const result = await runLeadRefresh(role, db).catch(() => ({ error: "stopped" }));
+    if (result.error) console.warn("Background lead refresh skipped; the Refresh button still works.");
+  });
 }
 
-async function runLeadRefresh(role: string): Promise<{ error?: string; message?: string }> {
+/** Reads the sales pipelines from GoHighLevel and saves copies. No cookies, so it can run after a page is sent. */
+async function runLeadRefresh(role: string, db: Db): Promise<{ error?: string; message?: string }> {
   if (!isGhlConfigured()) return { error: "GoHighLevel isn't connected yet." };
-  const db = await createDatabaseClient();
   const [pl, last] = await Promise.all([
     db.from("sales_pipelines").select("pipeline_id").eq("active", true),
     db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
@@ -2161,7 +2171,10 @@ async function runLeadRefresh(role: string): Promise<{ error?: string; message?:
     // Salespeople only ever see OPEN leads, so the database lets them save open leads only
     // (tested in section 7q). Leads that closed in GoHighLevel are updated by the next
     // owner or manager refresh, or the owner's Sync.
-    const { data: seen } = await db.from("ghl_opportunities").select("ghl_id").in("pipeline_id", ids).limit(5000);
+    const { data: seen } = await readAllRows(
+      (from, to, withCount) => db.from("ghl_opportunities").select("ghl_id", { count: withCount ? "exact" : undefined }).in("pipeline_id", ids).order("ghl_id").range(from, to),
+      5000,
+    );
     const visible = new Set((seen ?? []).map((r) => r.ghl_id as string));
     const open = opportunities.filter((o) => o.status === "open");
     const saved =
@@ -2209,7 +2222,10 @@ export async function saveSalesPipeline(_prev: { error?: string; ok?: boolean } 
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { error: "Unknown pipeline." };
   const db = await createDatabaseClient();
   // The name and stages must come from our own copy, not from the form.
-  const { data } = await db.from("ghl_opportunities").select("pipeline_name, stage_name").eq("pipeline_id", id).limit(5000);
+  const { data } = await readAllRows(
+    (from, to, withCount) => db.from("ghl_opportunities").select("pipeline_name, stage_name", { count: withCount ? "exact" : undefined }).eq("pipeline_id", id).order("ghl_id").range(from, to),
+    5000,
+  );
   if (!data?.length) return { error: "That pipeline isn't in the last sync." };
   const stages = new Set(data.map((r) => r.stage_name as string | null).filter((x): x is string => Boolean(x)));
   const hot = form.getAll("hot").filter((v): v is string => typeof v === "string" && stages.has(v)).slice(0, 30);

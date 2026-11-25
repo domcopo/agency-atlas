@@ -16,6 +16,7 @@ export const AI_BOTS = {
   care_suggestions: { bot: "Client Care Helper", action: "suggested next moves" },
   care_draft: { bot: "Message Drafts", action: "drafted a client message" },
   ask_toad: { bot: "BizToad", action: "answered a team question" },
+  audit_words: { bot: "Audit Writer", action: "wrote an audit's notes" },
 } as const;
 
 export type AiFeature = keyof typeof AI_BOTS;

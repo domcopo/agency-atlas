@@ -648,6 +648,8 @@ export interface AiStatus {
   outputTokens: number;
   requests: number;
   recent: { at: string; feature: string; costUsd: number | null; outcome: string; tokens: number }[];
+  /** This month per AI helper (ai_usage feature name): requests and dollars. */
+  byFeature: Record<string, { requests: number; usd: number }>;
 }
 
 export interface Briefing {
