@@ -296,6 +296,7 @@ describe("BizToad picks facts by database role", () => {
     expect(toadModeFor("manager")).toBe("full");
     expect(toadModeFor("developer")).toBe("developer");
     expect(toadModeFor("sales")).toBe("sales");
+    expect(toadModeFor("va")).toBeNull(); // VAs (0033) never get BizToad
   });
 });
 

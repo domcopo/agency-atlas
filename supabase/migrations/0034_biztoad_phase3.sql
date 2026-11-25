@@ -1,5 +1,6 @@
 -- Agency Atlas: BizToad Phase 3 (approved 2026-11-24, docs/BIZTOAD_PLAN.md section 12).
--- Run after 0030 (BizToad). It doesn't depend on 0031 or 0032.
+-- Run after 0030 (BizToad). It doesn't depend on 0031, 0032 or 0033 (renumbered from 0033 to 0034
+-- on 2026-11-25 because the VA role took 0033).
 --
 -- One small change: each person may READ their own BizToad ('ask_toad') cost rows, so
 -- developers and salespeople can see "you've used $X of $5 this month". Everything else in

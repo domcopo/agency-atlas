@@ -446,8 +446,8 @@ describe("BizToad (0030)", () => {
     expect(ask).not.toMatch(/createWorkOrder|from\("actions"\)/);
   });
 
-  it("0033 only lets people READ their own BizToad cost rows", () => {
-    const sql = readFileSync(join(ROOT, "supabase/migrations/0033_biztoad_phase3.sql"), "utf8").replace(/--.*$/gm, "");
+  it("0034 only lets people READ their own BizToad cost rows", () => {
+    const sql = readFileSync(join(ROOT, "supabase/migrations/0034_biztoad_phase3.sql"), "utf8").replace(/--.*$/gm, "");
     expect(sql).toMatch(/create policy ai_usage_read_own_toad on public\.ai_usage for select to authenticated\s+using \(feature = 'ask_toad' and requested_by = \(select auth\.uid\(\)\)\)/);
     expect(sql).not.toMatch(/\bgrant\b|for (insert|update|delete|all)|security definer|disable row level/i);
   });
@@ -894,8 +894,24 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
   it("salespeople get the Home, Sales and Kit tabs only", () => {
     const nav = readFileSync(join(ROOT, "src/components/shell/BottomNav.tsx"), "utf8");
     expect(nav).toMatch(/sales: \["\/", "\/sales", "\/kit"\]/);
-    for (const page of ["src/app/(app)/clients/page.tsx", "src/app/(app)/clients/[id]/page.tsx", "src/app/(app)/growth/page.tsx", "src/app/(app)/work/page.tsx"]) {
+    for (const page of ["src/app/(app)/growth/page.tsx", "src/app/(app)/work/page.tsx"]) {
       expect(readFileSync(join(ROOT, page), "utf8"), page).toMatch(/!isLead\(.*\)\) return <RoleNotice/);
+    }
+    // Client pages (0033): the client care team (owner, managers, VAs). Still never sales or developers.
+    for (const page of ["src/app/(app)/clients/page.tsx", "src/app/(app)/clients/[id]/page.tsx"]) {
+      expect(readFileSync(join(ROOT, page), "utf8"), page).toMatch(/!canCare\(.*\)\) return <RoleNotice/);
+    }
+    const roles = readFileSync(join(ROOT, "src/lib/roles.ts"), "utf8");
+    expect(roles).toMatch(/export function canCare\(role: string \| null \| undefined\): boolean \{\n  return isLead\(role\) \|\| isVa\(role\);\n\}/);
+  });
+
+  it("VAs get the Home, Clients and Kit tabs only, and no Data Safety", () => {
+    const nav = readFileSync(join(ROOT, "src/components/shell/BottomNav.tsx"), "utf8");
+    expect(nav).toMatch(/va: \["\/", "\/clients", "\/kit"\]/);
+    const safety = readFileSync(join(ROOT, "src/app/(app)/safety/page.tsx"), "utf8");
+    expect(safety).toMatch(/if \(isVa\(member\?\.role\)\) return <RoleNotice/);
+    for (const page of ["src/app/(app)/work/page.tsx", "src/app/(app)/growth/page.tsx", "src/app/(app)/sales/page.tsx"]) {
+      expect(readFileSync(join(ROOT, page), "utf8"), page).not.toMatch(/canCare\(/);
     }
   });
 

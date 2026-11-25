@@ -3,6 +3,69 @@
 **Status (2026-11-24):** Steps 1A (`0025`) and 1B (`0028`) are built, merged and run on the live database. **Step 1D was approved and BUILT on 2026-11-24 (`0031_care_goals.sql` not run yet; Google Ads audits took 0029 and BizToad 0030).** Step 1C (VA logins) has not started.
 **Branch:** `claude/client-care-53178d` (own worktree). **Migration order** (owner, 2026-11-24): 0024 Scout, 0025 client care, 0026 sales leaderboard, 0027 SEO Watcher, 0028 client journey. 0029 Google Ads audits, 0030 BizToad, 0031 care goals (Step 1D); next free 0032.
 
+## Step 1C (approved and BUILT 2026-11-24; `0033_va_role.sql` not run yet): VA logins
+
+As built:
+- **Role:** `canCare(role)` = owner, manager or va (`src/lib/roles.ts`). It gates the Clients screens and the care actions. VAs use nav mode `va` (Home, Clients, Kit), their own Home branch, and Data Safety is blocked.
+- **VA requests:** `requestStatusChange` / `decideVaRequest`, shown by `VaRequests` on Home and the client page's Status card ("Ask a manager").
+- **Kit:** pages can be marked "VAs".
+- **Deferred:** "Draft with AI" for VAs. A safe per-person AI spending cap is needed first (like BizToad's), so VAs copy the regular template for now.
+- **Tests:** RLS section 7cb, plus guardrails for the VA tabs, the Data Safety block, and client pages that stay closed to sales and developers.
+
+**Why:** today a VA can sign in only as a *manager*. Managers also see work orders and developer workload, Sales and leads, Growth, Trash and the AI buttons, and they can pause or mark clients lost. A **VA** role gives VAs exactly what client care needs, enforced by the database rather than by hidden buttons.
+
+**Owner decisions (2026-11-24):**
+- VAs see **all clients**, never prices or billing.
+- VAs see each client's **follow-ups and issues, read-only**.
+- **Serious changes need a manager's OK first.** A VA can *ask* to pause or mark a client lost, and an owner or manager approves or turns it down. Small things they do directly.
+
+**What a VA can do directly:**
+- Log journey touches (talked, no answer, text, email) and check-ins with mood.
+- Tick week-1 intake items, set "No texts", preferred channel and best times.
+- Edit client memory (goal, tone, next ask). These are short notes, and every change shows in the client's history.
+- Press **Needs the owner**.
+- Use **Draft with AI** on Next move. It costs a little from your AI budget, inside the same monthly cap. "Suggested next moves" stays for the owner and managers.
+- See their own **daily goal**, which the owner sets on Restart journeys · goals.
+
+**What a VA asks for (a manager or the owner approves):**
+- **Pause, mark lost or bring back a client.** The VA fills in the same form (reason required), and it becomes a request.
+  - Owners and managers see "VA requests" on their Home and on that client's page, with **Approve** and **Turn down**.
+  - Approving makes the change as the approver, with the same status log and notices as today.
+  - The VA sees whether it was approved.
+
+**What a VA never sees or does:**
+- Prices, billing, Work and work orders, Sales and leads, Audits, Scout, Growth, Data Safety, Trash, Plan tiers, Set up clients, Restart journeys, Add client.
+- Other people's settings, the AI briefing, "Suggested next moves".
+- Changing follow-ups or issues, moving anything to Trash, deleting anything.
+
+**Screens for a VA:** Home (the Client care view: touches due, needs attention, replies waiting, today's goal), Clients (list, board, client pages without owner and manager tools), and Kit (playbook and templates). Every other screen shows the usual "not part of your view" notice.
+
+**Adding a VA:** the same 3-minute steps in `docs/TEAM_ACCESS.md`, with role `va`. That guide gets a VA row and a one-line switch from manager to VA:
+```sql
+update public.team_members set role = 'va' where display_name = 'Their name';
+```
+
+**Database change `0033_va_role.sql`** (next free number):
+- **The role:** `team_members` accepts `va`.
+- **Read rules for `va`:** clients (same columns as managers, so never amounts), plan tiers, staff names, check-ins, journey touches, contact preferences and intake, escalations, GoHighLevel call and message **times**, follow-ups and issues (read-only), the client's history, and Kit pages marked for VAs (the playbook and templates get a VA audience).
+- **Write rules for `va`:** add check-ins, touches, intake and contact rows, escalations and history lines, always as themselves. Edit only the memory columns on a client (the client guard allows nothing else).
+- **`va_requests`:** client, what's asked (pause / lost / back), reason, note, who asked, status (waiting / approved / turned down), who decided and when.
+  - VAs add their own requests and read only their own.
+  - Owners and managers read all requests and decide on them.
+  - Nobody deletes a request.
+  - A notice tells owners and managers when a request comes in, and tells the VA when it's decided.
+- **AI:** the budget check accepts VAs for drafts only. The cost log already records who ran what.
+- **Break-in tests:** a VA reads none of client amounts, billing, work orders, leads, audits, Scout, AI briefings, settings, Trash or other people's requests. A VA can't change a client's status or plan, can't change follow-ups, can't approve requests, and can't act as someone else. Plus the usual two-factor and signed-out checks.
+
+**Risks:** this is the biggest security change in client care, because a new kind of person gets client data. The database rules and about 50 break-in tests are the real lock. Before giving a VA real access, the owner can try it with a test VA login.
+
+**Done means:**
+- A test VA login sees only Home, Clients and Kit.
+- It can log touches, intake and memory, and can ask to pause a client.
+- A manager approves the request, and the status log shows it.
+- Every forbidden screen and table is refused (proven by the break-in tests).
+- All tests, RLS tests and the build pass, checked on a phone.
+
 ## Step 1B+ (approved and BUILT 2026-11-24; `0032` not run yet): intake, "No texts", "Needs the owner", Kit playbook
 
 The small extras moved out of Step 1B. Database change `0032_client_care_extras.sql` (next free; 0030 BizToad and 0031 care goals are run).

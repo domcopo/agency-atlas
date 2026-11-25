@@ -269,9 +269,15 @@ export function restoreToadAnswer(raw: unknown, book: Codebook, staff: StaffBook
 
 export type ToadMode = "full" | "developer" | "sales";
 
-/** Which facts a role gets. Always called with the role read from the database. */
-export function toadModeFor(role: MemberRole): ToadMode {
-  return role === "owner" || role === "manager" ? "full" : role;
+/**
+ * Which facts a role gets. Always called with the role read from the database. VAs (0033)
+ * never get BizToad (they have no AI at all), so they get null; the database refuses them too
+ * (toad_settings.roles can't hold 'va').
+ */
+export function toadModeFor(role: MemberRole): ToadMode | null {
+  if (role === "owner" || role === "manager") return "full";
+  if (role === "developer" || role === "sales") return role;
+  return null;
 }
 
 /** Other names that get codes like clients do: sales leads (L3) and Scout prospects (P5). */

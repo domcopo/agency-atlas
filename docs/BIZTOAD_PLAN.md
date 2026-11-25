@@ -272,7 +272,7 @@ Developers and sales (Phase 3), work order drafts from BizToad (Phase 3), voice 
 
 Each role gets its own small fact builder in `src/lib/ai/toad-snapshot.ts`, run through the same money and contact scrubbing as Phase 2.
 
-### Database update `0033_biztoad_phase3.sql` (small)
+### Database update `0034_biztoad_phase3.sql` (small)
 
 - Lets each person **read their own** `ask_toad` cost rows, so developers and salespeople see "you've used $X of $5" (today only owner/managers can read the cost log). Nothing else in the cost log becomes readable.
 - No other change: the "which roles may ask" switch already exists in `toad_settings` (Phase 2).
@@ -296,9 +296,9 @@ Same 3–6¢ a question and $5 per person. With all 7 people switched on, $25 fo
 
 - Fact builder tests per role: a developer's facts contain only their own work orders and no health, team or money fields; a salesperson's contain no client health, work orders or money; both pass the money/contact scrub.
 - Guardrails: `askToad` picks the fact builder from the **database role**, never from anything the browser sends; drafts are never saved inside `askToad`.
-- Break-in tests for `0033` (above).
+- Break-in tests for `0034` (above).
 - `npm run check` and `npm run test:rls` pass.
-- Hand check after you run `0033`: you switch on developers, a developer (or you, using the existing "preview as developer" view, which is read-only and can't ask) confirms their answers mention only their own work; same for a salesperson. A few cents each.
+- Hand check after you run `0034`: you switch on developers, a developer (or you, using the existing "preview as developer" view, which is read-only and can't ask) confirms their answers mention only their own work; same for a salesperson. A few cents each.
 
 ### Not in Phase 3
 
@@ -306,12 +306,12 @@ Voice "calls" (Phase 5, paid), saving conversations, and BizToad doing anything 
 
 ### Build notes (2026-11-24)
 
-- **Database:** `supabase/migrations/0033_biztoad_phase3.sql` adds one read rule, `ai_usage_read_own_toad` (your own `ask_toad` rows only). No grants, no write rules. Break-in tests: section 7fa of `supabase/tests/10_rls_break_in.sql`. One existing 7f test changed on purpose: a salesperson used to read 0 cost rows; now they read exactly their own 1 (and still 0 of anyone else's).
+- **Database:** `supabase/migrations/0034_biztoad_phase3.sql` adds one read rule, `ai_usage_read_own_toad` (your own `ask_toad` rows only). No grants, no write rules. Break-in tests: section 7fa of `supabase/tests/10_rls_break_in.sql`. One existing 7f test changed on purpose: a salesperson used to read 0 cost rows; now they read exactly their own 1 (and still 0 of anyone else's).
 - **Which facts:** `askToad` reads the role from the database (`getCurrentMember`) and calls `toadModeFor(role)`: `toadLeadFacts` (owner/managers, unchanged from Phase 2), `toadDeveloperFacts` or `toadSalesFacts` (all in `src/app/actions.ts`). The pure builders are `buildDeveloperToadFacts` and `buildSalesToadFacts` in `src/lib/ai/toad-snapshot.ts`. They copy only listed fields, then `stripMoney` and the size limit run as before.
 - **Developers:** their open work from `my_work` (title, client code, priority, status, due, start, promise date, steps with ticks, estimate, blocked reason, times sent back, review note), a count of work done in the last 14 days, and contact dates for their clients (`my_client_contacts`). Clients are coded from their own list only. They can't read the team list, so only **their own** name gets a code; a teammate's name typed into a question goes to the AI as typed (known limit).
 - **Salespeople:** their own open leads = assigned to them **or unassigned** (`mySalesLeads`; if their login isn't linked to a GoHighLevel user, unassigned only). Leads are coded `L1…` and Scout prospects `P1…` (`buildNameBook`), and codes are swapped back on screen. Facts: lead stage, pipeline, hot, created, last reach-out; their open follow-ups; reach-outs today vs. their target; appointments in the next 7 days (time, calendar, status); open Scout prospects that are theirs or in the pool (kind, town, score, reasons, pitch); their own visits in the last 7 days; and the leaderboard as **their won-deal count and rank only** (no names, no dollars). No lead values, websites, addresses or phone numbers.
-- **Allowance:** everyone now sees "You've used $X of $5". Before `0033` runs, a developer or salesperson who has already asked sees "Your monthly allowance is $5" instead of a wrong $0.
+- **Allowance:** everyone now sees "You've used $X of $5". Before `0034` runs, a developer or salesperson who has already asked sees "Your monthly allowance is $5" instead of a wrong $0.
 - **Safety page:** tick boxes for Managers, Developers and Salespeople (owner always on). `setToadSettings` only accepts those three names and always keeps the owner; the database checks the names too.
 - **Work order drafts:** owner/managers only, and only once `0013` is run. The AI can return at most one draft (`TOAD_DRAFT_SCHEMA`), turned into a Smart add draft (`restoreQuickAdd`), due date checked against the person's load (`checkDraftDue`), and contact-detail check (`contactDetailsIn`). In the chat it shows **Review and add**, which opens Smart add's own confirm card (`DraftCard`). Nothing is saved until Confirm, which uses the normal add action with its usual checks. `askToad` still writes only the cost reservation and the cost log (guardrail test).
-- **Tests:** `tests/toad.test.ts` (role picking, lead/prospect codes, developer and sales facts contain only their own items and no money, names, websites, health, team or work orders) and `tests/guardrails.test.ts` (role from the database, developer/sales helpers never read clients/health/team/billing, drafts never saved, `0033` read-only).
-- **Hand check (after you run 0033):** tick Developers on the Safety page, sign in as a developer, ask "what's overdue for me?" and confirm only their own work comes up. Same for a salesperson ("which of my leads need a call?"). Then try "make a work order to fix the homepage title" as yourself, open Review and add, and tap Skip (or Confirm if you want it).
+- **Tests:** `tests/toad.test.ts` (role picking, lead/prospect codes, developer and sales facts contain only their own items and no money, names, websites, health, team or work orders) and `tests/guardrails.test.ts` (role from the database, developer/sales helpers never read clients/health/team/billing, drafts never saved, `0034` read-only).
+- **Hand check (after you run 0034):** tick Developers on the Safety page, sign in as a developer, ask "what's overdue for me?" and confirm only their own work comes up. Same for a salesperson ("which of my leads need a call?"). Then try "make a work order to fix the homepage title" as yourself, open Review and add, and tap Skip (or Confirm if you want it).

@@ -71,7 +71,7 @@ import { isPdf, MAX_PDF_BYTES, MAX_UPLOAD_TOTAL_BYTES } from "@/lib/uploads";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, nyDay, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
-import { isLead } from "@/lib/roles";
+import { canCare, isLead } from "@/lib/roles";
 import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
@@ -268,7 +268,7 @@ export async function verifyTwoFactor(_prev: { error?: string } | undefined, for
 export async function logCheckIn(_prev: { error?: string; ok?: boolean } | undefined, form: FormData) {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can log check-ins." };
+  if (!me || !canCare(me.role)) return { error: "Only the owner, a manager or a VA can log check-ins." };
   const clientId = text(form, "clientId", 40);
   const slug = text(form, "slug", 90);
   const day = pastDate(text(form, "date", 10));
@@ -1400,7 +1400,7 @@ const TOUCH_HOW = {
 export async function logTouch(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can log touches." };
+  if (!me || !canCare(me.role)) return { error: "Only the client care team can log touches." };
   const clientId = text(form, "clientId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
   const touch = touchByStep(Number(text(form, "step", 4)));
@@ -1464,7 +1464,7 @@ export async function startOnboarding(form: FormData) {
 export async function saveClientMemory(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can edit client memory." };
+  if (!me || !canCare(me.role)) return { error: "Only the client care team can edit client memory." };
   const clientId = text(form, "clientId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
   const goal = text(form, "goal", 120);
@@ -1645,7 +1645,7 @@ async function saveClientCareRow(db: Db, clientId: string, change: (row: { intak
 export async function saveCareContact(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can change this." };
+  if (!me || !canCare(me.role)) return { error: "Only the client care team can change this." };
   const clientId = text(form, "clientId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
   const noTexts = form.get("noTexts") === "on";
@@ -1672,7 +1672,7 @@ export async function saveCareContact(_prev: JourneyFormState, form: FormData): 
 export async function setIntakeItem(form: FormData) {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || !isLead(me.role)) return;
+  if (!me || !canCare(me.role)) return;
   const clientId = text(form, "clientId", 40);
   const key = asIntakeKey(text(form, "item", 20));
   if (!isUuid(clientId) || !key) return;
@@ -1692,7 +1692,7 @@ export async function setIntakeItem(form: FormData) {
 export async function raiseEscalation(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
-  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can do this." };
+  if (!me || !canCare(me.role)) return { error: "Only the client care team can do this." };
   const clientId = text(form, "clientId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
   const reason = text(form, "reason", 200);
@@ -1720,6 +1720,75 @@ export async function resolveEscalation(form: FormData) {
   const db = await createDatabaseClient();
   const { error } = await db.from("care_escalations").update({ resolved_at: new Date().toISOString() }).eq("id", id);
   if (error) console.warn(`Resolve refused: ${error.code}`);
+  revalidatePath("/", "layout");
+}
+
+// ---------------------------------------------------------------------------
+// VA requests (0033): a VA ASKS to pause, mark lost or bring back a client; an owner or
+// manager approves (the change is made as them, logged as usual) or turns it down.
+// ---------------------------------------------------------------------------
+
+/** VA only: ask for a status change. Nothing changes until an owner or manager approves. */
+export async function requestStatusChange(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "va") return { error: "Only VAs send requests; you can change the status directly." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const pick = text(form, "to", 10);
+  const to = pick === "lost" ? "canceled" : pick === "paused" ? "paused" : pick === "active" ? "active" : null;
+  if (!to) return { error: "Pick Active, Paused or Lost." };
+  const reason = to === "active" ? "back" : asStatusReason(text(form, "reason", 20));
+  if (!reason) return { error: "Pick a reason." };
+  const note = text(form, "note", 300);
+  const secret = findSecrets(note);
+  if (secret) return { error: secret };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("va_requests").insert({ client_id: clientId, to_status: to, reason, note: note || null });
+  if (error) {
+    console.warn(`VA request refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "Requests need one setup step first (0033 SQL). Ask the owner." : "Couldn't send the request." };
+  }
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/**
+ * Owner or manager: approve or turn down a VA's request. Approving makes the change as the
+ * approver, with the reason in the status log first (the database checks that), then marks
+ * the request decided. A request is decided once.
+ */
+export async function decideVaRequest(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const id = text(form, "id", 40);
+  const approve = text(form, "decision", 10) === "approve";
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { data: req } = await db.from("va_requests").select("client_id, to_status, reason, note, status").eq("id", id).maybeSingle();
+  const r = req as { client_id: string; to_status: string; reason: string; note: string | null; status: string } | null;
+  if (!r || r.status !== "waiting") return;
+  if (approve) {
+    const { data: before } = await db.from("clients").select("status").eq("id", r.client_id).maybeSingle();
+    const from = (before as { status?: string } | null)?.status;
+    if (from && from !== r.to_status) {
+      const logged = await db.from("client_status_changes").insert({ client_id: r.client_id, from_status: from, to_status: r.to_status, reason: r.reason, note: r.note ? `VA request: ${r.note}`.slice(0, 300) : "VA request" });
+      if (logged.error) {
+        console.warn(`Status log refused: ${logged.error.code}`);
+        return;
+      }
+      const { error } = await db.from("clients").update({ status: r.to_status, end_date: r.to_status === "active" ? null : localToday() }).eq("id", r.client_id);
+      if (error) {
+        console.warn(`Status change refused: ${error.code}`);
+        return;
+      }
+      const why = STATUS_REASONS.find(([k]) => k === r.reason)?.[1];
+      await logActivity(db, { client_id: r.client_id, kind: "owner_changed", summary: `${STATUS_WORDS[r.to_status as keyof typeof STATUS_WORDS]}${why ? ` (${why})` : ""}, as a VA asked` });
+    }
+  }
+  const { error } = await db.from("va_requests").update({ status: approve ? "approved" : "declined" }).eq("id", id);
+  if (error) console.warn(`Request decision refused: ${error.code}`);
   revalidatePath("/", "layout");
 }
 
@@ -2377,6 +2446,7 @@ export async function askToad(question: unknown, history: unknown): Promise<Toad
   // Which facts: from the role stored in the database, never from anything the browser sends.
   // Each builder reads as the signed-in person, so the database decides what's included.
   const mode = toadModeFor(me.role);
+  if (!mode) return { error: "Asking BizToad isn't available for your role." };
   const prepared = mode === "full" ? await toadLeadFacts(me, question, history) : mode === "developer" ? await toadDeveloperFacts(me, question, history) : await toadSalesFacts(me, question, history);
   if ("error" in prepared) return prepared;
   const { data, book, staff, extra, screens, drafts } = prepared;
@@ -2990,7 +3060,7 @@ export async function saveKitDoc(_prev: { error?: string; ok?: boolean; id?: str
   const category = text(form, "category", 40);
   const rawBody = form.get("body");
   const body = typeof rawBody === "string" ? rawBody.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, 20000) : "";
-  const audience = ["manager", "developer", "sales"].filter((a) => form.get(`aud_${a}`) === "on");
+  const audience = ["manager", "developer", "sales", "va"].filter((a) => form.get(`aud_${a}`) === "on");
   if (!kind) return { error: "Pick what kind of page it is." };
   if (!title) return { error: "Give it a title." };
   const secret = findSecrets(`${title}\n${body}`);
