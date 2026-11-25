@@ -9,6 +9,7 @@
 import { AUDIT_DEFAULTS, type AuditConfig, type AuditPlan, type RoadmapPhase } from "./config";
 import type { AuditData, Fig, SiteMetrics } from "./data";
 import { stateName, US_STATES } from "./geo";
+import { cleanPlaces, splitPlace } from "./places";
 
 export interface IntakeCompetitor {
   name: string;
@@ -137,10 +138,15 @@ export function parseIntake(raw: unknown): IntakeResult {
   const gbpRaw = clean(r.gbpUrl);
   if (gbpRaw && !/^https:\/\/[^\s]{4,180}$/.test(gbpRaw)) errors.push("Google Business Profile link must start with https://.");
   const niche = text(r.niche, "Type of business");
-  const hqTown = text(r.hqTown, "Home town");
   const state = clean(r.state).toUpperCase();
+  // One clean place name (e.g. "Warren, OH" → "Warren"); see src/lib/audit/places.ts.
+  const hqTyped = text(r.hqTown, "Home town");
+  const hqTown = US_STATES[state] && hqTyped ? (splitPlace(hqTyped, state)[0] ?? hqTyped) : hqTyped;
   if (!US_STATES[state]) errors.push("Pick the state.");
-  const cities = names(r.cities, "Other cities", INTAKE_LIMITS.cities).filter((c) => c.toLowerCase() !== hqTown.toLowerCase());
+  // "Westminster & Thornton", "Trumbull and Columbiana County" → one place per entry.
+  const typedCities = names(r.cities, "Other cities", INTAKE_LIMITS.cities * 2);
+  const cities = (US_STATES[state] ? cleanPlaces(typedCities, state) : typedCities).filter((c) => c.toLowerCase() !== hqTown.toLowerCase());
+  if (cities.length > INTAKE_LIMITS.cities) errors.push(`Other cities: at most ${INTAKE_LIMITS.cities} (after splitting combined entries).`);
   const servicesTyped = names(r.services, "Services", INTAKE_LIMITS.services);
   const services = servicesTyped.length ? servicesTyped : niche ? [niche] : [];
   const avgJobUsd = Math.round(number(r.avgJobUsd, "Average job", INTAKE_LIMITS.avgJobMin, INTAKE_LIMITS.avgJobMax));
