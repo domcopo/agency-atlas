@@ -54,7 +54,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
-import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, journeyState, type DayLog, type JourneyState, type TouchLog } from "@/lib/journey";
+import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, journeyState, type DayLog, type JourneyState, type TouchChannel, type TouchLog } from "@/lib/journey";
 import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
@@ -396,6 +396,52 @@ export async function getCareGoals(): Promise<{ ready: boolean; people: { userId
     people: ((team.data ?? []) as { user_id: string; display_name: string; role: string }[]).map((t) => ({ userId: t.user_id, name: t.display_name, role: t.role, points: byUser.get(t.user_id) ?? DEFAULT_DAILY_POINTS })),
   };
 }
+
+export interface ClientCareInfo {
+  noTexts: boolean;
+  preferredChannel: TouchChannel | null;
+  bestTimes: string | null;
+  /** Intake item key -> day received. */
+  intake: Record<string, string>;
+}
+
+/** Contact preferences + week-1 intake (0032), by client database id. ready=false before 0032. */
+export const getClientCareInfo = cache(async (): Promise<{ ready: boolean; byClient: Map<string, ClientCareInfo> }> => {
+  const byClient = new Map<string, ClientCareInfo>();
+  if (!usesDatabase()) return { ready: false, byClient };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("client_care").select("client_id, no_texts, preferred_channel, best_times, intake").limit(5000);
+  if (error) return { ready: false, byClient };
+  for (const r of data ?? []) {
+    const intake: Record<string, string> = {};
+    for (const [k, v] of Object.entries((r.intake as Record<string, unknown>) ?? {})) if (typeof v === "string") intake[k] = v;
+    byClient.set(r.client_id as string, { noTexts: Boolean(r.no_texts), preferredChannel: asTouchChannel(r.preferred_channel), bestTimes: (r.best_times as string | null) ?? null, intake });
+  }
+  return { ready: true, byClient };
+});
+
+export interface Escalation {
+  id: string;
+  clientDbId: string;
+  slug: string | null;
+  name: string;
+  reason: string;
+  automatic: boolean;
+  at: string;
+}
+
+/** Open "Needs the owner" items (0032), newest first. Empty before 0032. */
+export const getOpenEscalations = cache(async (): Promise<Escalation[]> => {
+  if (!usesDatabase()) return [];
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("care_escalations").select("id, client_id, reason, automatic, created_at").is("resolved_at", null).order("created_at", { ascending: false }).limit(50);
+  if (error) return [];
+  const byId = new Map((await getRoster()).map((c) => [c.dbId, c]));
+  return (data ?? []).map((r) => {
+    const c = byId.get(r.client_id as string);
+    return { id: r.id as string, clientDbId: r.client_id as string, slug: c?.id ?? null, name: c?.name ?? "A client", reason: r.reason as string, automatic: Boolean(r.automatic), at: r.created_at as string };
+  });
+});
 
 export interface StatusChange {
   at: string;
@@ -1158,7 +1204,7 @@ export const getWorkOrderDetail = cache(async (id: string) => {
 /** In-app notices (0017). Written only by the database; each person reads only their own. */
 export interface Notice {
   id: string;
-  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow" | "client_lost";
+  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow" | "client_lost" | "needs_owner";
   title: string;
   actionId: string | null;
   at: string;
@@ -1172,6 +1218,7 @@ export const NOTICE_KINDS: { kind: Notice["kind"]; label: string; who: "develope
   { kind: "due_tomorrow", label: "Due tomorrow (shown when I open Atlas)", who: "everyone" },
   { kind: "reassign_request", label: "A developer asks to be reassigned", who: "owner" },
   { kind: "client_lost", label: "A manager marks a client lost (0028)", who: "owner" },
+  { kind: "needs_owner", label: "A client needs me (0032)", who: "owner" },
 ];
 
 /**

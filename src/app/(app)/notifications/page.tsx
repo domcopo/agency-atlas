@@ -19,6 +19,7 @@ const LABEL: Record<Notice["kind"], string> = {
   reassign_request: "Asks to be reassigned",
   due_tomorrow: "Due tomorrow",
   client_lost: "Client marked lost",
+  needs_owner: "Needs you",
 };
 const when = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
 

@@ -24,6 +24,7 @@ import {
   getAuditSettings,
   getAtlasQuestions,
   getCheckInHistory,
+  getClientCareInfo,
   getJourneys,
   getActions,
   getClientHealth,
@@ -66,7 +67,7 @@ import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoad
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
-import { asStatusReason, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
+import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
@@ -1596,15 +1597,17 @@ export async function draftTouchMessage(_prev: CareAiState, form: FormData): Pro
   const slug = text(form, "slug", 90);
   const touch = touchByStep(Number(text(form, "step", 4)));
   if (!touch) return { error: "Unknown touch." };
-  const [roster, team] = await Promise.all([getRoster(), getTeam()]);
+  const [roster, team, careInfo] = await Promise.all([getRoster(), getTeam(), getClientCareInfo()]);
   const client = roster.find((c) => c.id === slug);
   if (!client) return { error: "Unknown client." };
+  // They replied STOP (0032): a text touch is written as an email instead.
+  const noTexts = Boolean(client.dbId && careInfo.byClient.get(client.dbId)?.noTexts);
   // Only this client gets a code (C1); every other client and staff name is swapped out of notes.
   const book = buildCodebook([client, ...roster.filter((c) => c.id !== client.id)]);
   const staff = buildStaffBook(team.members.map((m) => ({ id: m.id, name: m.name })));
   const clean = (t: string | null | undefined) => (t ? redactStaff(redact(t, book), staff).slice(0, 120) : null);
   const data = {
-    touch: { title: touch.title, how: touch.how, purpose: touch.say, ask_for: touch.ask ?? null, template: touch.template ? touch.template.replaceAll("[Business]", "[C1]") : null },
+    touch: { title: touch.title, how: noTexts && touch.channel === "text" ? "Email (they asked not to be texted)" : touch.how, purpose: touch.say, ask_for: touch.ask ?? null, template: touch.template ? touch.template.replaceAll("[Business]", "[C1]") : null },
     client: { code: "C1", tier: client.plans?.map((p) => `${p.service} ${p.name}`).join(", ") || null, goal: clean(client.memory?.goal), tone: clean(client.memory?.tone), next_ask: clean(client.memory?.nextAsk), last_mood: client.lastMood?.mood ?? null },
   };
   const result = await askAi({ task: CARE_DRAFT_TASK, data, schema: CARE_DRAFT_SCHEMA, maxOutputTokens: 800, remainingUsd: pre.remaining });
@@ -1613,6 +1616,106 @@ export async function draftTouchMessage(_prev: CareAiState, form: FormData): Pro
   if (!result.ok) return { error: result.message };
   const draft = restore(String((result.data as { message?: unknown }).message ?? ""), book).slice(0, 1200);
   return { draft, cost: `$${result.costUsd.toFixed(3)}` };
+}
+
+// ---------------------------------------------------------------------------
+// Client care extras (0032): contact preferences, week-1 intake, "Needs the owner".
+// ---------------------------------------------------------------------------
+
+/** Read a client's care row (or null), then update it, or add it if there is none yet. */
+async function saveClientCareRow(db: Db, clientId: string, change: (row: { intake: Record<string, string> }) => Record<string, unknown>): Promise<string | null> {
+  const { data, error } = await db.from("client_care").select("intake").eq("client_id", clientId).maybeSingle();
+  if (error) return error.code ?? "?";
+  const intake = ((data as { intake?: Record<string, string> } | null)?.intake ?? {}) as Record<string, string>;
+  const values = change({ intake });
+  if (data) {
+    const upd = await db.from("client_care").update(values).eq("client_id", clientId);
+    return upd.error ? (upd.error.code ?? "?") : null;
+  }
+  const ins = await db.from("client_care").insert({ client_id: clientId, ...values });
+  return ins.error ? (ins.error.code ?? "?") : null;
+}
+
+/** "No texts" (they replied STOP), preferred channel and best times. Owner or manager. */
+export async function saveCareContact(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can change this." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const noTexts = form.get("noTexts") === "on";
+  const channelRaw = text(form, "channel", 6);
+  const channel = channelRaw ? asTouchChannel(channelRaw) : null;
+  if (channelRaw && !channel) return { error: "Pick call, text, email or video." };
+  if (noTexts && channel === "text") return { error: "\"No texts\" is on, so pick another preferred channel." };
+  const bestTimes = text(form, "bestTimes", 80);
+  if (contactDetailsIn(bestTimes).length) return { error: "Just the times, please (no phone numbers or emails)." };
+  const db = await createDatabaseClient();
+  const { data: before } = await db.from("client_care").select("no_texts").eq("client_id", clientId).maybeSingle();
+  const code = await saveClientCareRow(db, clientId, () => ({ no_texts: noTexts, preferred_channel: channel, best_times: bestTimes || null }));
+  if (code) {
+    console.warn(`Contact preferences refused: ${code}`);
+    return { error: MISSING_TABLE.has(code) ? "This needs one setup step first (0032 SQL). Ask the owner." : "Couldn't save that." };
+  }
+  const was = Boolean((before as { no_texts?: boolean } | null)?.no_texts);
+  if (was !== noTexts) await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: noTexts ? "No texts: client asked not to be texted (use email)" : "Texts allowed again" });
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Tick or untick one week-1 intake item ("received", with today's date). Owner or manager. */
+export async function setIntakeItem(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return;
+  const clientId = text(form, "clientId", 40);
+  const key = asIntakeKey(text(form, "item", 20));
+  if (!isUuid(clientId) || !key) return;
+  const on = form.get("on") === "true";
+  const db = await createDatabaseClient();
+  const code = await saveClientCareRow(db, clientId, ({ intake }) => {
+    const next = { ...intake };
+    if (on) next[key] = localToday();
+    else delete next[key];
+    return { intake: next };
+  });
+  if (code) console.warn(`Intake refused: ${code}`);
+  refreshOps(text(form, "slug", 90));
+}
+
+/** "Needs the owner": a one-line reason; the owner gets a notice (the database sends it). */
+export async function raiseEscalation(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can do this." };
+  const clientId = text(form, "clientId", 40);
+  if (!isUuid(clientId)) return { error: "Unknown client." };
+  const reason = text(form, "reason", 200);
+  if (!reason) return { error: "Say in one line what's going on." };
+  const secret = findSecrets(reason);
+  if (secret) return { error: secret };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("care_escalations").insert({ client_id: clientId, reason });
+  if (error) {
+    console.warn(`Escalation refused: ${error.code}`);
+    return { error: MISSING_TABLE.has(error.code ?? "") ? "This needs one setup step first (0032 SQL). Ask the owner." : "Couldn't send that." };
+  }
+  await logActivity(db, { client_id: clientId, kind: "owner_changed", summary: "Flagged for the owner" });
+  refreshOps(text(form, "slug", 90));
+  return { ok: true };
+}
+
+/** Owner only: mark a "Needs the owner" item resolved. */
+export async function resolveEscalation(form: FormData) {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return;
+  const db = await createDatabaseClient();
+  const { error } = await db.from("care_escalations").update({ resolved_at: new Date().toISOString() }).eq("id", id);
+  if (error) console.warn(`Resolve refused: ${error.code}`);
+  revalidatePath("/", "layout");
 }
 
 /** Who owns a client (owner only; the database enforces this too). */

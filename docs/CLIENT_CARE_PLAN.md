@@ -3,6 +3,40 @@
 **Status (2026-11-24):** Steps 1A (`0025`) and 1B (`0028`) are built, merged and run on the live database. **Step 1D was approved and BUILT on 2026-11-24 (`0031_care_goals.sql` not run yet; Google Ads audits took 0029 and BizToad 0030).** Step 1C (VA logins) has not started.
 **Branch:** `claude/client-care-53178d` (own worktree). **Migration order** (owner, 2026-11-24): 0024 Scout, 0025 client care, 0026 sales leaderboard, 0027 SEO Watcher, 0028 client journey. 0029 Google Ads audits, 0030 BizToad, 0031 care goals (Step 1D); next free 0032.
 
+## Step 1B+ (approved and BUILT 2026-11-24; `0032` not run yet): intake, "No texts", "Needs the owner", Kit playbook
+
+The small extras moved out of Step 1B. Database change `0032_client_care_extras.sql` (next free; 0030 BizToad and 0031 care goals are run).
+
+1. **Week-1 intake checklist** on each client page: 10 tick boxes, from the owner's roadmap.
+   - The items: final services, real service area, logo and brand, job and team photos (with permission), Google Business Profile access, website/domain/hosting access, email or DNS issues, past ads and keywords, preferred channel and best times, other people to keep in the loop.
+   - Atlas stores only "received" and the date. Never logins, files or passwords.
+   - While the client is in Kickoff or First results, the Next move card shows "Still need: photos, Google access…", so every touch asks for what's missing.
+2. **"No texts" switch** (for when a client replies STOP), plus **preferred channel** and **best times to reach them**, on each client page.
+   - With "No texts" on, the Next move card says "Don't text: use email", the Done form starts on Email, and the AI draft is written as an email.
+   - Anyone on the care team (owner, managers) can set it. The change is logged in the client's history.
+3. **"Needs the owner" button** on each client page (owner and managers).
+   - It takes a one-line reason. You get an in-app notice straight away, and it shows at the top of your Home under "Needs you" until you tap Resolved.
+   - **Automatic alert:** when someone logs a "worse" mood on a VIP or top-tier client, you get the same notice without anyone pressing the button.
+4. **Kit playbook pages**, seeded as normal editable Kit pages (managers can read and edit them):
+   - a "Client communication playbook" SOP: house rules, STOP handling, "never invent numbers", "show pages only when they're really done", the baseline heat map first, and calls first;
+   - message templates: Day-1 recap, first pages, week-1 check-in, heat map heads-up, survey, referral.
+
+   There are no real names in them; placeholders like [First name] and [Business] are used instead.
+
+**Database (0032):**
+- `client_care`: one row per client with no_texts, preferred_channel, best_times and intake items received with dates. Owner and managers read and write; changes are stamped with who and when.
+- `care_escalations`: client, reason, who raised it, when, resolved when and by whom. Add-only, except Resolve (owner).
+- A trigger sends the owner a "Needs you" notice, both for the button and for a "worse" mood on a VIP or top-tier client. The notice kind is `needs_owner`, and it can be muted like the others.
+- The Kit pages are added with the migration, in the same way the Kit's first pages were.
+- RLS, the two-factor rule and break-in tests for both tables.
+
+**Done means:**
+- The intake ticks save, and missing items show on early touches.
+- "No texts" changes the Next move card and the Done form.
+- "Needs the owner" and a worse mood on a VIP both reach your notices and your Home; Resolve clears them.
+- The Kit shows the playbook and templates, and you can edit them.
+- All tests, RLS tests and the build pass.
+
 ## Step 1D (built 2026-11-24): restart everyone, journey board, daily goal, AI helper
 
 As built:

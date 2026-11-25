@@ -2390,6 +2390,68 @@ select test.expect('select * from public.care_targets', 0, 'owner without two-fa
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7ca. Client care extras (0032): contact preferences + intake (owner/managers), "Needs the
+--      owner" (raised as yourself, only the owner resolves, reasons can't be rewritten),
+--      automatic escalation for a "worse" mood on a VIP, and the Kit playbook pages.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$insert into public.client_care (client_id, no_texts, preferred_channel, best_times, intake) select id, true, 'call', 'Mornings before 10', '{"photos":"2026-11-24","gbp_access":"2026-11-24"}' from public.clients where slug = 'care-new'$$, 1, 'manager saves contact preferences and intake');
+select test.expect($$insert into public.client_care (client_id, intake) values ('00000000-0000-0000-0000-0000000000c1', '{"passwords":"2026-11-24"}')$$, -2, 'only the 10 known intake items');
+select test.expect($$insert into public.client_care (client_id, best_times) values ('00000000-0000-0000-0000-0000000000c1', repeat('x', 81))$$, -2, 'best times stay short');
+select test.expect($$update public.client_care set no_texts = false where client_id = (select id from public.clients where slug = 'care-new')$$, 1, 'manager turns "No texts" off again');
+select test.expect($$select * from public.client_care where updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'the database records who changed it');
+select test.expect($$delete from public.client_care$$, -1, 'contact preferences are never deleted through the app');
+-- care-new is a VIP (7v): a "worse" mood raises one automatic "Needs the owner".
+select test.expect($$insert into public.check_ins (client_id, happened_on, mood) select id, current_date, 'worse' from public.clients where slug = 'care-new'$$, 1, 'manager logs a worse mood on a VIP client');
+select test.expect($$select * from public.care_escalations where automatic$$, 1, 'which raises one automatic escalation');
+select test.expect($$insert into public.check_ins (client_id, happened_on, mood) select id, current_date, 'worse' from public.clients where slug = 'care-new'$$, 1, 'another worse mood the same day');
+select test.expect($$select * from public.care_escalations where automatic$$, 1, 'does not pile up a second open escalation');
+select test.expect($$insert into public.check_ins (client_id, happened_on, mood) values ('00000000-0000-0000-0000-0000000000c1', current_date, 'worse')$$, 1, 'a worse mood on a regular client');
+select test.expect($$select * from public.care_escalations where client_id = '00000000-0000-0000-0000-0000000000c1'$$, 0, 'raises nothing automatically');
+select test.expect($$insert into public.care_escalations (client_id, reason) values ('00000000-0000-0000-0000-0000000000c1', 'Upset about rankings (test)')$$, 1, 'manager presses "Needs the owner" with a reason');
+select test.expect($$insert into public.care_escalations (client_id, reason) values ('00000000-0000-0000-0000-0000000000c1', '  ')$$, -2, 'a reason is required');
+select test.expect($$insert into public.care_escalations (client_id, reason, raised_by) values ('00000000-0000-0000-0000-0000000000c1', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'nobody raises one as someone else');
+select test.expect($$insert into public.care_escalations (client_id, reason, automatic) values ('00000000-0000-0000-0000-0000000000c1', 'x', true)$$, -1, 'people cannot fake an automatic one');
+select test.expect($$update public.care_escalations set resolved_at = now()$$, 0, 'only the owner resolves');
+select test.expect($$delete from public.care_escalations$$, -1, 'escalations are never deleted');
+select test.expect($$select * from public.kit_docs where category = 'Client care'$$, 7, 'managers read the playbook and templates');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.notifications where kind = 'needs_owner'$$, 2, 'the owner gets a notice for each (button and automatic)');
+select test.expect($$update public.care_escalations set reason = 'rewritten'$$, -1, 'a reason cannot be rewritten');
+select test.expect($$update public.care_escalations set resolved_at = now() where reason like 'Upset%'$$, 1, 'the owner resolves one');
+select test.expect($$select * from public.care_escalations where resolved_by = '00000000-0000-0000-0000-0000000000a1' and resolved_at is not null$$, 1, 'the database records who resolved it');
+select test.expect($$select * from public.care_escalations where resolved_at is null$$, 1, 'the other stays open');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.client_care', 0, 'developer reads no contact preferences');
+select test.expect('select * from public.care_escalations', 0, 'developer reads no escalations');
+select test.expect($$select * from public.kit_docs where category = 'Client care'$$, 0, 'developers do not see the client playbook');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.client_care', 0, 'salesperson reads no contact preferences');
+select test.expect($$insert into public.care_escalations (client_id, reason) values ('00000000-0000-0000-0000-0000000000c1', 'x')$$, -1, 'salesperson cannot raise escalations');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.client_care', 0, 'owner without two-factor reads no contact preferences');
+select test.expect('select * from public.care_escalations', 0, 'owner without two-factor reads no escalations');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
