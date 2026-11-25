@@ -184,3 +184,13 @@ describe("audit page as steps", () => {
     expect(steps).toContain('title="Advanced: run it in Claude yourself"');
   });
 });
+
+describe("other-state towns in a run", () => {
+  it("the local 3-pack for 'Sharon, PA' is searched from Sharon, Pennsylvania", () => {
+    const r = parseIntake({ company: "Sample Roofing (fictional)", domain: "sampleroofing.example", niche: "Roofing", hqTown: "Austintown", state: "OH", cities: "Sharon, PA", services: "Roofing", avgJobUsd: 9000 });
+    if (!r.ok) throw new Error(r.errors.join(";"));
+    const plan = planSeoRun(r.intake, ["summary", "heatmap"]);
+    expect(plan.first.find((l) => l.id === "pack:1")?.task).toMatchObject({ keyword: "roofing", location_name: "Sharon,Pennsylvania,United States" });
+    expect(plan.first.find((l) => l.id === "pack:0")?.task).toMatchObject({ location_name: "Austintown,Ohio,United States" });
+  });
+});

@@ -84,10 +84,10 @@ import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, u
 import { parseAuditConfig } from "@/lib/audit/config";
 import { cleanCity, cleanDomain, cleanKeyword, cleanNiche, cleanPosition } from "@/lib/watch/lists";
 import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue, WATCH_RESULTS_MAX_BYTES } from "@/lib/watch/rounds";
-import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans } from "@/lib/audit/intake";
+import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { placeBookFor, statePlaces } from "@/lib/audit/places-list";
+import { checkPlaces, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -3631,6 +3631,18 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
 async function saveRunResults(db: Awaited<ReturnType<typeof createDatabaseClient>>, auditId: string, block: Record<string, unknown>, config: Record<string, unknown>, retrieved: string) {
   const { error } = await db.from("audits").update({ data: { v: 1, block, by: "run" }, config, data_retrieved: retrieved }).eq("id", auditId);
   if (error) throw new Error("Couldn't save the results to the audit.");
+}
+
+/** The audit builders' place help: each typed town checked, miles from home, nearby towns (public data). */
+export async function getPlaceHelp(state: string, home: string, cities: string): Promise<{ home: string | null; checks: PlaceCheck[]; nearby: NearbyTown[] }> {
+  await notWhilePreviewing();
+  const none = { home: null, checks: [], nearby: [] };
+  if (!/^[A-Z]{2}$/.test(state) || home.length > 120 || cities.length > 2000) return none;
+  if (usesDatabase()) {
+    const me = await getCurrentMember();
+    if (!me || (!isLead(me.role) && me.role !== "sales")) return none;
+  }
+  return checkPlaces(state, home, splitList(cities));
 }
 
 /** One state's place names for the audit builders' suggestions (owner, managers, sales). */
