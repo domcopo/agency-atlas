@@ -6,7 +6,7 @@
 // (useSeen), so opening a tab stops it glowing on both. Which tabs show is only a
 // convenience: the database decides what each role can actually read.
 
-import { Bell, ClipboardList, FileSearch, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, ChartLine, ClipboardList, FileSearch, ShieldCheck, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Fragment, useEffect, type ComponentType } from "react";
@@ -34,6 +34,9 @@ function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/** The SEO Watcher has its own row under Growth, so Growth isn't lit while you're in it. */
+const WATCHER = "/growth/watcher";
+
 export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSafety, theme }: SideNavProps) {
   const pathname = usePathname();
   const only = MODE_TABS[mode];
@@ -52,9 +55,11 @@ export function SideNav({ hints = {}, mode = "full", workOrders, notices, showSa
       <ul className="space-y-1">
         {shown.map((t) => (
           <Fragment key={t.href}>
-            <TabItem tab={t} active={isActive(pathname, t.href)} hint={hints[t.href]} />
+            <TabItem tab={t} active={isActive(pathname, t.href) && !(t.href === "/growth" && isActive(pathname, WATCHER))} hint={hints[t.href]} />
             {/* Audits sits under Sales (computers only; on phones it's a card at the top of Sales). */}
             {t.href === "/sales" && <PlainItem href="/audits" label="Audits" icon={FileSearch} active={isActive(pathname, "/audits")} />}
+            {/* SEO Watcher sits under Growth (computers only; on phones it's a card at the top of Growth). */}
+            {t.href === "/growth" && <PlainItem href={WATCHER} label="SEO Watcher" icon={ChartLine} active={isActive(pathname, WATCHER)} />}
           </Fragment>
         ))}
       </ul>
