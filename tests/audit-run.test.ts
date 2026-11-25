@@ -42,6 +42,8 @@ describe("planning a run", () => {
     const plan = planSeoRun(seoIntake, ["summary", "heatmap", "keywords"]);
     expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "suggest:1", "serp:0", "serp:1", "serp:2", "serp:3", "maps:area", "pack:0", "pack:1"]);
     expect(plan.second(["we buy houses denver"]).map((l) => l.id)).toEqual(["volume", "difficulty"]);
+    // "near me" is counted for the home town, not the whole state.
+    expect(plan.second(["we buy houses denver", "we buy houses near me"]).map((l) => [l.id, l.task.location_name])).toEqual([["volume", "Colorado,United States"], ["volume:near", "Denver,Colorado,United States"], ["difficulty", undefined]]);
     expect(plan.perSite("milehighhomes.example", "Mile High Homes (fictional)", true).map((l) => l.id)).toEqual(["ranked:milehighhomes.example", "maps:milehighhomes.example", "instant:milehighhomes.example"]);
     expect(plan.perSite("peakoffers.example", "Peak Offers (fictional)", false).map((l) => l.id)).toEqual(["ranked:peakoffers.example", "maps:peakoffers.example"]);
     const P = DFS_PRICE;
@@ -49,7 +51,7 @@ describe("planning a run", () => {
       2 * P["/v3/dataforseo_labs/google/keyword_suggestions/live"] + // business type + the service
       6 * P["/v3/serp/google/organic/live/advanced"] + // 4 money searches + 2 towns' 3-packs
       P["/v3/serp/google/maps/live/advanced"] + // Google Maps from the home town (competitors)
-      2 * P["/v3/keywords_data/google_ads/search_volume/live"] +
+      4 * P["/v3/keywords_data/google_ads/search_volume/live"] + // state, home-town near me, competitors' searches, brands
       P["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] +
       6 * (P["/v3/dataforseo_labs/google/ranked_keywords/live"] + P["/v3/serp/google/maps/live/advanced"]) +
       P["/v3/on_page/instant_pages"];
@@ -120,11 +122,12 @@ describe("SEO: answers → block → checker", () => {
     ["volume", ans([
       { keyword: "we buy houses denver", search_volume: 1300, cpc: 38.2 },
       { keyword: "we buy houses arvada", search_volume: 90, cpc: 21 },
-      { keyword: "we buy houses near me", search_volume: 2400, cpc: null },
+      { keyword: "we buy houses near me", search_volume: 99000, cpc: null }, // state-wide: not used
       { keyword: "sell my house fast denver", search_volume: 500, cpc: 30 },
       { keyword: "cash home buyers arvada", search_volume: 40, cpc: null },
       { keyword: "we buy houses colorado", search_volume: 200, cpc: 12 },
     ], 0.075)],
+    ["volume:near", ans([{ keyword: "we buy houses near me", search_volume: 2400 }])],
     ["serp:0", hqSerp],
     ["pack:0", serp([{ type: "local_pack", rank_group: 2, domain: "milehighhomes.example" }])],
     ["pack:1", serp([{ type: "local_pack", rank_group: 1, domain: "peakoffers.example" }, { type: "organic", rank_group: 4, domain: "milehighhomes.example" }])],
@@ -313,5 +316,26 @@ describe("search phrases Google accepts (2026-11-25 run: one long phrase blocked
       "commerrcial property buying and sales near me",
     ]);
     for (const k of moneyKeywords(["A very long service name with many words in it"], ["Denver"], "CO")) expect(k.keyword.split(" ").length).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("counting competitors' searches for the state", () => {
+  const plan = planSeoRun(seoIntake, ["summary"]);
+  const rankedAns = (domain: string, rows: [string, number, number][]) => ({ result: [{ items: rows.map(([keyword, rank, us]) => ({ keyword_data: { keyword, keyword_info: { search_volume: us } }, ranked_serp_element: { serp_item: { rank_group: rank, domain } } })) }], costUsd: 0 });
+  const answers = new Map<string, DfsAnswer>([
+    ["ranked:peakoffers.example", rankedAns("peakoffers.example", [["we buy houses arvada co", 1, 50], ["home buyers arvada", 2, 400], ["we buy houses denver", 1, 900], ["arvada weather", 1, 9000], ["we buy houses near me", 1, 99000]])],
+  ]);
+
+  it("asks only for local, on-topic searches the universe didn't count, biggest first", () => {
+    const l = plan.rankedVolume(answers, ["peakoffers.example"], ["we buy houses denver"]);
+    expect(l?.task).toMatchObject({ keywords: ["home buyers arvada", "we buy houses arvada co"], location_name: "Colorado,United States" });
+    expect(plan.rankedVolume(new Map(), ["peakoffers.example"], [])).toBeNull();
+  });
+
+  it("a search with no state count gets 0 visits, never the US-wide figure", () => {
+    const a = new Map<string, DfsAnswer>([...answers, ["volume", ans([{ keyword: "we buy houses denver", search_volume: 1000 }])]]);
+    const b = buildSeoBlock(seoIntake, ["summary"], { answers: a, competitors: [{ domain: "peakoffers.example", name: "Peak Offers (fictional)", town: "Denver" }], retrieved: TODAY, costUsd: 0, calls: 0, universe: ["we buy houses denver"] });
+    const peak = (b.sites as { website: string; organicVisits: number }[]).find((x) => x.website === "peakoffers.example");
+    expect(peak?.organicVisits).toBe(280); // denver 1000 × 28%; "home buyers arvada" (US 400) has no state count
   });
 });

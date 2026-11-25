@@ -7,7 +7,7 @@
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
 import { normalizeDomain, type AuditIntake } from "./intake";
-import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, topicOf, topicPattern, type Market } from "./depth";
+import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, isLocal, localPattern, onTopic, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, topicOf, topicPattern, type Market } from "./depth";
 
 /**
  * The places around an audit, looked up by the caller (the place list is server data and
@@ -121,6 +121,8 @@ export interface SeoPlan {
   perSite: (domain: string, name: string | null, business: boolean) => Lookup[];
   /** How often each business is searched by name (US). */
   brand: (names: string[]) => Lookup | null;
+  /** Once rankings are in: state counts for local searches the sites rank for that weren't counted yet. */
+  rankedVolume: (answers: Map<string, DfsAnswer>, domains: string[], universe: string[]) => Lookup | null;
   seeds: string[];
   sitesWorstCase: number;
   estimateUsd: number;
@@ -156,6 +158,10 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
   }
   const second = (universe: string[]): Lookup[] => {
     const list: Lookup[] = [{ id: "volume", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: universe.slice(0, 1000), location_name: stateLocation(intake.state), language_code: "en" } }];
+    // "near me" searches counted for the home town, not the whole state (a state-wide figure
+    // counted 400,000 "car rental near me" searches for one Cleveland business).
+    const near = universe.filter((k) => ` ${k} `.includes(" near me ")).slice(0, 1000);
+    if (near.length) list.push({ id: "volume:near", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: near, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en" } });
     if (on.has("keywords")) list.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: universe.slice(0, 1000), location_code: US, language_code: "en" } });
     return list;
   };
@@ -179,15 +185,28 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
     const phrases = [...new Set(names.map((n) => searchPhrase(n.replace(/\s*\([^)]*\)/g, ""))).filter((t): t is string => !!t))].slice(0, 10);
     return phrases.length ? { id: "brand", step: "Brand searches", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: phrases, location_code: US, language_code: "en" } } : null;
   };
+  // Competitors rank for local searches the universe doesn't have ("car rental parma"). Their
+  // visits must use THIS state's counts, not DataForSEO's US-wide figure (which, for "car rental
+  // brooklyn", is New York's demand), so those searches are counted for the state too.
+  const rankedVolume = (answers: Map<string, DfsAnswer>, domains: string[], universe: string[]): Lookup | null => {
+    const known = new Set(universe);
+    const t = { ...topicOf([intake.niche, ...intake.services], markets), known };
+    const best = new Map<string, number>();
+    for (const d of domains)
+      for (const r of readRanked(answers.get(`ranked:${d}`), d))
+        if (!known.has(r.keyword) && !` ${r.keyword} `.includes(" near me ") && isLocal(r.keyword, markets, intake.state) && onTopic(r.keyword, t)) best.set(r.keyword, Math.max(best.get(r.keyword) ?? 0, r.usVolume ?? 0));
+    const keywords = [...best].sort((a, b) => b[1] - a[1]).slice(0, 1000).map(([k]) => k);
+    return keywords.length ? { id: "volume:ranked", step: "Competitors", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords, location_name: stateLocation(intake.state), language_code: "en" } } : null;
+  };
   const sitesWorstCase = 1 + RUN_RULES.competitors;
   const estimateUsd = round2(
     first.reduce((sum, l) => sum + DFS_PRICE[l.path], 0) +
-      DFS_PRICE["/v3/keywords_data/google_ads/search_volume/live"] * 2 + // state counts + brand searches
+      DFS_PRICE["/v3/keywords_data/google_ads/search_volume/live"] * 4 + // state counts, home-town near me, ranked searches, brand searches
       (on.has("keywords") ? DFS_PRICE["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] : 0) +
       sitesWorstCase * (DFS_PRICE["/v3/dataforseo_labs/google/ranked_keywords/live"] + DFS_PRICE["/v3/serp/google/maps/live/advanced"]) +
       DFS_PRICE["/v3/on_page/instant_pages"],
   );
-  return { first, second, perSite, brand, seeds, sitesWorstCase, estimateUsd };
+  return { first, second, perSite, brand, rankedVolume, seeds, sitesWorstCase, estimateUsd };
 }
 
 /** The money searches checked live from the home town: each service + home town, then "near me". */
@@ -418,7 +437,9 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const cities = [intake.hqTown, ...intake.cities];
   const { all: markets, others } = areaOf(intake, run.area);
   const universe = run.universe ?? moneyKeywords(intake.services, cities, intake.state).map((k) => k.keyword);
-  const volume = readVolume(run.answers.get("volume"));
+  // State counts: the universe, plus the searches competitors rank for (counted after rankings).
+  const volume = new Map([...readVolume(run.answers.get("volume:ranked")), ...readVolume(run.answers.get("volume"))]);
+  const nearVolume = readVolume(run.answers.get("volume:near"));
   const difficulty = readDifficulty(run.answers.get("difficulty"));
   const money = seoMoneyTerms(intake);
   const serps = money.map((_, i) => readSerp(run.answers.get(`serp:${i}`)));
@@ -428,16 +449,24 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
 
   // Each site's local rankings → the click-through model (D1). No answer = numbers "not found".
   const topic = { ...topicOf([intake.niche, ...intake.services], markets), known: new Set(universe) };
-  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state, others, topic)]));
+  // Once state counts exist, a search Google reports no count for gets 0 visits, never the US figure.
+  const counted = (k: string) => (volume.size ? (volume.get(k)?.searches ?? 0) : null);
+  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), counted, cpc, markets, intake.state, others, topic)]));
 
   const demand = cities.map((city) => {
     const known = universe.filter((k) => marketOf(k, markets)?.label === city).map(searches).filter((v): v is number => typeof v === "number");
     return { city, searches: known.length ? known.reduce((a, v) => a + v, 0) : null };
   });
-  const nearRows = universe.filter((k) => groupOf(k, markets, intake.state) === "Near me").map(searches).filter((v): v is number => typeof v === "number");
+  const nearRows = universe.filter((k) => groupOf(k, markets, intake.state) === "Near me").map((k) => nearVolume.get(k)?.searches ?? null).filter((v): v is number => typeof v === "number");
 
-  const ranked = [...universe].sort((a, b) => (searches(b) ?? -1) - (searches(a) ?? -1)).slice(0, 200);
-  const moneySet = new Set([...money, ...ranked.slice(0, 8)]);
+  // Shown counts: "near me" rows use the home town's figure (the state's would dwarf every town).
+  const isNear = (k: string) => ` ${k} `.includes(" near me ");
+  const shown = (k: string) => (isNear(k) ? (nearVolume.get(k)?.searches ?? null) : searches(k));
+  const ranked = [...universe].sort((a, b) => (shown(b) ?? -1) - (shown(a) ?? -1)).slice(0, 200);
+  // Positions exist only for the live money searches and the local searches rankings were read
+  // for (towns or the state, not "near me"); anything else is "not checked", never "not ranking".
+  const checkable = (k: string) => money.includes(k) || (!` ${k} `.includes(" near me ") && isLocal(k, markets, intake.state, others));
+  const moneySet = new Set([...money, ...ranked.filter(checkable).slice(0, 8)]);
   const keywords = ranked.map((k) => {
     const v = volume.get(k);
     const at = money.indexOf(k);
@@ -446,11 +475,11 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
       keyword: k,
       group: groupOf(k, markets, intake.state),
       money: moneySet.has(k),
-      searches: v?.searches ?? null,
-      cpcUsd: v?.cpc ?? null,
+      searches: shown(k),
+      cpcUsd: (isNear(k) ? nearVolume.get(k)?.cpc : v?.cpc) ?? v?.cpc ?? null,
       difficulty: difficulty.get(k) ?? null,
     };
-    if (models.size || serp) {
+    if ((models.size && checkable(k)) || serp) {
       row.ranks = Object.fromEntries(sites.map((d) => [d, models.get(d)?.positions.get(k) ?? serp?.organic.find((o) => o.domain === d)?.rank ?? null]));
     }
     return row;

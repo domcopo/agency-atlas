@@ -29,7 +29,7 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
         ]
       : []),
   ];
-  const money = data.keywords.filter((k) => k.money);
+  const money = data.keywords.filter((k) => k.money && k.positionsChecked !== false);
   const short = shortLabels(config.competitors.map((c) => c.name));
   const cols = [
     { domain: config.company.domain, label: "You", isClient: true },

@@ -3623,6 +3623,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
+      const rankedVolume = plan.rankedVolume(answers, sites.map((x) => x.domain), universe);
+      if (rankedVolume) await runLookups([rankedVolume]);
       let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");

@@ -33,7 +33,7 @@ export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
       </div>
       <div className="audit-card" style={{ flex: 1, overflow: "hidden" }}>
         <h3>Keyword ranking matrix (Google organic position)</h3>
-        <PositionMatrix keywords={data.keywords.filter((k) => k.money).slice(0, 4)} columns={cols} showVolume={false} />
+        <PositionMatrix keywords={data.keywords.filter((k) => k.money && k.positionsChecked !== false).slice(0, 4)} columns={cols} showVolume={false} />
       </div>
     </Slide>
   );
