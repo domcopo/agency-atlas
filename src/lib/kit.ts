@@ -5,7 +5,7 @@
 //   can never run code: it is shown as plain text.
 
 export type KitKind = "readme" | "sop" | "faq" | "template";
-export type KitAudience = "manager" | "developer" | "sales";
+export type KitAudience = "manager" | "developer" | "sales" | "va";
 
 export interface KitDoc {
   id: string;

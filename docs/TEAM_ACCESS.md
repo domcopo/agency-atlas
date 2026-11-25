@@ -11,8 +11,10 @@ Only the owner adds people, by hand, in Supabase. The app itself can't create ac
 | **manager** | All clients, health, check-ins, pipeline | Log check-ins, answer Atlas asks |
 | **developer** | Their own work orders, issues and follow-ups; contact dates of their clients; Kit pages for developers | Update status, tick steps, comment |
 | **sales** | Open leads in the Sales pipelines (no phones or emails), GoHighLevel user names, their own target, lead follow-ups, Kit pages for sales | Log reach-outs, add/finish lead follow-ups, Refresh leads |
+| **va** (0033) | Home (client care), Clients (never prices), client follow-ups (read-only), Kit pages marked for VAs | Log journey touches and check-ins, tick intake, set "No texts", edit client memory, press "Needs the owner", **ask** to pause / mark lost (a manager or the owner approves) |
 
-Rule of thumb: people who talk to clients → **manager**. SEO developers → **developer**.
+Rule of thumb: people who lead client work → **manager**; virtual assistants who help with client
+communication → **va** (needs setup step 0033). SEO developers → **developer**.
 Salespeople → **sales** (then link them to their GoHighLevel user and set a target in
 Sales → Setup).
 
@@ -33,7 +35,15 @@ from auth.users u
 where lower(u.email) = 'their@email.com';
 ```
 
-It should say **1 row**. (Role must be exactly `manager`, `developer` or `sales`.)
+It should say **1 row**. (Role must be exactly `manager`, `developer`, `sales` or `va`.)
+
+**Switching someone who is already a manager to VA** (one line, takes effect on their next page load):
+
+```sql
+update public.team_members set role = 'va' where display_name = 'Their first name';
+```
+
+Tip: try it first with a test VA login (your own second email) and look around as them.
 `staff_id` links the login to their team-list entry: developers need it to see their
 own work, and managers need it for "My Work".
 

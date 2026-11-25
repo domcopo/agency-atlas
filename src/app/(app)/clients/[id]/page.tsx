@@ -2,7 +2,7 @@ import { BillingChip } from "@/components/cards/BillingChip";
 import Link from "next/link";
 import { AlertTriangle, BellRing, CalendarDays, Clock, Layers } from "lucide-react";
 import type { Metadata } from "next";
-import { isLead } from "@/lib/roles";
+import { canCare, isLead, isVa } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/cards/CopyButton";
@@ -51,7 +51,7 @@ const sourceLabel: Record<string, string> = {
 
 export default async function ClientPage({ params }: Props) {
   const { id } = await params;
-  if (usesDatabase() && !isLead((await getMember())?.role)) return <RoleNotice title="Client" />;
+  if (usesDatabase() && !canCare((await getMember())?.role)) return <RoleNotice title="Client" />;
   const c = await getRosterClient(id);
   if (!c) notFound();
   const today = getToday();
@@ -66,6 +66,9 @@ export default async function ClientPage({ params }: Props) {
   const ops = await getClientOps(c.id);
   const staff = (await getTeam()).members.map((m) => ({ id: m.id, name: m.name }));
   const canWork = Boolean(usesDatabase() && member && isLead(member.role) && c.dbId);
+  // Client care work (touches, check-ins, intake, memory, "Needs the owner"): owner, managers and VAs (0033).
+  const canCareEdit = Boolean(usesDatabase() && member && canCare(member.role) && c.dbId);
+  const va = isVa(member?.role);
   const nextAction = [...(ops?.open ?? [])].sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"))[0] ?? null;
   const isCurrent = c.status !== "canceled" && c.status !== "incomplete_expired";
   const timeline = await getClientTimeline(c.id);
@@ -147,7 +150,7 @@ export default async function ClientPage({ params }: Props) {
 
       {journey && c.dbId && (
         <div className="mb-3">
-          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canWork} canUseAi={canUseAi} noTexts={Boolean(info?.noTexts)} missing={careInfo.ready ? missingIntake(received) : []} />
+          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canCareEdit} canUseAi={canUseAi} noTexts={Boolean(info?.noTexts)} missing={careInfo.ready ? missingIntake(received) : []} />
         </div>
       )}
 
@@ -183,7 +186,7 @@ export default async function ClientPage({ params }: Props) {
         </section>
       )}
 
-      {canWork && isCurrent && (
+      {canCareEdit && isCurrent && (
         <details className="glass mt-2.5 rounded-3xl px-4 py-1">
           <summary className="pressable flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-violet">
             + Log a contact (call, message, check-in…)
@@ -330,7 +333,7 @@ export default async function ClientPage({ params }: Props) {
                           <input type="hidden" name="on" value={on ? "false" : "true"} />
                           <button
                             type="submit"
-                            disabled={!canWork}
+                            disabled={!canCareEdit}
                             aria-pressed={on}
                             className={`pressable flex min-h-10 w-full items-center gap-2 rounded-xl border px-3 text-left text-xs ${on ? "border-lime/40 bg-lime/10" : "border-line bg-white/5"}`}
                           >
@@ -346,7 +349,7 @@ export default async function ClientPage({ params }: Props) {
                   })}
                 </ul>
                 <p className="text-[11px] text-faint">Tick when it&apos;s received. Atlas never stores the logins or files themselves.</p>
-                {canWork && (
+                {canCareEdit && (
                   <details>
                     <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Contact preferences</summary>
                     <div className="pt-1">
@@ -368,7 +371,7 @@ export default async function ClientPage({ params }: Props) {
               <dt className="text-xs text-muted">Next ask</dt>
               <dd>{c.memory?.nextAsk ?? <span className="text-faint">Not set</span>}</dd>
             </dl>
-            {canWork && (
+            {canCareEdit && (
               <details>
                 <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit memory</summary>
                 <div className="pt-1">
@@ -380,7 +383,7 @@ export default async function ClientPage({ params }: Props) {
 
           <SectionTitle aside={statusWord[c.status] ?? c.status}>Status</SectionTitle>
           <GlassCard className="space-y-3">
-            {canWork && careInfo.ready && (
+            {canCareEdit && careInfo.ready && (
               <details>
                 <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-amber">Needs the owner</summary>
                 <div className="pt-1">
@@ -388,13 +391,13 @@ export default async function ClientPage({ params }: Props) {
                 </div>
               </details>
             )}
-            {canWork && c.status !== "incomplete_expired" && (
+            {(canWork || (va && canCareEdit)) && c.status !== "incomplete_expired" && (
               <details>
                 <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-xs font-semibold text-violet">
                   {c.status === "active" ? "Pause or mark lost" : "Change status"}
                 </summary>
                 <div className="pt-1">
-                  <ClientStatusForm clientId={c.dbId} slug={c.id} status={c.status} today={today} />
+                  <ClientStatusForm clientId={c.dbId} slug={c.id} status={c.status} today={today} request={va} />
                 </div>
               </details>
             )}

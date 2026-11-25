@@ -40,7 +40,8 @@ import { DeveloperHome } from "@/components/cards/DeveloperHome";
 import { clientCareView, HOME_LAYOUT_LABEL, salesView, workLeadView } from "@/lib/home-layouts";
 import { HomeSwitcher } from "@/components/home/HomeSwitcher";
 import { ClientCareHome } from "@/components/home/ClientCareHome";
-import { getCareToday, getJourneys, getOpenEscalations } from "@/lib/data-source";
+import { getCareToday, getJourneys, getOpenEscalations, getVaRequests } from "@/lib/data-source";
+import { VaRequests } from "@/components/cards/VaRequests";
 import { NeedsYou } from "@/components/cards/NeedsYou";
 import { touchesDue } from "@/lib/journey";
 import { WorkLeadHome } from "@/components/home/WorkLeadHome";
@@ -140,6 +141,19 @@ export default async function MissionControlPage() {
   }
   // Salespeople: "Today's plan" (the sales coach). The database gives them only open
   // sales-pipeline leads, their own target and lead follow-ups.
+  // VAs (0033): the client care view only (touches due, needs attention, today's goal) and their requests.
+  if (me?.role === "va") {
+    const [ops, team, journeys, goal, mine] = await Promise.all([getOps(), getTeam(), getJourneys(), getCareToday(), getVaRequests()]);
+    const view = clientCareView({ clients: ops.clients, health: ops.health, checkIns: ops.checkIns, actions: ops.actions, priorities: ops.priorities, staffId: me.staffId, today: ops.today });
+    const touches = journeys.ready ? touchesDue(ops.clients, journeys.bySlug, me.staffId, ops.today) : null;
+    return (
+      <>
+        <PageHeader title={`Hi, ${me.name}`} subtitle="Client care" action={<a href="/account" className="pressable glass flex min-h-11 items-center rounded-2xl px-3 text-xs font-semibold">Account</a>} />
+        <VaRequests items={mine} canDecide={false} />
+        <ClientCareHome view={view} staff={team.members.map((m) => ({ id: m.id, name: m.name }))} canEdit={false} today={ops.today} linked={Boolean(me.staffId)} touches={touches} goal={goal} />
+      </>
+    );
+  }
   if (me?.role === "sales") {
     // Refreshes the leads at most hourly, alongside this page (the next visit shows the result).
     const refresh = autoRefreshLeads().catch(() => undefined);
@@ -233,6 +247,7 @@ export default async function MissionControlPage() {
         <PageHeader title={HOME_LAYOUT_LABEL[homeLayout.layout]} subtitle={data.weekLabel} action={safetyLink} />
         <HomeSwitcher current={homeLayout.layout} />
         {me?.role === "owner" && <NeedsYou items={await getOpenEscalations()} />}
+        {me && isLead(me.role) && <VaRequests items={await getVaRequests()} canDecide />}
         {body}
       </>
     );
@@ -531,6 +546,7 @@ export default async function MissionControlPage() {
       <PageHeader title="Mission Control" subtitle={data.weekLabel} action={safetyLink} />
       {homeLayout && !samples && <HomeSwitcher current={homeLayout.layout} />}
       {me?.role === "owner" && <NeedsYou items={await getOpenEscalations()} />}
+      {me && isLead(me.role) && <VaRequests items={await getVaRequests()} canDecide />}
 
       {ai.tablesReady && (ai.level === "warning" || ai.level === "blocked") && (
         <Link href="/safety#ai" className="mb-3 block rounded-2xl border border-rose/40 bg-rose/10 p-3 text-sm">

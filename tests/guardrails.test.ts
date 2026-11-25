@@ -862,8 +862,24 @@ describe("Sales (0020): the sales role sees and does only sales things", () => {
   it("salespeople get the Home, Sales and Kit tabs only", () => {
     const nav = readFileSync(join(ROOT, "src/components/shell/BottomNav.tsx"), "utf8");
     expect(nav).toMatch(/sales: \["\/", "\/sales", "\/kit"\]/);
-    for (const page of ["src/app/(app)/clients/page.tsx", "src/app/(app)/clients/[id]/page.tsx", "src/app/(app)/growth/page.tsx", "src/app/(app)/work/page.tsx"]) {
+    for (const page of ["src/app/(app)/growth/page.tsx", "src/app/(app)/work/page.tsx"]) {
       expect(readFileSync(join(ROOT, page), "utf8"), page).toMatch(/!isLead\(.*\)\) return <RoleNotice/);
+    }
+    // Client pages (0033): the client care team (owner, managers, VAs). Still never sales or developers.
+    for (const page of ["src/app/(app)/clients/page.tsx", "src/app/(app)/clients/[id]/page.tsx"]) {
+      expect(readFileSync(join(ROOT, page), "utf8"), page).toMatch(/!canCare\(.*\)\) return <RoleNotice/);
+    }
+    const roles = readFileSync(join(ROOT, "src/lib/roles.ts"), "utf8");
+    expect(roles).toMatch(/export function canCare\(role: string \| null \| undefined\): boolean \{\n  return isLead\(role\) \|\| isVa\(role\);\n\}/);
+  });
+
+  it("VAs get the Home, Clients and Kit tabs only, and no Data Safety", () => {
+    const nav = readFileSync(join(ROOT, "src/components/shell/BottomNav.tsx"), "utf8");
+    expect(nav).toMatch(/va: \["\/", "\/clients", "\/kit"\]/);
+    const safety = readFileSync(join(ROOT, "src/app/(app)/safety/page.tsx"), "utf8");
+    expect(safety).toMatch(/if \(isVa\(member\?\.role\)\) return <RoleNotice/);
+    for (const page of ["src/app/(app)/work/page.tsx", "src/app/(app)/growth/page.tsx", "src/app/(app)/sales/page.tsx"]) {
+      expect(readFileSync(join(ROOT, page), "utf8"), page).not.toMatch(/canCare\(/);
     }
   });
 

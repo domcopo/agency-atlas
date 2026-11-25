@@ -20,6 +20,8 @@ const LABEL: Record<Notice["kind"], string> = {
   due_tomorrow: "Due tomorrow",
   client_lost: "Client marked lost",
   needs_owner: "Needs you",
+  va_request: "VA request",
+  va_decided: "Your request",
 };
 const when = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
 

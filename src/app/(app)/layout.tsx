@@ -11,7 +11,7 @@ import { WorkOrdersButton } from "@/components/shell/WorkOrdersButton";
 import Link from "next/link";
 import { NoticePill } from "@/components/shell/NoticePill";
 import { BrandLogo } from "@/components/shell/BrandLogo";
-import { isLead, isSales } from "@/lib/roles";
+import { isLead, isSales, isVa } from "@/lib/roles";
 import { parseTheme, THEME_COOKIE } from "@/lib/theme";
 import { parseToadMode, TOAD_COOKIE } from "@/lib/toad";
 import { BizToad } from "@/components/toad/BizToad";
@@ -27,9 +27,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const viewer = await getDeveloperViewer();
   const developer = Boolean(viewer);
   const sales = isSales(member?.role);
+  const va = isVa(member?.role);
   const [badge, notices] = await Promise.all([getWorkOrderBadge(), getNotices()]);
-  const hints = developer || sales ? {} : (await getCoachHints()).tabs;
-  const mode = developer ? "developer" : sales ? "sales" : "full";
+  const hints = developer || sales || va ? {} : (await getCoachHints()).tabs;
+  const mode = developer ? "developer" : sales ? "sales" : va ? "va" : "full";
   const ordersHref = developer ? "/work" : "/work/orders";
   const cookieJar = await cookies();
   // BizToad: shown, still, or tucked away on this device; the owner can switch it off for everyone (0030).
@@ -49,7 +50,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     ? [{ label: "Your work", href: "/work" }]
     : sales
       ? [{ label: "Sales", href: "/sales" }]
-      : [
+      : va
+        ? [{ label: "Clients", href: "/clients" }]
+        : [
           { label: "Today's briefing (Home)", href: "/" },
           { label: "Smart add a work order", href: "/work/orders" },
         ];
@@ -66,7 +69,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         mode={mode}
         workOrders={badge !== null ? { count: badge, href: ordersHref } : null}
         notices={notices ? notices.unread : null}
-        showSafety={!developer && !sales}
+        showSafety={!developer && !sales && !va}
         theme={parseTheme(cookieJar.get(THEME_COOKIE)?.value)}
       />
       <div className="lg:pl-60">

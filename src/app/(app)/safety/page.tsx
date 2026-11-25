@@ -25,6 +25,8 @@ import { AiMeter } from "@/components/cards/AiMeter";
 import { BudgetForm } from "@/components/forms/AiButtons";
 import { cn } from "@/lib/format";
 import { AI_BOTS, isAiFeature } from "@/lib/bot-runs";
+import { RoleNotice } from "@/components/shell/RoleNotice";
+import { isVa } from "@/lib/roles";
 
 export const metadata: Metadata = { title: "Data Safety" };
 
@@ -41,6 +43,8 @@ export default async function SafetyPage() {
   const real = roster.source !== "demo";
   const db = usesDatabase();
   const member = db ? await getMember() : null;
+  // VAs (0033) see client care only.
+  if (isVa(member?.role)) return <RoleNotice title="Data Safety" />;
   const privateFile = hasPrivateRoster();
   const ghl = await getGhlSummary();
   const ai = await getAiStatus();
