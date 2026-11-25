@@ -200,9 +200,36 @@ const domainOf = (v: unknown): string | null => {
   return /^[a-z0-9.-]+\.[a-z]{2,63}$/.test(d) ? d : null;
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const isGoogle = (d: string | null) => !!d && /(^|\.)google\.[a-z.]+$/.test(d);
+
+/**
+ * The real website of a search result. Since late 2026 DataForSEO often gives "google.com" and
+ * a Google redirect link instead; the site then only shows in the breadcrumb
+ * ("https://example.com › page"). Nothing usable = null (never "google.com").
+ */
+export function siteDomain(it: Record<string, unknown>): string | null {
+  for (const v of [it.domain, it.url, typeof it.breadcrumb === "string" ? it.breadcrumb.split(/\s/)[0] : null]) {
+    const d = domainOf(v);
+    if (d && !isGoogle(d)) return d;
+  }
+  return null;
+}
+
+/** "Mahoning Home Buyer (fictional)" → "mahoning home buyer" (for matching map-pack names). */
+export function nameKey(name: string | null | undefined): string {
+  return (name ?? "").toLowerCase().replace(/\([^)]*\)/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Is this map-pack entry that business (by website, or by its Google name when the pack has no website)? */
+export function samePlace(entry: { domain: string | null; title: string | null }, domain: string, name: string | null): boolean {
+  if (entry.domain) return entry.domain === domain;
+  const k = nameKey(name);
+  const t = nameKey(entry.title);
+  return k.length >= 6 && (t === k || t.startsWith(`${k} `));
+}
 
 export interface SerpRead {
-  organic: { domain: string; rank: number; url: string | null }[];
+  organic: { domain: string; rank: number; url: string | null; name?: string | null }[];
   pack: { domain: string | null; title: string | null; rank: number; rating: number | null; reviews: number | null }[];
   hasPack: boolean;
   paid: { domain: string; title: string | null; url: string | null }[];
@@ -216,16 +243,16 @@ export function readSerp(a: DfsAnswer | undefined): SerpRead | null {
   for (const it of items) {
     const type = str(it.type, 40) ?? "";
     if (type === "organic") {
-      const d = domainOf(it.domain);
+      const d = siteDomain(it);
       const rank = num(it.rank_group);
-      if (d && rank && rank >= 1 && rank <= 100 && !out.organic.some((o) => o.domain === d)) out.organic.push({ domain: d, rank, url: str(it.url) });
+      if (d && rank && rank >= 1 && rank <= 100 && !out.organic.some((o) => o.domain === d)) out.organic.push({ domain: d, rank, url: str(it.url), name: str(it.website_name, 80) });
     } else if (type === "local_pack") {
       out.hasPack = true;
       const rating = obj(it.rating);
       const rank = num(it.rank_group);
-      if (rank && rank >= 1 && rank <= 3) out.pack.push({ domain: domainOf(it.domain), title: str(it.title, 80), rank, rating: num(rating.value), reviews: num(rating.votes_count) });
+      if (rank && rank >= 1 && rank <= 3) out.pack.push({ domain: siteDomain(it), title: str(it.title, 80), rank, rating: num(rating.value), reviews: num(rating.votes_count) });
     } else if (type === "paid") {
-      const d = domainOf(it.domain);
+      const d = siteDomain(it);
       if (d) out.paid.push({ domain: d, title: str(it.title, 120), url: str(it.url) });
     } else if (type.startsWith("local_services")) out.lsa = true;
   }
@@ -311,7 +338,7 @@ export function findCompetitors(serps: (SerpRead | null)[], business: string, li
   for (const s of serps) {
     if (!s) continue;
     for (const p of s.pack) if (p.domain && p.domain !== business && !isDirectory(p.domain)) score.set(p.domain, { n: (score.get(p.domain)?.n ?? 0) + 3, name: p.title ?? score.get(p.domain)?.name ?? null });
-    for (const o of s.organic.filter((x) => x.rank <= 10)) if (o.domain !== business && !isDirectory(o.domain)) score.set(o.domain, { n: (score.get(o.domain)?.n ?? 0) + 1, name: score.get(o.domain)?.name ?? null });
+    for (const o of s.organic.filter((x) => x.rank <= 10)) if (o.domain !== business && !isDirectory(o.domain)) score.set(o.domain, { n: (score.get(o.domain)?.n ?? 0) + 1, name: score.get(o.domain)?.name ?? o.name ?? null });
   }
   return [...score.entries()]
     .sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))
@@ -391,13 +418,14 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     const phrase = searchPhrase(name.replace(/\s*\([^)]*\)/g, ""));
     return phrase ? (brand.get(phrase)?.searches ?? null) : null;
   };
-  const names = new Map([[intake.domain, intake.company], ...run.competitors.map((c) => [c.domain, c.name] as [string, string])]);
 
+  const names = new Map([[intake.domain, intake.company], ...run.competitors.map((c) => [c.domain, c.name] as [string, string])]);
+  const isSite = (d: string) => (x: { domain: string | null; title: string | null }) => samePlace(x, d, names.get(d) ?? null);
   const siteRows = sites.map((d) => {
     const m = models.get(d);
     const prof = readProfile(run.answers.get(`maps:${d}`), d);
-    const packRow = hqSerp?.pack.find((p) => p.domain === d);
-    const fromPacks = packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some((x) => x.domain === d)).map((p) => p.city);
+    const packRow = hqSerp?.pack.find(isSite(d));
+    const fromPacks = packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some(isSite(d))).map((p) => p.city);
     const row: Record<string, unknown> = {
       website: d,
       googleRating: prof?.rating ?? packRow?.rating ?? null,
@@ -422,7 +450,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
 
   const heatTerm = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
   const heatmaps = packs.some((p) => p.serp)
-    ? [{ term: heatTerm, kind: "pack", cities: packs.map((p) => ({ city: p.city, position: p.serp ? (p.serp.pack.find((x) => x.domain === intake.domain)?.rank ?? (p.serp.hasPack ? 0 : null)) : null })) }]
+    ? [{ term: heatTerm, kind: "pack", cities: packs.map((p) => ({ city: p.city, position: p.serp ? (p.serp.pack.find(isSite(intake.domain))?.rank ?? (p.serp.hasPack ? 0 : null)) : null })) }]
     : [];
   const inspection = readInspection(run.answers.get(`instant:${intake.domain}`), intake.hqTown);
 

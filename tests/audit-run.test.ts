@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
+import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
 
@@ -67,6 +67,24 @@ describe("planning a run", () => {
 describe("reading answers", () => {
   it("competitors found from the live searches skip directories and the business itself", () => {
     expect(findCompetitors([readSerp(hqSerp)], "milehighhomes.example").map((c) => c.domain)).toEqual(["peakoffers.example", "frontrange.example"]);
+  });
+
+  it("the newer answer shape: google.com + redirect link, the real site only in the breadcrumb", () => {
+    const g = { domain: "google.com", url: "https://google.com/goto?url=abc" };
+    const s = readSerp(serp([
+      { ...g, type: "organic", rank_group: 1, breadcrumb: "https://milehighhomes.example › sell-fast", website_name: "Mile High Homes" },
+      { ...g, type: "organic", rank_group: 2, breadcrumb: "https://call.peakoffers.example › we-buy", website_name: "Peak Offers" },
+      { ...g, type: "organic", rank_group: 3 }, // no site anywhere: left out, never "google.com"
+      { ...g, type: "local_pack", rank_group: 1, title: "Mile High Homes" },
+      { ...g, type: "local_pack", rank_group: 2, title: "Front Range Buyers" },
+    ]));
+    expect(s?.organic.map((o) => [o.domain, o.rank, o.name])).toEqual([["milehighhomes.example", 1, "Mile High Homes"], ["call.peakoffers.example", 2, "Peak Offers"]]);
+    expect(s?.pack.map((p) => p.domain)).toEqual([null, null]);
+    expect(findCompetitors([s], "milehighhomes.example")).toEqual([{ domain: "call.peakoffers.example", name: "Peak Offers" }]);
+    // With no website in the pack, the business is found by its Google name.
+    expect(samePlace(s!.pack[0]!, "milehighhomes.example", "Mile High Homes (fictional)")).toBe(true);
+    expect(samePlace(s!.pack[1]!, "milehighhomes.example", "Mile High Homes (fictional)")).toBe(false);
+    expect(samePlace({ domain: null, title: "Mile High" }, "x.example", "Mile")).toBe(false); // too short to trust
   });
 
   it("bad or odd answers become null, never a guess", () => {
