@@ -34,7 +34,7 @@ import type { OwnerSummaryInput } from "@/lib/owner-summary";
 import { buildRecentRuns, isAiFeature, RECENT_RUNS_DAYS, RECENT_RUNS_MAX, type RunLogRow } from "@/lib/bot-runs";
 import type { KitDoc, KitTool, KitVersion, TeamTool } from "@/lib/kit";
 import { SALES_RULES, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPerson, type SalesPipeline } from "@/lib/sales";
-import { asMemberRole, isLead, type MemberRole } from "@/lib/roles";
+import { asMemberRole, canCare, isLead, type MemberRole } from "@/lib/roles";
 import { asOutcome, asVisitKind, PROSPECT_STATUSES, SCOUT_RULES, type Prospect as ScoutProspect, type ProspectStatus, type ScoutSignals, type ScoutSpendRow, type ScoutVisit } from "@/lib/scout";
 import {
   buildPriorities,
@@ -362,7 +362,7 @@ export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map
 export const getCareToday = cache(async (): Promise<ReturnType<typeof dayProgress> & { ready: boolean } | null> => {
   if (!usesDatabase()) return null;
   const me = await getMember();
-  if (!me || !isLead(me.role)) return null;
+  if (!me || !canCare(me.role)) return null;
   const db = await createDatabaseClient();
   const day = today();
   const mine = (cols: string) => db.from("care_touches").select(cols).eq("logged_by", me.userId).eq("happened_on", day).limit(500);
@@ -386,7 +386,7 @@ export async function getCareGoals(): Promise<{ ready: boolean; people: { userId
   if (!usesDatabase() || (await getMember())?.role !== "owner") return { ready: false, people: [] };
   const db = await createDatabaseClient();
   const [team, goals] = await Promise.all([
-    db.from("team_members").select("user_id, display_name, role").in("role", ["owner", "manager"]).order("display_name"),
+    db.from("team_members").select("user_id, display_name, role").in("role", ["owner", "manager", "va"]).order("display_name"),
     db.from("care_targets").select("user_id, daily_points"),
   ]);
   if (goals.error) return { ready: false, people: [] };
@@ -440,6 +440,48 @@ export const getOpenEscalations = cache(async (): Promise<Escalation[]> => {
   return (data ?? []).map((r) => {
     const c = byId.get(r.client_id as string);
     return { id: r.id as string, clientDbId: r.client_id as string, slug: c?.id ?? null, name: c?.name ?? "A client", reason: r.reason as string, automatic: Boolean(r.automatic), at: r.created_at as string };
+  });
+});
+
+export interface VaRequest {
+  id: string;
+  clientDbId: string;
+  slug: string | null;
+  name: string;
+  to: "active" | "paused" | "canceled";
+  reason: string;
+  note: string | null;
+  status: "waiting" | "approved" | "declined";
+  at: string;
+}
+
+/**
+ * VA requests (0033). Owner/managers: everything still waiting. A VA: their own recent ones.
+ * Empty before 0033 (or for anyone else).
+ */
+export const getVaRequests = cache(async (): Promise<VaRequest[]> => {
+  if (!usesDatabase()) return [];
+  const me = await getMember();
+  if (!me || !canCare(me.role)) return [];
+  const db = await createDatabaseClient();
+  let q = db.from("va_requests").select("id, client_id, to_status, reason, note, status, created_at").order("created_at", { ascending: false }).limit(30);
+  q = me.role === "va" ? q.eq("requested_by", me.userId) : q.eq("status", "waiting");
+  const { data, error } = await q;
+  if (error) return [];
+  const byId = new Map((await getRoster()).map((c) => [c.dbId, c]));
+  return (data ?? []).map((r) => {
+    const c = byId.get(r.client_id as string);
+    return {
+      id: r.id as string,
+      clientDbId: r.client_id as string,
+      slug: c?.id ?? null,
+      name: c?.name ?? "A client",
+      to: r.to_status as VaRequest["to"],
+      reason: r.reason as string,
+      note: (r.note as string | null) ?? null,
+      status: r.status as VaRequest["status"],
+      at: r.created_at as string,
+    };
   });
 });
 
@@ -1204,7 +1246,7 @@ export const getWorkOrderDetail = cache(async (id: string) => {
 /** In-app notices (0017). Written only by the database; each person reads only their own. */
 export interface Notice {
   id: string;
-  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow" | "client_lost" | "needs_owner";
+  kind: "assigned" | "unassigned" | "due_changed" | "comment" | "reassign_request" | "due_tomorrow" | "client_lost" | "needs_owner" | "va_request" | "va_decided";
   title: string;
   actionId: string | null;
   at: string;
@@ -1219,6 +1261,8 @@ export const NOTICE_KINDS: { kind: Notice["kind"]; label: string; who: "develope
   { kind: "reassign_request", label: "A developer asks to be reassigned", who: "owner" },
   { kind: "client_lost", label: "A manager marks a client lost (0028)", who: "owner" },
   { kind: "needs_owner", label: "A client needs me (0032)", who: "owner" },
+  { kind: "va_request", label: "A VA asks to pause or mark a client lost (0033)", who: "everyone" },
+  { kind: "va_decided", label: "My request was approved or turned down (0033)", who: "everyone" },
 ];
 
 /**

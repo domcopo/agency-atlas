@@ -4,14 +4,15 @@
 // client and all their history stay, and the change goes in a log nobody can edit.
 
 import { useActionState, useState } from "react";
-import { setClientStatus } from "@/app/actions";
+import { requestStatusChange, setClientStatus } from "@/app/actions";
 import { STATUS_REASONS } from "@/lib/journey";
 import type { SubscriptionStatus } from "@/lib/types";
 
 const field = "mt-0.5 block min-h-10 w-full rounded-xl border border-line bg-white/5 px-2 text-sm text-ink";
 
-export function ClientStatusForm({ clientId, slug, status, today }: { clientId: string; slug: string; status: SubscriptionStatus; today: string }) {
-  const [state, action, pending] = useActionState(setClientStatus, undefined);
+export function ClientStatusForm({ clientId, slug, status, today, request = false }: { clientId: string; slug: string; status: SubscriptionStatus; today: string; request?: boolean }) {
+  // A VA (0033) sends a request instead; an owner or manager approves it.
+  const [state, action, pending] = useActionState(request ? requestStatusChange : setClientStatus, undefined);
   const options = (["active", "paused", "lost"] as const).filter((o) => (o === "lost" ? status !== "canceled" : o !== status));
   const [to, setTo] = useState<(typeof options)[number]>(options[0]!);
   return (
@@ -54,8 +55,9 @@ export function ClientStatusForm({ clientId, slug, status, today }: { clientId: 
         )}
       </div>
       <button type="submit" disabled={pending} className="pressable min-h-10 rounded-xl bg-violet-deep px-4 text-xs font-semibold disabled:opacity-60">
-        {pending ? "Saving…" : to === "lost" ? "Mark lost" : to === "paused" ? "Pause client" : "Bring back"}
+        {pending ? "Saving…" : request ? "Ask a manager" : to === "lost" ? "Mark lost" : to === "paused" ? "Pause client" : "Bring back"}
       </button>
+      {request && <p className="text-[11px] text-amber">This goes to a manager or the owner to approve. Nothing changes until they do.</p>}
       <p className="text-[11px] text-faint">Nothing is deleted. {to === "lost" ? "They move to Canceled & expired and count in Clients won & lost; the owner is told." : "Their history stays."}</p>
       {state?.error && (
         <p role="alert" className="text-xs text-rose">
@@ -64,7 +66,7 @@ export function ClientStatusForm({ clientId, slug, status, today }: { clientId: 
       )}
       {state?.ok && (
         <p role="status" className="text-xs text-lime">
-          Saved.
+          {request ? "Sent. You'll get a notice when it's decided." : "Saved."}
         </p>
       )}
     </form>
