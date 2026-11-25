@@ -239,7 +239,9 @@ export interface SiteModel {
 export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>): SiteModel {
   const best = new Map<string, Ranked>();
   for (const r of ranked) {
-    if (!isLocal(r.keyword, markets, state, others)) continue;
+    // "near me" results depend on where the searcher stands; a US-wide ranking says nothing
+    // about this area, so those searches stay out of the model (they still count as demand).
+    if (!isLocal(r.keyword, markets, state, others) || ` ${r.keyword} `.includes(" near me ")) continue;
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
   }

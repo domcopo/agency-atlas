@@ -91,7 +91,7 @@ import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readMaps, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
@@ -3565,7 +3565,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
                   await new Promise((r) => setTimeout(r, 1500));
                   continue;
                 }
-                if (problems.length < 3) problems.push(e instanceof DfsError ? e.message : "A lookup failed.");
+                if (problems.length < 3) problems.push(`${l.step}: ${e instanceof DfsError ? e.message : "a lookup failed."}`);
                 return;
               }
             }
@@ -3619,7 +3619,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors([...serps, ...packSerps], intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area"))).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
@@ -3630,7 +3630,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const left = isAiConfigured() ? await getAiBudgetLeft() : null;
       if (left !== null && left > 0.05 && Date.now() < deadline) {
         const input = wordsInput(block, intake.company, intake.niche);
-        const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 1500, remainingUsd: left });
+        const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 8000, remainingUsd: left }); // thinking counts toward this, so leave room
         await logAiUsage(db, "audit_words", result);
         if (result.ok) {
           block = applyWords(block, result.data, input.codes);

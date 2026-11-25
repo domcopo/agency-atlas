@@ -51,7 +51,7 @@ export const RUN_RULES = {
   packCities: 12,
   serpDepth: 20,
   /** Big directories are never "competitors". */
-  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com"],
+  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com"],
   /** A run that started this long ago and never finished is treated as stopped. */
   staleMinutes: 10,
 } as const;
@@ -144,8 +144,12 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
     task: { keyword, location_code: US, language_code: "en", limit: DEPTH_RULES.suggestionsPerSeed, filters: [["keyword_info.search_volume", ">", 0]], order_by: ["keyword_info.search_volume,desc"] },
   }));
   seoMoneyTerms(intake).forEach((keyword, i) => first.push({ id: `serp:${i}`, step: "Who ranks", path: "/v3/serp/google/organic/live/advanced", task: { keyword, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
+  // Google Maps from the home town: the local businesses WITH their websites and reviews (the
+  // map pack in normal results no longer lists websites), so real local rivals are found first.
+  const mapTerm = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
+  first.push({ id: "maps:area", step: "Who ranks", path: "/v3/serp/google/maps/live/advanced", task: { keyword: mapTerm, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: 20 } });
   if (on.has("heatmap")) {
-    const term = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
+    const term = mapTerm;
     cities.slice(0, RUN_RULES.packCities).forEach((city, i) => first.push({ id: `pack:${i}`, step: "Local 3-pack by city", path: "/v3/serp/google/organic/live/advanced", task: { keyword: term, location_name: cityLocation(city, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   }
   const second = (universe: string[]): Lookup[] => {
@@ -333,8 +337,41 @@ export function readSpeed(a: DfsAnswer | undefined): number | null {
 // ---------------------------------------------------------------------------
 
 /** Competitors from the live searches when the rep named none: most often seen, not directories. */
-export function findCompetitors(serps: (SerpRead | null)[], business: string, limit: number = RUN_RULES.competitors): { domain: string; name: string | null }[] {
+export interface MapPlace {
+  domain: string | null;
+  title: string | null;
+  rank: number;
+  rating: number | null;
+  reviews: number | null;
+}
+
+/** Google Maps results (top 20) from the home town. */
+export function readMaps(a: DfsAnswer | undefined): MapPlace[] {
+  const out: MapPlace[] = [];
+  for (const it of arr(obj(a?.result[0]).items)) {
+    const o = obj(it);
+    const rank = num(o.rank_group);
+    if (!rank || rank < 1 || rank > 20) continue;
+    const rating = obj(o.rating);
+    out.push({ domain: siteDomain(o), title: str(o.title, 80), rank, rating: num(rating.value), reviews: num(rating.votes_count) });
+  }
+  return out;
+}
+
+/** "Sell My House Fast Ohio | As Is Cash Buyers" → "Sell My House Fast Ohio". */
+const shortName = (n: string | null | undefined) => (n ? n.split(/\s[|–—-]\s/)[0]!.trim().slice(0, 60) || null : null);
+
+/**
+ * Competitors: Google Maps from the home town counts most (top 3 = 4 points, top 10 = 2),
+ * then the map pack (3) and page-1 results (1) of the live searches. Directories and national
+ * marketplaces are skipped.
+ */
+export function findCompetitors(serps: (SerpRead | null)[], business: string, limit: number = RUN_RULES.competitors, maps: MapPlace[] = []): { domain: string; name: string | null }[] {
   const score = new Map<string, { n: number; name: string | null }>();
+  for (const m of maps) {
+    if (!m.domain || m.domain === business || isDirectory(m.domain)) continue;
+    score.set(m.domain, { n: (score.get(m.domain)?.n ?? 0) + (m.rank <= 3 ? 4 : m.rank <= 10 ? 2 : 1), name: score.get(m.domain)?.name ?? shortName(m.title) });
+  }
   for (const s of serps) {
     if (!s) continue;
     for (const p of s.pack) if (p.domain && p.domain !== business && !isDirectory(p.domain)) score.set(p.domain, { n: (score.get(p.domain)?.n ?? 0) + 3, name: p.title ?? score.get(p.domain)?.name ?? null });
@@ -343,7 +380,7 @@ export function findCompetitors(serps: (SerpRead | null)[], business: string, li
   return [...score.entries()]
     .sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))
     .slice(0, limit)
-    .map(([domain, v]) => ({ domain, name: v.name }));
+    .map(([domain, v]) => ({ domain, name: shortName(v.name) }));
 }
 
 export interface SeoAnswers {
@@ -412,7 +449,8 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
 
   // Local 3-pack by city (heat map) and, from the same searches, where each site shows up.
   const packs = on.has("heatmap") ? cities.slice(0, RUN_RULES.packCities).map((city, i) => ({ city, serp: readSerp(run.answers.get(`pack:${i}`)) })) : [];
-  const hqSerp = serps[0] ?? null;
+  // The home-town search; if it failed, the home town's map-pack search (same town) stands in.
+  const hqSerp = serps[0] ?? packs[0]?.serp ?? null;
   const brand = readVolume(run.answers.get("brand"));
   const brandFor = (name: string) => {
     const phrase = searchPhrase(name.replace(/\s*\([^)]*\)/g, ""));
@@ -420,16 +458,18 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   };
 
   const names = new Map([[intake.domain, intake.company], ...run.competitors.map((c) => [c.domain, c.name] as [string, string])]);
+  const mapPlaces = readMaps(run.answers.get("maps:area"));
   const isSite = (d: string) => (x: { domain: string | null; title: string | null }) => samePlace(x, d, names.get(d) ?? null);
   const siteRows = sites.map((d) => {
     const m = models.get(d);
     const prof = readProfile(run.answers.get(`maps:${d}`), d);
     const packRow = hqSerp?.pack.find(isSite(d));
+    const onMap = mapPlaces.find((m) => m.domain === d);
     const fromPacks = packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some(isSite(d))).map((p) => p.city);
     const row: Record<string, unknown> = {
       website: d,
-      googleRating: prof?.rating ?? packRow?.rating ?? null,
-      googleReviews: prof?.reviews ?? packRow?.reviews ?? null,
+      googleRating: prof?.rating ?? packRow?.rating ?? onMap?.rating ?? null,
+      googleReviews: prof?.reviews ?? packRow?.reviews ?? onMap?.reviews ?? null,
       googlePhotos: prof?.photos ?? null,
       localPackPosition: hqSerp ? (packRow?.rank ?? (hqSerp.hasPack ? 0 : null)) : null,
       organicKeywords: m?.keywords ?? null,

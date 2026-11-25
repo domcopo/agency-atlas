@@ -115,10 +115,11 @@ describe("local click-through model", () => {
   it("visits = state searches × click share of the best position; outside the market ignored", () => {
     const state = new Map([["we buy houses denver", 1000], ["sell house arvada", 100]]);
     const m = modelSite(ranked, (k) => state.get(k) ?? null, (k) => (k === "we buy houses denver" ? 20 : null), markets, "CO");
-    // denver: 1000 × 15% (best = #2) = 150; arvada: 100 × 7% = 7; near me: no state count → US 700 × 1% = 7.
-    expect(m.visits).toBe(164);
+    // denver: 1000 × 15% (best = #2) = 150; arvada: 100 × 7% = 7. "near me" stays out: a US-wide
+    // ranking says nothing about where this area's searchers would see it.
+    expect(m.visits).toBe(157);
     expect(m.valueUsd).toBe(3000);
-    expect([m.keywords, m.top3, m.top10, m.positionedFor]).toEqual([3, 1, 2, 1100]);
+    expect([m.keywords, m.top3, m.top10, m.positionedFor]).toEqual([2, 1, 2, 1100]);
     expect(m.markets).toEqual(["Denver", "Arvada"]);
     expect(m.pages).toEqual(["/arvada/script"]); // the homepage isn't a "town page"
     expect(m.positions.get("we buy houses denver")).toBe(2);

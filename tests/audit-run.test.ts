@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
+import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
 
@@ -40,7 +40,7 @@ describe("planning a run", () => {
 
   it("the estimate is the worst case of every lookup, competitors included", () => {
     const plan = planSeoRun(seoIntake, ["summary", "heatmap", "keywords"]);
-    expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "serp:0", "serp:1", "pack:0", "pack:1"]);
+    expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "serp:0", "serp:1", "maps:area", "pack:0", "pack:1"]);
     expect(plan.second(["we buy houses denver"]).map((l) => l.id)).toEqual(["volume", "difficulty"]);
     expect(plan.perSite("milehighhomes.example", "Mile High Homes (fictional)", true).map((l) => l.id)).toEqual(["ranked:milehighhomes.example", "maps:milehighhomes.example", "instant:milehighhomes.example"]);
     expect(plan.perSite("peakoffers.example", "Peak Offers (fictional)", false).map((l) => l.id)).toEqual(["ranked:peakoffers.example", "maps:peakoffers.example"]);
@@ -48,6 +48,7 @@ describe("planning a run", () => {
     const expected =
       P["/v3/dataforseo_labs/google/keyword_suggestions/live"] +
       4 * P["/v3/serp/google/organic/live/advanced"] +
+      P["/v3/serp/google/maps/live/advanced"] + // Google Maps from the home town (competitors)
       2 * P["/v3/keywords_data/google_ads/search_volume/live"] +
       P["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] +
       6 * (P["/v3/dataforseo_labs/google/ranked_keywords/live"] + P["/v3/serp/google/maps/live/advanced"]) +
@@ -85,6 +86,17 @@ describe("reading answers", () => {
     expect(samePlace(s!.pack[0]!, "milehighhomes.example", "Mile High Homes (fictional)")).toBe(true);
     expect(samePlace(s!.pack[1]!, "milehighhomes.example", "Mile High Homes (fictional)")).toBe(false);
     expect(samePlace({ domain: null, title: "Mile High" }, "x.example", "Mile")).toBe(false); // too short to trust
+  });
+
+  it("Google Maps from the home town finds local rivals first; national marketplaces are skipped", () => {
+    const maps = readMaps(ans([{ items: [
+      { type: "maps_search", rank_group: 1, domain: "frontrange.example", title: "Front Range Buyers | Cash Offers", rating: { value: 4.9, votes_count: 88 } },
+      { type: "maps_search", rank_group: 2, domain: "milehighhomes.example", title: "Mile High Homes" },
+      { type: "maps_search", rank_group: 3, title: "No Website Buyers" },
+    ] }]));
+    expect(maps.map((m) => [m.domain, m.rank, m.reviews])).toEqual([["frontrange.example", 1, 88], ["milehighhomes.example", 2, null], [null, 3, null]]);
+    const s = readSerp(serp([{ type: "organic", rank_group: 1, domain: "homelight.com" }, { type: "organic", rank_group: 2, domain: "peakoffers.example", website_name: "Peak Offers" }]));
+    expect(findCompetitors([s], "milehighhomes.example", 5, maps)).toEqual([{ domain: "frontrange.example", name: "Front Range Buyers" }, { domain: "peakoffers.example", name: "Peak Offers" }]);
   });
 
   it("bad or odd answers become null, never a guess", () => {
@@ -148,7 +160,8 @@ describe("SEO: answers → block → checker", () => {
     expect([peak.top3?.value, peak.top10?.value, peak.positionedFor?.value, peak.brandSearches?.value]).toEqual([2, 2, 1800, 880]);
     expect(peak.pagesBuilt).toEqual(["/sell-fast-denver/", "/arvada/"]);
     expect(peak.gbpRating.value).toBe(4.8); // from the local pack when no profile lookup answered
-    expect([own.organicVisits.value, own.top10?.value, own.brandSearches?.value, own.pagesBuilt]).toEqual([1300 * 0.03 + 2400 * 0.01, 1, 320, undefined]);
+    // "we buy houses near me" (#15) stays out of the model: near-me results depend on where the searcher is.
+    expect([own.organicVisits.value, own.top10?.value, own.brandSearches?.value, own.pagesBuilt]).toEqual([1300 * 0.03, 1, 320, undefined]);
     expect(r.data.visitsScope).toBe("local");
     // The homepage check: phone number removed, no description flagged, home town named.
     expect(r.data.inspection).toMatchObject({ title: "Sell Your Denver House Fast", h1: "We Buy Houses", issues: ["No meta description (Google writes its own snippet)"], namesHomeTown: true });
