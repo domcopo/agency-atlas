@@ -14,7 +14,7 @@
 
 import type { AdsData, AdsIntake } from "./ads";
 import type { AuditCompetitor } from "./config";
-import type { AuditData, AuditNarrative, Fig, GeoGrid, Grade, KeywordRow, ScorecardRow, SiteMetrics, SourceId } from "./data";
+import type { AuditData, AuditNarrative, Fig, GeoGrid, Grade, KeywordRow, ScorecardRow, SiteInspection, SiteMetrics, SourceId } from "./data";
 import { contactDetailIn, normalizeDomain, type AuditIntake } from "./intake";
 
 export const RESULTS_MARKER = "ATLAS-RESULTS v1";
@@ -347,6 +347,18 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
         .filter((id): id is string => !!id),
     };
     if (o.semrushVisits !== undefined) m.semrushVisits = fig(c, typeof o.semrushVisits === "number" ? { value: o.semrushVisits, source: "semrush" } : o.semrushVisits, `${d} Semrush visits`, [0, 100_000_000]);
+    // D1 local model (optional).
+    if (o.top3 !== undefined) m.top3 = fig(c, o.top3, `${d} top-3 searches`, [0, 100_000]);
+    if (o.top10 !== undefined) m.top10 = fig(c, o.top10, `${d} top-10 searches`, [0, 100_000]);
+    if (o.positionedFor !== undefined) m.positionedFor = fig(c, o.positionedFor, `${d} positioned for`, [0, 100_000_000]);
+    if (o.brandSearches !== undefined) m.brandSearches = fig(c, o.brandSearches, `${d} brand searches`, [0, 10_000_000]);
+    if (o.pagesBuilt !== undefined && d !== ctx.intake.domain) {
+      const pages = list(o.pagesBuilt)
+        .slice(0, 8)
+        .map((x) => (typeof x === "string" ? x.trim() : ""))
+        .filter((x) => /^\/[A-Za-z0-9/_.~%-]{0,160}$/.test(x));
+      if (pages.length) m.pagesBuilt = pages;
+    }
     return m;
   });
 
@@ -422,6 +434,23 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
   };
 
   const nearMeSearches = fig(c, r.nearMeSearches, "Near-me searches", [0, 10_000_000]);
+  // D1 homepage check (optional): plain text only, short, no contact details.
+  // A line that fails the text rules is left out (with a warning) rather than sinking the audit.
+  const ins = obj(r.inspection) ?? {};
+  const soft = (v: unknown, label: string, max: number): string => {
+    const q: Ctx = { ...c, errors: [], warnings: [] };
+    const t = text(q, v, label, max);
+    if (q.errors.length) c.warnings.push(`${q.errors[0]} (left out)`);
+    return q.errors.length ? "" : t;
+  };
+  const inspection: SiteInspection | undefined = r.inspection === undefined ? undefined : {
+    source: c.source,
+    retrieved: c.retrieved,
+    title: soft(ins.title, "Homepage title", 160) || null,
+    h1: soft(ins.h1, "Homepage H1", 160) || null,
+    issues: list(ins.issues).slice(0, 8).map((x, i) => soft(x, `Homepage issue ${i + 1}`, 120)).filter(Boolean),
+    namesHomeTown: typeof ins.namesHomeTown === "boolean" ? ins.namesHomeTown : null,
+  };
   if (c.errors.length) return { ok: false, errors: [...new Set(c.errors)].slice(0, 12) };
   const data: AuditData = {
     retrieved: c.retrieved,
@@ -436,6 +465,7 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     scorecard,
     narrative,
     costLedger: costLedger(c, r.cost),
+    ...(inspection ? { inspection } : {}),
   };
   return {
     ok: true,

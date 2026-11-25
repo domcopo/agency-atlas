@@ -1,0 +1,284 @@
+// Run audit, D1 "data depth" (docs/AUDIT_DEPTH_PLAN.md). Pure: no network, no database.
+// Turns DataForSEO answers (untrusted; every field optional) into:
+// - a keyword universe: the rep's short seed searches + DataForSEO's suggestions that name
+//   one of this audit's towns, the state or "near me", grouped by town;
+// - a LOCAL click-through model per site from its real rankings on those searches
+//   (visits, "positioned for", top 3 / top 10, the towns it ranks in, the pages it built);
+// - a homepage check for the business (title, H1, description, basic problems).
+// Search counts always come from Google Ads for the state (DataForSEO keyword data);
+// DataForSEO Labs is US-wide, so it is used to FIND searches and rankings, not to count them.
+
+import { stateName } from "./geo";
+import { contactDetailIn, normalizeDomain } from "./intake";
+import { placeState } from "./places";
+
+/** A DataForSEO answer (same shape as the source module's; kept local so only run.ts imports that module). */
+export interface DfsAnswer {
+  result: unknown[];
+}
+
+type Obj = Record<string, unknown>;
+const obj = (v: unknown): Obj => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {});
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const str = (v: unknown, max = 200): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+
+export const DEPTH_RULES = {
+  /** Seed searches used for discovery (the first few short services). */
+  seeds: 4,
+  /** Suggestions asked for per seed. */
+  suggestionsPerSeed: 300,
+  /** Keywords kept in the universe (by Google Ads volume). */
+  universe: 400,
+  /** Ranked keywords read per site. */
+  rankedPerSite: 500,
+  /** "What they built": pages listed per competitor. */
+  pagesPerSite: 6,
+} as const;
+
+/** Share of searchers who click each Google position (a common industry curve; a model). */
+export const CTR: Record<number, number> = { 1: 0.28, 2: 0.15, 3: 0.1, 4: 0.07, 5: 0.05, 6: 0.04, 7: 0.03, 8: 0.025, 9: 0.02, 10: 0.02 };
+export function ctr(position: number): number {
+  if (!Number.isInteger(position) || position < 1) return 0;
+  if (position <= 10) return CTR[position] ?? 0;
+  if (position <= 20) return 0.01;
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Markets (towns, counties, state) and matching a search to a market
+// ---------------------------------------------------------------------------
+
+export interface Market {
+  /** As written in the audit ("Warren", "Sharon, PA"). */
+  label: string;
+  /** How people type it in a search ("warren", "sharon"). */
+  term: string;
+}
+
+export function auditMarkets(hqTown: string, cities: string[], state: string): Market[] {
+  return [hqTown, ...cities].map((label) => ({ label, term: placeState(label, state).name.toLowerCase().replace(/\s+county$/, " county") }));
+}
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The market a search names (longest name first, whole words), or null. */
+export function marketOf(keyword: string, markets: Market[]): Market | null {
+  const k = ` ${keyword.toLowerCase()} `;
+  let best: Market | null = null;
+  for (const m of markets) {
+    if (k.includes(` ${m.term} `) && (!best || m.term.length > best.term.length)) best = m;
+  }
+  return best;
+}
+
+/** What makes a search "local" here: a town/county of this audit, the state's name, or "near me". */
+export function localPattern(markets: Market[], state: string): string {
+  const names = [...new Set([...markets.map((m) => m.term), stateName(state).toLowerCase(), "near me"])];
+  return names.map(escape).join("|");
+}
+
+export function isLocal(keyword: string, markets: Market[], state: string): boolean {
+  const k = ` ${keyword.toLowerCase()} `;
+  return markets.some((m) => k.includes(` ${m.term} `)) || k.includes(` ${stateName(state).toLowerCase()} `) || k.includes(" near me ");
+}
+
+// ---------------------------------------------------------------------------
+// Keyword universe
+// ---------------------------------------------------------------------------
+
+export interface Suggestion {
+  keyword: string;
+  usVolume: number | null;
+  difficulty: number | null;
+  intent: string | null;
+}
+
+/** DataForSEO Labs keyword suggestions → plain rows (wrong types dropped). */
+export function readSuggestions(a: DfsAnswer | undefined): Suggestion[] {
+  const out: Suggestion[] = [];
+  for (const it of arr(obj(a?.result[0]).items)) {
+    const o = obj(it);
+    const keyword = str(o.keyword, 80)?.toLowerCase();
+    if (!keyword) continue;
+    out.push({ keyword, usVolume: num(obj(o.keyword_info).search_volume), difficulty: num(obj(o.keyword_properties).keyword_difficulty), intent: str(obj(o.search_intent_info).main_intent, 20) });
+  }
+  return out;
+}
+
+/**
+ * The searches this audit is about: every seed, each seed with each town / county ("we buy
+ * houses warren"), plus suggestions that name a town, the state or "near me" (most searched
+ * first). Informational-only searches ("how to …") are left out.
+ */
+export function buildUniverse(seeds: string[], markets: Market[], state: string, suggestions: Suggestion[], extra: string[] = []): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (k: string) => {
+    const key = k.trim().toLowerCase().replace(/\s+/g, " ");
+    if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && out.length < DEPTH_RULES.universe) {
+      seen.add(key);
+      out.push(key);
+    }
+  };
+  for (const s of seeds) add(s);
+  for (const k of extra) add(k);
+  for (const s of seeds) for (const m of markets) add(`${s} ${m.term}`);
+  const local = suggestions
+    .filter((g) => isLocal(g.keyword, markets, state) && !/^(how|what|why|when|is|can|does|do)\b/.test(g.keyword) && g.intent !== "navigational")
+    .sort((a, b) => (b.usVolume ?? 0) - (a.usVolume ?? 0));
+  for (const g of local) add(g.keyword);
+  return out;
+}
+
+/** The group a search is shown under: its town, "Near me", the state, or "General". */
+export function groupOf(keyword: string, markets: Market[], state: string): string {
+  const m = marketOf(keyword, markets);
+  if (m) return m.label;
+  if (` ${keyword} `.includes(" near me ")) return "Near me";
+  if (` ${keyword} `.includes(` ${stateName(state).toLowerCase()} `)) return stateName(state);
+  return "General";
+}
+
+// ---------------------------------------------------------------------------
+// A site's local rankings → the click-through model
+// ---------------------------------------------------------------------------
+
+export interface Ranked {
+  keyword: string;
+  position: number;
+  /** Path of the ranking page ("/sell-my-house-fast-warren/"), when given. */
+  path: string | null;
+  usVolume: number | null;
+}
+
+export function readRanked(a: DfsAnswer | undefined, domain: string): Ranked[] {
+  const out: Ranked[] = [];
+  for (const it of arr(obj(a?.result[0]).items)) {
+    const o = obj(it);
+    const kd = obj(o.keyword_data);
+    const item = obj(obj(o.ranked_serp_element).serp_item);
+    const keyword = str(kd.keyword, 80)?.toLowerCase();
+    const position = num(item.rank_group);
+    const itemDomain = typeof item.domain === "string" ? normalizeDomain(item.domain) : domain;
+    if (!keyword || position === null || position < 1 || position > 100 || itemDomain !== domain) continue;
+    const rel = str(item.relative_url, 160);
+    out.push({ keyword, position: Math.round(position), path: rel && rel.startsWith("/") ? rel.replace(/[^A-Za-z0-9/_.~%-]/g, "") : null, usVolume: num(obj(kd.keyword_info).search_volume) });
+  }
+  return out;
+}
+
+export interface SiteModel {
+  /** Local searches it ranks for at all. */
+  keywords: number;
+  top3: number;
+  top10: number;
+  /** Monthly searches on terms where it holds a top-10 spot. */
+  positionedFor: number;
+  /** Click-through-modeled monthly visits from local searches. */
+  visits: number;
+  /** What those visits would cost as ads (visits × cost per click). */
+  valueUsd: number;
+  /** Towns where it ranks in the top 20 (audit labels). */
+  markets: string[];
+  /** Best position per search (for the ranking tables). */
+  positions: Map<string, number>;
+  /** Pages ranking for town searches (paths), most valuable first. */
+  pages: string[];
+}
+
+/**
+ * Local model for one site: each local search it ranks for × the search count (Google Ads
+ * for the state when known, else DataForSEO's US figure for that town-named search) × the
+ * click share of its position.
+ */
+export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string): SiteModel {
+  const best = new Map<string, Ranked>();
+  for (const r of ranked) {
+    if (!isLocal(r.keyword, markets, state)) continue;
+    const cur = best.get(r.keyword);
+    if (!cur || r.position < cur.position) best.set(r.keyword, r);
+  }
+  let visits = 0;
+  let valueUsd = 0;
+  let positionedFor = 0;
+  let top3 = 0;
+  let top10 = 0;
+  const marketSet = new Set<string>();
+  const pageValue = new Map<string, number>();
+  for (const r of best.values()) {
+    const v = volume(r.keyword) ?? r.usVolume ?? 0;
+    const clicks = v * ctr(r.position);
+    visits += clicks;
+    valueUsd += clicks * (cpc(r.keyword) ?? 0);
+    if (r.position <= 10) {
+      positionedFor += v;
+      top10++;
+    }
+    if (r.position <= 3) top3++;
+    const m = marketOf(r.keyword, markets);
+    if (m && r.position <= 20) {
+      marketSet.add(m.label);
+      if (r.path && r.path !== "/") pageValue.set(r.path, (pageValue.get(r.path) ?? 0) + clicks + 0.001);
+    }
+  }
+  return {
+    keywords: best.size,
+    top3,
+    top10,
+    positionedFor: Math.round(positionedFor),
+    visits: Math.round(visits),
+    valueUsd: Math.round(valueUsd),
+    markets: markets.filter((m) => marketSet.has(m.label)).map((m) => m.label),
+    positions: new Map([...best].map(([k, r]) => [k, r.position])),
+    pages: [...pageValue].sort((a, b) => b[1] - a[1]).slice(0, DEPTH_RULES.pagesPerSite).map(([p]) => p),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Homepage check (DataForSEO On-Page "instant pages")
+// ---------------------------------------------------------------------------
+
+export interface Inspection {
+  title: string | null;
+  h1: string | null;
+  issues: string[];
+  /** Does the title or H1 name the home town? */
+  namesHomeTown: boolean | null;
+}
+
+const CHECKS: [string, string][] = [
+  ["no_h1_tag", "No H1 heading on the homepage"],
+  ["no_title", "No page title"],
+  ["title_too_long", "Page title is too long (cut off in Google)"],
+  ["title_too_short", "Page title is too short"],
+  ["no_description", "No meta description (Google writes its own snippet)"],
+  ["duplicate_title_tag", "More than one title tag"],
+  ["no_image_alt", "Images without alt text"],
+  ["is_broken", "The page returned an error"],
+  ["is_4xx_code", "The page returned a 4xx error"],
+  ["is_5xx_code", "The page returned a 5xx error"],
+  ["has_render_blocking_resources", "Scripts or styles slow the first paint"],
+  ["low_content_rate", "Very little text compared with code"],
+];
+
+export function readInspection(a: DfsAnswer | undefined, hqTown: string): Inspection | null {
+  const page = obj(arr(obj(a?.result[0]).items)[0]);
+  if (!Object.keys(page).length) return null;
+  const meta = obj(page.meta);
+  const checks = obj(page.checks);
+  // Titles often carry a phone number; contact details never enter an audit, so those words go.
+  const scrub = (t: string | null) => {
+    if (!t) return null;
+    let out = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}/g, "").replace(/\(?[0-9]{3}\)?[-. ]?[0-9]{3}[-. ][0-9]{4}/g, "").replace(/\s+/g, " ").trim().replace(/\b(call|text)( us)?( now| today)?:?$/i, "").trim().replace(/\s*[|·–-]$/, "").trim();
+    if (contactDetailIn(out)) out = "";
+    return out || null;
+  };
+  const title = scrub(str(meta.title, 160));
+  const h1 = scrub(str(arr(obj(meta.htags).h1)[0], 160));
+  const issues = CHECKS.filter(([k]) => checks[k] === true).map(([, label]) => label);
+  if (checks.is_https === false) issues.unshift("The site isn't on https");
+  const town = hqTown.toLowerCase();
+  const namesHomeTown = title || h1 ? `${title ?? ""} ${h1 ?? ""}`.toLowerCase().includes(town) : null;
+  return { title, h1, issues: issues.slice(0, 8), namesHomeTown };
+}

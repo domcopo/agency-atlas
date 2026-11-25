@@ -23,6 +23,11 @@ const ALLOWED = [
   "/v3/dataforseo_labs/google/domain_rank_overview/live",
   "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live",
   "/v3/on_page/lighthouse/live/json",
+  // D1 (approved 2026-11-25, docs/AUDIT_DEPTH_PLAN.md): finding searches, each site's
+  // rankings, and a one-page check of the business's homepage. All read-only.
+  "/v3/dataforseo_labs/google/keyword_suggestions/live",
+  "/v3/dataforseo_labs/google/ranked_keywords/live",
+  "/v3/on_page/instant_pages",
 ] as const;
 export type DfsPath = (typeof ALLOWED)[number];
 

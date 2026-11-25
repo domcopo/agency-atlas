@@ -64,6 +64,14 @@ export function wordsInput(block: Obj, company: string, niche: string): WordsInp
     codes.push([`COMPETITOR ${i + 1}`, typeof c.name === "string" ? c.name : `Competitor ${i + 1}`]);
   });
   const coded = (d: unknown) => code.get(String(d)) ?? null;
+  // Towns named in a competitor's page addresses ("/sell-my-house-arvada/" → Arvada). Only
+  // town names from this audit go out, never the addresses (they can hold a business name).
+  const towns = arr(block.demand).map(obj).map((d) => String(d.city ?? "")).filter(Boolean);
+  const townsIn = (paths: unknown) => {
+    const text = arr(paths).map((p) => ` ${String(p).toLowerCase().replace(/[^a-z0-9]+/g, " ")} `).join(" ");
+    return towns.filter((t) => text.includes(` ${t.split(",")[0]!.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `));
+  };
+  const ins = block.inspection === undefined ? null : obj(block.inspection);
   return {
     codes,
     data: {
@@ -79,10 +87,18 @@ export function wordsInput(block: Obj, company: string, niche: string): WordsInp
         google_rating: val(s.googleRating),
         google_reviews: val(s.googleReviews),
         local_3pack_position_in_home_town: val(s.localPackPosition),
-        organic_keywords_us: val(s.organicKeywords),
-        organic_visits_us: val(s.organicVisits),
+        local_searches_ranked_for: val(s.organicKeywords),
+        local_visits_modeled: val(s.organicVisits),
+        searches_in_top_3: val(s.top3),
+        searches_in_top_10: val(s.top10),
+        monthly_searches_on_top_10_terms: val(s.positionedFor),
+        brand_searches_per_month: val(s.brandSearches),
         cities_with_ranking_pages: s.rankingPagesIn ?? [],
+        ...(Array.isArray(s.pagesBuilt) ? { town_pages_built: s.pagesBuilt.length, towns_named_in_those_pages: townsIn(s.pagesBuilt) } : {}),
       })),
+      ...(ins
+        ? { business_homepage_check: { has_title: !!ins.title, has_h1: !!ins.h1, title_or_h1_names_home_town: ins.namesHomeTown ?? null, problems: arr(ins.issues).filter((x) => typeof x === "string") } }
+        : {}),
       local_3pack_by_city: arr(block.heatmaps).map(obj).flatMap((h) => arr(h.cities).map(obj).map((c) => ({ city: c.city, business_position: c.position }))),
     },
   };

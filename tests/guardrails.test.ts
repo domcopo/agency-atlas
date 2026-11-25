@@ -1192,9 +1192,15 @@ describe("DataForSEO read-only lookups (approved 2026-11-25, docs/AUDIT_RUN_PLAN
         "/v3/on_page/lighthouse/live/json",
         "/v3/serp/google/maps/live/advanced",
         "/v3/serp/google/organic/live/advanced",
+        // D1 (approved 2026-11-25, docs/AUDIT_DEPTH_PLAN.md)
+        "/v3/dataforseo_labs/google/keyword_suggestions/live",
+        "/v3/dataforseo_labs/google/ranked_keywords/live",
+        "/v3/on_page/instant_pages",
       ].sort(),
     );
-    for (const p of paths) expect(p).toMatch(/\/live(\/|$)/);
+    // Every lookup is a "live" (answer-now) one. instant_pages is DataForSEO's one-page live check
+    // and has no /live in its address; it is named here so nothing else can slip past.
+    for (const p of paths) if (p !== "/v3/on_page/instant_pages") expect(p).toMatch(/\/live(\/|$)/);
   });
 
   it("the login is never logged or returned", () => {

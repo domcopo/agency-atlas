@@ -24,8 +24,12 @@ export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   return (
     <Slide bundle={bundle} page={pageNo ?? 4} pageCount={pageCount} title={`Top ${config.competitors.length} competitors`} aside="traffic · rankings · authority · reviews">
       <div className="audit-card">
-        <CompetitorTable rows={rows} showSemrush={config.modules.semrush} />
-        <p className="audit-note">Pack: — = checked, not in the local 3-pack. Visits are search-only estimates, not total website traffic. {data.narrative.pageNotes.competitors ?? ""}</p>
+        <CompetitorTable rows={rows} showSemrush={config.modules.semrush} local={data.visitsScope === "local"} />
+        <p className="audit-note">
+          Pack: — = checked, not in the local 3-pack. Visits are search-only estimates, not total website traffic.
+          {data.visitsScope === "local" ? " Local = searches naming this area's towns, the state or \"near me\"; visits = each ranking × the state's monthly searches × the usual click share for that position (a model). Positioned for = monthly searches on terms where it holds a top-10 spot. Brand searches are US-wide." : ""}{" "}
+          {data.narrative.pageNotes.competitors ?? ""}
+        </p>
       </div>
       <div className="audit-card" style={{ flex: 1, overflow: "hidden" }}>
         <h3>Keyword ranking matrix (Google organic position)</h3>

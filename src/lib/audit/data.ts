@@ -62,6 +62,25 @@ export interface SiteMetrics {
   semrushVisits?: Fig;
   /** Market ids where this site holds a page-1 or page-2 ranking page. */
   footprint: string[];
+  /** D1 local model: searches where it ranks top 3 / top 10, and the monthly searches on its top-10 terms. */
+  top3?: Fig;
+  top10?: Fig;
+  positionedFor?: Fig;
+  /** How often people search the business by name (US). */
+  brandSearches?: Fig;
+  /** Competitors only: paths of their pages ranking for town searches ("what they built"). */
+  pagesBuilt?: string[];
+}
+
+/** D1: a one-page check of the business's homepage (DataForSEO On-Page). */
+export interface SiteInspection {
+  source: SourceId;
+  retrieved: string;
+  title: string | null;
+  h1: string | null;
+  issues: string[];
+  /** Does the title or H1 name the home town? null = no title or H1 found. */
+  namesHomeTown: boolean | null;
 }
 
 export interface GeoGrid {
@@ -125,6 +144,8 @@ export interface AuditData {
   narrative: AuditNarrative;
   /** What this run cost, per source (dry run = all zero). */
   costLedger: { source: SourceId; calls: number; costUsd: number }[];
+  /** D1: the homepage check, when it was run. */
+  inspection?: SiteInspection;
 }
 
 export interface AuditBundle {

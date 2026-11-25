@@ -124,7 +124,7 @@ const keywords: KeywordRow[] = [
   kw("sewer line repair", "Sewer", 210, null, null, { [CLIENT]: null, [C1]: 18, [C2]: null, [C3]: 4, [C4]: null, [C5]: null }),
 ];
 
-function site(domain: string, v: Partial<Record<keyof Omit<SiteMetrics, "domain" | "footprint">, Fig>>, footprint: string[]): SiteMetrics {
+function site(domain: string, v: Partial<Record<keyof Omit<SiteMetrics, "domain" | "footprint" | "pagesBuilt">, Fig>>, footprint: string[], pagesBuilt?: string[]): SiteMetrics {
   const nf = f(null);
   return {
     domain,
@@ -140,13 +140,16 @@ function site(domain: string, v: Partial<Record<keyof Omit<SiteMetrics, "domain"
     referringDomains: v.referringDomains ?? nf,
     semrushVisits: v.semrushVisits,
     footprint,
+    // D1 local figures (fictional), shown when present.
+    ...(v.top3 ? { top3: v.top3, top10: v.top10, positionedFor: v.positionedFor, brandSearches: v.brandSearches } : {}),
+    ...(pagesBuilt ? { pagesBuilt } : {}),
   };
 }
 
 const sites: SiteMetrics[] = [
   site(CLIENT, { gbpRating: f(4.8), gbpReviews: f(64), gbpPhotos: f(18), packPosition: f(0, "sample", "not surfaced in Maps for city terms"), organicKeywords: f(11), organicVisits: f(38), packVisits: f(96), trafficValueUsd: f(410), backlinkRank: f(58), referringDomains: f(31), semrushVisits: f(22) }, ["columbus"]),
-  site(C1, { gbpRating: f(4.7), gbpReviews: f(412), gbpPhotos: f(240), packPosition: f(1), organicKeywords: f(58), organicVisits: f(310), packVisits: f(140), trafficValueUsd: f(3900), backlinkRank: f(204), referringDomains: f(150), semrushVisits: f(268) }, ["columbus", "dayton", "cincinnati", "toledo"]),
-  site(C2, { gbpRating: f(4.9), gbpReviews: f(188), gbpPhotos: f(96), packPosition: f(2), organicKeywords: f(34), organicVisits: f(140), packVisits: f(85), trafficValueUsd: f(1700), backlinkRank: f(150), referringDomains: f(null), semrushVisits: f(155) }, ["dayton", "cincinnati", "ohio"]),
+  site(C1, { gbpRating: f(4.7), gbpReviews: f(412), gbpPhotos: f(240), packPosition: f(1), organicKeywords: f(58), organicVisits: f(310), packVisits: f(140), trafficValueUsd: f(3900), backlinkRank: f(204), referringDomains: f(150), semrushVisits: f(268) }, ["columbus", "dayton", "cincinnati", "toledo"], ["/plumber-dayton/", "/cincinnati-drain-cleaning/", "/toledo-water-heaters/"]),
+  site(C2, { gbpRating: f(4.9), gbpReviews: f(188), gbpPhotos: f(96), packPosition: f(2), organicKeywords: f(34), organicVisits: f(140), packVisits: f(85), trafficValueUsd: f(1700), backlinkRank: f(150), referringDomains: f(null), semrushVisits: f(155) }, ["dayton", "cincinnati", "ohio"], ["/service-area/cincinnati/", "/dayton-plumbing/"]),
   site(C3, { gbpRating: f(4.6), gbpReviews: f(530), gbpPhotos: f(310), packPosition: f(3), organicKeywords: f(41), organicVisits: f(120), packVisits: f(60), trafficValueUsd: f(1250), backlinkRank: f(171), referringDomains: f(88), semrushVisits: f(null) }, ["cleveland", "akron"]),
   site(C4, { gbpRating: f(5.0), gbpReviews: f(97), gbpPhotos: f(40), packPosition: f(0), organicKeywords: f(22), organicVisits: f(95), packVisits: f(0), trafficValueUsd: f(880), backlinkRank: f(112), referringDomains: f(40), semrushVisits: f(71) }, ["columbus", "akron"]),
   site(C5, { gbpRating: f(4.8), gbpReviews: f(150), gbpPhotos: f(null), packPosition: f(0), organicKeywords: f(9), organicVisits: f(44), packVisits: f(30), trafficValueUsd: f(null), backlinkRank: f(80), referringDomains: f(19), semrushVisits: f(38) }, ["cincinnati"]),
@@ -213,6 +216,7 @@ export const sampleAuditData: AuditData = {
       { title: "On-page tune-up", detail: "Town-first title tags, one H1 per page, call tracking and analytics baseline." },
     ],
   },
+  inspection: { source: "sample", retrieved: "2026-11-25", title: "Plumbing Services | Home", h1: null, issues: ["No H1 heading on the homepage", "No meta description (Google writes its own snippet)"], namesHomeTown: false },
   costLedger: [
     { source: "dataforseo", calls: 0, costUsd: 0 },
     { source: "leadsnap", calls: 0, costUsd: 0 },

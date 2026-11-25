@@ -1,6 +1,6 @@
 # Plan: make Run audit as deep as the owner's hand-built audits
 
-Status: **draft for the owner's review (2026-11-25). Nothing built.** Builds on Run audit (`docs/AUDIT_RUN_PLAN.md`, E1). Compared against two of the owner's finished audits (real clients; read for structure only, nothing from them is copied here or into the app).
+Status: **D1 built (owner approved 2026-11-25; branch `audit-depth`), waiting for a live test run to confirm the cost. D2–D4 not started (each needs a yes).** Builds on Run audit (`docs/AUDIT_RUN_PLAN.md`, E1). Compared against two of the owner's finished audits (real clients; read for structure only, nothing from them is copied here or into the app).
 
 ## Why the Atlas audit feels thinner
 The page **layout** already matches the owner's audits (same 8 pages). The gap is the **data and the thinking behind it**:
@@ -25,6 +25,7 @@ The page **layout** already matches the owner's audits (same 8 pages). The gap i
   - Branded searches for every site.
   - Homepage inspection of the business (title, H1, meta, links, schema present, "more than one phone number" flagged without printing numbers) and competitor ranking-page URLs ("what they built").
   - New read-only lookups added to the allowlist (still one module, still read-only). Rough cost **$1–3 per audit** (to confirm on a test run); caps unchanged.
+  - **As built:** `src/lib/audit/depth.ts` (pure) + `planSeoRun`/`seoUniverse`/`buildSeoBlock` in `run.ts`. Order of a run: suggestions + live Google checks → state search counts (+ difficulty) for the universe → competitors → per site: rankings, Google profile, homepage check (business only), then brand searches → Claude's words → checker → save. Not in D1 after all: per-town live checks beyond the existing heat-map packs, "more than one phone number" and schema checks (instant_pages doesn't report them reliably), striking-distance list (data is there; page layout is D2).
 - **D2 · Model and pages.** Niche funnel presets in Settings (e.g. home buyers: 4% lead, 15% contract, 80% close, $20,000 per deal; home services: lead and close rates), "the prize" scenarios, the 12/18-month projection with three curves, the plan page with setup hours and three programs from Settings.
 - **D3 · Authority and links.** Needs a choice: DataForSEO's backlink data (separate monthly subscription; price to confirm) or Semrush's API (also paid). Adds authority, real vs scraper links, the link gap table.
 - **D4 · Richer written insight.** Claude gets the inspection facts, competitor page patterns and the model results (still numbers it's given, never its own) to write "why they rank higher", five fixes with timing, and the page notes.

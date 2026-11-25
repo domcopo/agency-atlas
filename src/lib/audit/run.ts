@@ -7,6 +7,7 @@
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
 import { normalizeDomain, type AuditIntake } from "./intake";
+import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, localPattern, marketOf, modelSite, readInspection, readRanked, readSuggestions } from "./depth";
 import { placeState } from "./places";
 import type { AuditSectionId } from "./sections";
 import type { DfsAnswer, DfsPath } from "./sources/dataforseo";
@@ -19,6 +20,9 @@ export const DFS_PRICE: Record<DfsPath, number> = {
   "/v3/dataforseo_labs/google/domain_rank_overview/live": 0.03,
   "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live": 0.05,
   "/v3/on_page/lighthouse/live/json": 0.02,
+  "/v3/dataforseo_labs/google/keyword_suggestions/live": 0.05,
+  "/v3/dataforseo_labs/google/ranked_keywords/live": 0.07,
+  "/v3/on_page/instant_pages": 0.01,
 };
 
 export const RUN_RULES = {
@@ -93,33 +97,70 @@ const isDirectory = (d: string) => RUN_RULES.directories.some((x) => d === x || 
 // ---------------------------------------------------------------------------
 
 export interface SeoPlan {
+  /** Discovery (seed suggestions) and the live Google checks. */
   first: Lookup[];
-  /** Per competitor/site, added once competitors are known (worst case counted up front). */
-  perSite: (domain: string, name: string | null) => Lookup[];
+  /** Once the keyword universe is known: Google Ads counts for the state (+ difficulty). */
+  second: (universe: string[]) => Lookup[];
+  /** Per site, once competitors are known: its local rankings, its Google profile (+ the homepage check for the business). */
+  perSite: (domain: string, name: string | null, business: boolean) => Lookup[];
+  /** How often each business is searched by name (US). */
+  brand: (names: string[]) => Lookup | null;
+  seeds: string[];
   sitesWorstCase: number;
   estimateUsd: number;
+}
+
+/** Short seed searches: the first few services as people type them ("we buy houses"). */
+export function seedSearches(intake: { services: string[]; niche: string }): string[] {
+  const list = (intake.services.length ? intake.services : [intake.niche]).map(searchPhrase).filter((t): t is string => !!t && t.split(" ").length <= 6);
+  return [...new Set(list)].slice(0, DEPTH_RULES.seeds);
 }
 
 export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionId[]): SeoPlan {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const kws = moneyKeywords(intake.services, cities, intake.state);
-  const first: Lookup[] = [
-    { id: "volume", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: kws.map((k) => k.keyword), location_name: stateLocation(intake.state), language_code: "en" } },
-  ];
-  if (on.has("keywords")) first.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: kws.slice(0, 200).map((k) => k.keyword), location_code: US, language_code: "en" } });
+  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const seeds = seedSearches(intake);
+  const first: Lookup[] = seeds.map((keyword, i) => ({
+    id: `suggest:${i}`,
+    step: "Finding the searches",
+    path: "/v3/dataforseo_labs/google/keyword_suggestions/live",
+    task: { keyword, location_code: US, language_code: "en", limit: DEPTH_RULES.suggestionsPerSeed, filters: [["keyword_info.search_volume", ">", 0]], order_by: ["keyword_info.search_volume,desc"] },
+  }));
   seoMoneyTerms(intake).forEach((keyword, i) => first.push({ id: `serp:${i}`, step: "Who ranks", path: "/v3/serp/google/organic/live/advanced", task: { keyword, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   if (on.has("heatmap")) {
     const term = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
     cities.slice(0, RUN_RULES.packCities).forEach((city, i) => first.push({ id: `pack:${i}`, step: "Local 3-pack by city", path: "/v3/serp/google/organic/live/advanced", task: { keyword: term, location_name: cityLocation(city, intake.state), language_code: "en", depth: RUN_RULES.serpDepth } }));
   }
-  const perSite = (domain: string, name: string | null): Lookup[] => [
-    { id: `site:${domain}`, step: "Competitors", path: "/v3/dataforseo_labs/google/domain_rank_overview/live", task: { target: domain, location_code: US, language_code: "en" } },
+  const second = (universe: string[]): Lookup[] => {
+    const list: Lookup[] = [{ id: "volume", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: universe.slice(0, 1000), location_name: stateLocation(intake.state), language_code: "en" } }];
+    if (on.has("keywords")) list.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: universe.slice(0, 1000), location_code: US, language_code: "en" } });
+    return list;
+  };
+  const pattern = localPattern(markets, intake.state);
+  const perSite = (domain: string, name: string | null, business: boolean): Lookup[] => [
+    {
+      id: `ranked:${domain}`,
+      step: "Competitors",
+      path: "/v3/dataforseo_labs/google/ranked_keywords/live",
+      task: { target: domain, location_code: US, language_code: "en", limit: DEPTH_RULES.rankedPerSite, filters: [["keyword_data.keyword", "regex", pattern]], order_by: ["keyword_data.keyword_info.search_volume,desc"] },
+    },
     { id: `maps:${domain}`, step: "Google profiles", path: "/v3/serp/google/maps/live/advanced", task: { keyword: `${name ?? domain} ${intake.hqTown}`.slice(0, 80), location_name: cityLocation(intake.hqTown, intake.state), language_code: "en", depth: 10 } },
+    ...(business ? [{ id: `instant:${domain}`, step: "Checking their website", path: "/v3/on_page/instant_pages" as const, task: { url: `https://${domain}`, enable_javascript: false } }] : []),
   ];
+  const brand = (names: string[]): Lookup | null => {
+    const phrases = [...new Set(names.map((n) => searchPhrase(n.replace(/\s*\([^)]*\)/g, ""))).filter((t): t is string => !!t))].slice(0, 10);
+    return phrases.length ? { id: "brand", step: "Brand searches", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: phrases, location_code: US, language_code: "en" } } : null;
+  };
   const sitesWorstCase = 1 + RUN_RULES.competitors;
-  const estimateUsd = round2(first.reduce((s, l) => s + DFS_PRICE[l.path], 0) + sitesWorstCase * (DFS_PRICE["/v3/dataforseo_labs/google/domain_rank_overview/live"] + DFS_PRICE["/v3/serp/google/maps/live/advanced"]));
-  return { first, perSite, sitesWorstCase, estimateUsd };
+  const estimateUsd = round2(
+    first.reduce((sum, l) => sum + DFS_PRICE[l.path], 0) +
+      DFS_PRICE["/v3/keywords_data/google_ads/search_volume/live"] * 2 + // state counts + brand searches
+      (on.has("keywords") ? DFS_PRICE["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] : 0) +
+      sitesWorstCase * (DFS_PRICE["/v3/dataforseo_labs/google/ranked_keywords/live"] + DFS_PRICE["/v3/serp/google/maps/live/advanced"]) +
+      DFS_PRICE["/v3/on_page/instant_pages"],
+  );
+  return { first, second, perSite, brand, seeds, sitesWorstCase, estimateUsd };
 }
 
 /** The money searches checked live from the home town: each service + home town, then "near me". */
@@ -269,69 +310,103 @@ export interface SeoAnswers {
   retrieved: string;
   costUsd: number;
   calls: number;
+  /** The searches this audit is about (D1); left out = the plain service × town list. */
+  universe?: string[];
+}
+
+/** Seeds + suggestions that name a town, the state or "near me" (the D1 keyword universe). */
+export function seoUniverse(intake: AuditIntake, answers: Map<string, DfsAnswer>, seedCount: number): string[] {
+  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const seeds = seedSearches(intake);
+  const suggestions = Array.from({ length: seedCount }, (_, i) => readSuggestions(answers.get(`suggest:${i}`))).flat();
+  const plain = moneyKeywords(intake.services, [intake.hqTown, ...intake.cities], intake.state).map((k) => k.keyword);
+  return buildUniverse(seeds, markets, intake.state, suggestions, plain);
 }
 
 export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSectionId[], run: SeoAnswers): Record<string, unknown> {
   const on = new Set(sections);
   const cities = [intake.hqTown, ...intake.cities];
-  const kws = moneyKeywords(intake.services, cities, intake.state);
+  const markets = auditMarkets(intake.hqTown, intake.cities, intake.state);
+  const universe = run.universe ?? moneyKeywords(intake.services, cities, intake.state).map((k) => k.keyword);
   const volume = readVolume(run.answers.get("volume"));
   const difficulty = readDifficulty(run.answers.get("difficulty"));
   const money = seoMoneyTerms(intake);
   const serps = money.map((_, i) => readSerp(run.answers.get(`serp:${i}`)));
   const sites = [intake.domain, ...run.competitors.map((c) => c.domain)];
+  const searches = (k: string) => volume.get(k)?.searches ?? null;
+  const cpc = (k: string) => volume.get(k)?.cpc ?? null;
+
+  // Each site's local rankings → the click-through model (D1). No answer = numbers "not found".
+  const models = new Map(sites.filter((d) => run.answers.has(`ranked:${d}`)).map((d) => [d, modelSite(readRanked(run.answers.get(`ranked:${d}`), d), searches, cpc, markets, intake.state)]));
 
   const demand = cities.map((city) => {
-    const rows = kws.filter((k) => k.city === city).map((k) => volume.get(k.keyword)?.searches);
-    const known = rows.filter((v): v is number => typeof v === "number");
-    return { city, searches: known.length ? known.reduce((s, v) => s + v, 0) : null };
+    const known = universe.filter((k) => marketOf(k, markets)?.label === city).map(searches).filter((v): v is number => typeof v === "number");
+    return { city, searches: known.length ? known.reduce((a, v) => a + v, 0) : null };
   });
-  const nearRows = kws.filter((k) => k.city === null).map((k) => volume.get(k.keyword)?.searches).filter((v): v is number => typeof v === "number");
+  const nearRows = universe.filter((k) => groupOf(k, markets, intake.state) === "Near me").map(searches).filter((v): v is number => typeof v === "number");
 
-  const keywords = kws.slice(0, 200).map((k) => {
-    const v = volume.get(k.keyword);
-    const at = money.indexOf(k.keyword);
+  const ranked = [...universe].sort((a, b) => (searches(b) ?? -1) - (searches(a) ?? -1)).slice(0, 200);
+  const moneySet = new Set([...money, ...ranked.slice(0, 8)]);
+  const keywords = ranked.map((k) => {
+    const v = volume.get(k);
+    const at = money.indexOf(k);
     const serp = at >= 0 ? serps[at] : null;
     const row: Record<string, unknown> = {
-      keyword: k.keyword,
-      group: k.service,
-      money: at >= 0,
+      keyword: k,
+      group: groupOf(k, markets, intake.state),
+      money: moneySet.has(k),
       searches: v?.searches ?? null,
       cpcUsd: v?.cpc ?? null,
-      difficulty: difficulty.get(k.keyword) ?? null,
+      difficulty: difficulty.get(k) ?? null,
     };
-    if (serp) row.ranks = Object.fromEntries(sites.map((d) => [d, serp.organic.find((o) => o.domain === d)?.rank ?? null]));
+    if (models.size || serp) {
+      row.ranks = Object.fromEntries(sites.map((d) => [d, models.get(d)?.positions.get(k) ?? serp?.organic.find((o) => o.domain === d)?.rank ?? null]));
+    }
     return row;
   });
 
-  // Local 3-pack by city (heat map) and, from the same searches, where each site ranks.
+  // Local 3-pack by city (heat map) and, from the same searches, where each site shows up.
   const packs = on.has("heatmap") ? cities.slice(0, RUN_RULES.packCities).map((city, i) => ({ city, serp: readSerp(run.answers.get(`pack:${i}`)) })) : [];
   const hqSerp = serps[0] ?? null;
+  const brand = readVolume(run.answers.get("brand"));
+  const brandFor = (name: string) => {
+    const phrase = searchPhrase(name.replace(/\s*\([^)]*\)/g, ""));
+    return phrase ? (brand.get(phrase)?.searches ?? null) : null;
+  };
+  const names = new Map([[intake.domain, intake.company], ...run.competitors.map((c) => [c.domain, c.name] as [string, string])]);
 
   const siteRows = sites.map((d) => {
-    const ov = readOverview(run.answers.get(`site:${d}`));
+    const m = models.get(d);
     const prof = readProfile(run.answers.get(`maps:${d}`), d);
     const packRow = hqSerp?.pack.find((p) => p.domain === d);
-    return {
+    const fromPacks = packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some((x) => x.domain === d)).map((p) => p.city);
+    const row: Record<string, unknown> = {
       website: d,
       googleRating: prof?.rating ?? packRow?.rating ?? null,
       googleReviews: prof?.reviews ?? packRow?.reviews ?? null,
       googlePhotos: prof?.photos ?? null,
       localPackPosition: hqSerp ? (packRow?.rank ?? (hqSerp.hasPack ? 0 : null)) : null,
-      organicKeywords: ov?.organicKeywords ?? null,
-      organicVisits: ov?.organicVisits ?? null,
+      organicKeywords: m?.keywords ?? null,
+      organicVisits: m?.visits ?? null,
       localPackVisits: null,
-      trafficValueUsd: ov?.organicValueUsd ?? null,
+      trafficValueUsd: m?.valueUsd ?? null,
       backlinkRank: null,
       referringDomains: null,
-      rankingPagesIn: packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some((x) => x.domain === d)).map((p) => p.city),
+      rankingPagesIn: [...new Set([...(m?.markets ?? []), ...fromPacks])],
+      top3: m?.top3 ?? null,
+      top10: m?.top10 ?? null,
+      positionedFor: m?.positionedFor ?? null,
+      brandSearches: brandFor(names.get(d) ?? d),
     };
+    if (m?.pages.length && d !== intake.domain) row.pagesBuilt = m.pages;
+    return row;
   });
 
   const heatTerm = searchPhrase(intake.services[0] ?? intake.niche) ?? lower(intake.niche).slice(0, 60);
   const heatmaps = packs.some((p) => p.serp)
     ? [{ term: heatTerm, kind: "pack", cities: packs.map((p) => ({ city: p.city, position: p.serp ? (p.serp.pack.find((x) => x.domain === intake.domain)?.rank ?? (p.serp.hasPack ? 0 : null)) : null })) }]
     : [];
+  const inspection = readInspection(run.answers.get(`instant:${intake.domain}`), intake.hqTown);
 
   return {
     atlas: "results-v1",
@@ -342,12 +417,13 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     sources: ["dataforseo"],
     competitors: run.competitors.map((c) => ({ name: c.name, website: c.domain, town: c.town })),
     demand,
-    nearMeSearches: nearRows.length ? nearRows.reduce((s, v) => s + v, 0) : null,
-    // Visit numbers come from DataForSEO Labs, which estimates US-wide (not local) traffic.
-    visitsScope: "national",
+    nearMeSearches: nearRows.length ? nearRows.reduce((a, v) => a + v, 0) : null,
+    // Visits are modeled from each site's LOCAL rankings × state search counts (D1).
+    visitsScope: "local",
     keywords,
     sites: siteRows,
     heatmaps,
+    ...(inspection ? { inspection } : {}),
     scorecard: [],
     headline: "",
     pageNotes: {},

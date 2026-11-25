@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, seoMoneyTerms } from "@/lib/audit/run";
+import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, wordsInput } from "@/lib/audit/words";
 
@@ -40,12 +40,23 @@ describe("planning a run", () => {
 
   it("the estimate is the worst case of every lookup, competitors included", () => {
     const plan = planSeoRun(seoIntake, ["summary", "heatmap", "keywords"]);
-    const ids = plan.first.map((l) => l.id);
-    expect(ids).toEqual(["volume", "difficulty", "serp:0", "serp:1", "pack:0", "pack:1"]);
-    const expected = DFS_PRICE["/v3/keywords_data/google_ads/search_volume/live"] + DFS_PRICE["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] + 4 * DFS_PRICE["/v3/serp/google/organic/live/advanced"] + 6 * (DFS_PRICE["/v3/dataforseo_labs/google/domain_rank_overview/live"] + DFS_PRICE["/v3/serp/google/maps/live/advanced"]);
+    expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "serp:0", "serp:1", "pack:0", "pack:1"]);
+    expect(plan.second(["we buy houses denver"]).map((l) => l.id)).toEqual(["volume", "difficulty"]);
+    expect(plan.perSite("milehighhomes.example", "Mile High Homes (fictional)", true).map((l) => l.id)).toEqual(["ranked:milehighhomes.example", "maps:milehighhomes.example", "instant:milehighhomes.example"]);
+    expect(plan.perSite("peakoffers.example", "Peak Offers (fictional)", false).map((l) => l.id)).toEqual(["ranked:peakoffers.example", "maps:peakoffers.example"]);
+    const P = DFS_PRICE;
+    const expected =
+      P["/v3/dataforseo_labs/google/keyword_suggestions/live"] +
+      4 * P["/v3/serp/google/organic/live/advanced"] +
+      2 * P["/v3/keywords_data/google_ads/search_volume/live"] +
+      P["/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"] +
+      6 * (P["/v3/dataforseo_labs/google/ranked_keywords/live"] + P["/v3/serp/google/maps/live/advanced"]) +
+      P["/v3/on_page/instant_pages"];
     expect(plan.estimateUsd).toBeCloseTo(expected, 2);
     expect(plan.estimateUsd).toBeLessThan(5); // well under the default per-audit cap
-    expect(plan.first[2]?.task).toMatchObject({ keyword: "we buy houses denver", location_name: "Denver,Colorado,United States" });
+    expect(plan.first[1]?.task).toMatchObject({ keyword: "we buy houses denver", location_name: "Denver,Colorado,United States" });
+    // Rankings are read only for searches that name this audit's towns, the state or "near me".
+    expect(plan.perSite("x.example", null, false)[0]?.task).toMatchObject({ filters: [["keyword_data.keyword", "regex", "denver|arvada|colorado|near me"]] });
   });
 
   it("checkpoints decide the lookups (no heat map = no city packs)", () => {
@@ -65,28 +76,64 @@ describe("reading answers", () => {
 });
 
 describe("SEO: answers → block → checker", () => {
+  const ranked = (domain: string, rows: [string, number, string][]) => ans([{ items: rows.map(([keyword, rank, path]) => ({ keyword_data: { keyword, keyword_info: { search_volume: 9999 } }, ranked_serp_element: { serp_item: { rank_group: rank, domain, relative_url: path } } })) }]);
   const answers = new Map<string, DfsAnswer>([
-    ["volume", ans([{ keyword: "we buy houses denver", search_volume: 1300, cpc: 38.2 }, { keyword: "we buy houses arvada", search_volume: 90, cpc: 21 }, { keyword: "we buy houses near me", search_volume: 2400, cpc: null }], 0.075)],
+    ["suggest:0", ans([{ items: [
+      { keyword: "we buy houses denver", keyword_info: { search_volume: 1500 } },
+      { keyword: "sell my house fast denver", keyword_info: { search_volume: 600 } },
+      { keyword: "cash home buyers arvada", keyword_info: { search_volume: 50 } },
+      { keyword: "how to sell a house denver", keyword_info: { search_volume: 900 } },
+      { keyword: "we buy houses boston", keyword_info: { search_volume: 3000 } },
+      { keyword: "we buy houses colorado", keyword_info: { search_volume: 250 } },
+    ] }])],
+    ["volume", ans([
+      { keyword: "we buy houses denver", search_volume: 1300, cpc: 38.2 },
+      { keyword: "we buy houses arvada", search_volume: 90, cpc: 21 },
+      { keyword: "we buy houses near me", search_volume: 2400, cpc: null },
+      { keyword: "sell my house fast denver", search_volume: 500, cpc: 30 },
+      { keyword: "cash home buyers arvada", search_volume: 40, cpc: null },
+      { keyword: "we buy houses colorado", search_volume: 200, cpc: 12 },
+    ], 0.075)],
     ["serp:0", hqSerp],
     ["pack:0", serp([{ type: "local_pack", rank_group: 2, domain: "milehighhomes.example" }])],
     ["pack:1", serp([{ type: "local_pack", rank_group: 1, domain: "peakoffers.example" }, { type: "organic", rank_group: 4, domain: "milehighhomes.example" }])],
-    ["site:peakoffers.example", ans([{ items: [{ metrics: { organic: { count: 340, etv: 1800.5, estimated_paid_traffic_cost: 22000 } } }] }])],
+    ["ranked:peakoffers.example", ranked("peakoffers.example", [["we buy houses denver", 1, "/"], ["sell my house fast denver", 3, "/sell-fast-denver/"], ["cash home buyers arvada", 12, "/arvada/"], ["we buy houses boston", 2, "/boston/"]])],
+    ["ranked:milehighhomes.example", ranked("milehighhomes.example", [["we buy houses denver", 7, "/"], ["we buy houses near me", 15, "/"]])],
     ["maps:milehighhomes.example", ans([{ items: [{ type: "maps_search", domain: "milehighhomes.example", rating: { value: 4.9, votes_count: 41 }, total_photos: 12 }] }])],
+    ["brand", ans([{ keyword: "mile high homes", search_volume: 320 }, { keyword: "peak offers", search_volume: 880 }])],
+    ["instant:milehighhomes.example", ans([{ items: [{ meta: { title: "Sell Your Denver House Fast | Call 303-555-0100", htags: { h1: ["We Buy Houses"] } }, checks: { no_description: true, is_https: true, no_h1_tag: false } }] }])],
   ]);
   const competitors = [{ domain: "peakoffers.example", name: "Peak Offers (fictional)", town: "Denver" }];
-  const block = buildSeoBlock(seoIntake, ["summary", "heatmap", "keywords"], { answers, competitors, retrieved: "2026-11-25", costUsd: 0.21, calls: 9 });
+  const universe = seoUniverse(seoIntake, answers, 1);
+  const block = buildSeoBlock(seoIntake, ["summary", "heatmap", "keywords"], { answers, competitors, retrieved: "2026-11-25", costUsd: 0.21, calls: 9, universe });
+
+  it("the keyword universe: seeds, seed × town, and local suggestions (no how-to, no other towns)", () => {
+    expect(universe).toContain("we buy houses");
+    expect(universe).toContain("sell my house fast denver");
+    expect(universe).toContain("we buy houses colorado");
+    expect(universe).not.toContain("how to sell a house denver");
+    expect(universe).not.toContain("we buy houses boston");
+  });
 
   it("passes the same checker as pasted results, with the right numbers", () => {
     const r = parseSeoResults(block, { intake: seoIntake, markets, today: TODAY });
     if (!r.ok) throw new Error(r.errors.join("; "));
-    expect(r.data.demand.map((d) => d.searches.value)).toEqual([1300, 90]);
+    // Demand per town = every search in the universe naming that town (state counts).
+    expect(r.data.demand.map((d) => d.searches.value)).toEqual([1300 + 500, 90 + 40]);
     expect(r.data.nearMeSearches.value).toBe(2400);
     expect(r.data.keywords.find((k) => k.keyword === "we buy houses denver")?.positions).toEqual({ "milehighhomes.example": 7, "peakoffers.example": 1 });
     const own = r.data.sites[0]!;
     expect([own.gbpRating.value, own.gbpReviews.value, own.gbpPhotos.value, own.packPosition.value]).toEqual([4.9, 41, 12, 0]);
-    expect(r.data.sites[1]?.organicVisits.value).toBe(1800.5);
-    expect(r.data.sites[1]?.gbpRating.value).toBe(4.8); // from the local pack when no profile lookup answered
-    expect(r.data.visitsScope).toBe("national");
+    // Local model: 1300 × 28% + 500 × 10% + 40 × 1% ≈ 414 visits; Boston is outside the market.
+    const peak = r.data.sites[1]!;
+    expect(peak.organicVisits.value).toBe(414);
+    expect([peak.top3?.value, peak.top10?.value, peak.positionedFor?.value, peak.brandSearches?.value]).toEqual([2, 2, 1800, 880]);
+    expect(peak.pagesBuilt).toEqual(["/sell-fast-denver/", "/arvada/"]);
+    expect(peak.gbpRating.value).toBe(4.8); // from the local pack when no profile lookup answered
+    expect([own.organicVisits.value, own.top10?.value, own.brandSearches?.value, own.pagesBuilt]).toEqual([1300 * 0.03 + 2400 * 0.01, 1, 320, undefined]);
+    expect(r.data.visitsScope).toBe("local");
+    // The homepage check: phone number removed, no description flagged, home town named.
+    expect(r.data.inspection).toMatchObject({ title: "Sell Your Denver House Fast", h1: "We Buy Houses", issues: ["No meta description (Google writes its own snippet)"], namesHomeTown: true });
     // Denver: 2nd in the 3-pack; Arvada: a pack shows but the business isn't in it (0).
     expect(r.data.grids[0]?.ranks).toEqual([[2, 0], [null, null]]);
     expect(own.footprint).toEqual(["denver", "arvada"]);
@@ -101,6 +148,9 @@ describe("SEO: answers → block → checker", () => {
     expect(sent).not.toContain("Mile High Homes");
     expect(sent).not.toContain("Peak Offers");
     expect(sent).toContain("COMPETITOR 1");
+    expect(sent).not.toContain("sell-fast-denver"); // page addresses stay out; only town names go
+    expect(sent).not.toContain("Sell Your Denver House"); // homepage title stays out
+    expect(input.data.business_homepage_check).toMatchObject({ has_title: true, title_or_h1_names_home_town: true });
     const filled = applyWords(block, { headline: "COMPETITOR 1 wins Denver; BUSINESS is not in the 3-pack.", pageNotes: { rankings: "x", footprint: "", competitors: "", keywords: "", revenue: "" }, fixes: [{ title: "City pages", detail: "Arvada page first." }], scorecard: [{ signal: "Reviews", competitors: "210", client: "41", grade: "gap" }] }, input.codes);
     expect(filled.headline).toBe("Peak Offers (fictional) wins Denver; Mile High Homes (fictional) is not in the 3-pack.");
     expect(parseSeoResults(filled, { intake: seoIntake, markets, today: TODAY }).ok).toBe(true);
