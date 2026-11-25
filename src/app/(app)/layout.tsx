@@ -13,6 +13,7 @@ import { NoticePill } from "@/components/shell/NoticePill";
 import { BrandLogo } from "@/components/shell/BrandLogo";
 import { isLead, isSales } from "@/lib/roles";
 import { parseTheme, THEME_COOKIE } from "@/lib/theme";
+import { toadModeFor } from "@/lib/ai/toad-snapshot";
 import { parseToadMode, TOAD_COOKIE } from "@/lib/toad";
 import { BizToad } from "@/components/toad/BizToad";
 import { getCoachHints, getDeveloperViewer, getMember, getNotices, getToadStatus, getWorkOrderBadge, usesDatabase } from "@/lib/data-source";
@@ -38,8 +39,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // peeking in the corner so he can be brought back.
   const toadOff = toad.ready && !toad.enabled;
   const toadMode = parseToadMode(cookieJar.get(TOAD_COOKIE)?.value);
-  // Asking (Phase 2): owner and managers whose role is switched on, outside a preview.
-  const toadAsk = toad.canAsk && isLead(member?.role) && !viewer?.preview ? { usedUsd: toad.myUsedUsd, capUsd: toad.perPersonUsd } : null;
+  // Asking: anyone whose role the owner switched on (Phase 3 adds developers and sales),
+  // outside a preview. The server checks the role again on every question.
+  const toadAsk = toad.canAsk && member && !viewer?.preview ? { usedUsd: toad.myUsedUsd, capUsd: toad.perPersonUsd, mode: toadModeFor(member.role) } : null;
   const toadNote = !usesDatabase()
     ? "Asking me needs the real database (this is the demo)."
     : !toad.ready && isLead(member?.role)

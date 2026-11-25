@@ -12,6 +12,11 @@ export interface Codebook {
 }
 
 export function buildCodebook(clients: RosterClient[]): Codebook {
+  return codebookFor(clients);
+}
+
+/** Same codes from just an id (slug) and a name, e.g. the clients on a developer's own list. */
+export function codebookFor(clients: { id: string; name: string }[]): Codebook {
   const codeOf = new Map<string, string>();
   const clientOf = new Map<string, { slug: string; name: string }>();
   clients.forEach((c, i) => {

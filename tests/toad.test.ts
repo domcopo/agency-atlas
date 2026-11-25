@@ -1,9 +1,14 @@
-// BizToad (docs/BIZTOAD_PLAN.md): motion rules (Phase 1) and what the AI is given (Phase 2).
+// BizToad (docs/BIZTOAD_PLAN.md): motion rules (Phase 1), what the AI is given (Phase 2) and
+// what developers and salespeople's BizToad is given (Phase 3).
 import { describe, expect, it } from "vitest";
 import { eyesMayFollow, mayMove, nextIdleDelay, pickVoice, speechText, parseToadMode, pickIdleMove, pupilOffset, TOAD_RULES } from "@/lib/toad";
-import { buildCodebook, buildStaffBook } from "@/lib/ai/snapshot";
+import { buildCodebook, buildStaffBook, codebookFor } from "@/lib/ai/snapshot";
+import { buildDeveloperToadFacts, buildNameBook, buildSalesToadFacts, mySalesLeads, redactNames, restoreNames, toadModeFor, type ToadSalesInput } from "@/lib/ai/toad-snapshot";
+import type { ClientContactDates } from "@/lib/ops";
+import type { SalesLead } from "@/lib/sales";
+import type { Prospect } from "@/lib/scout";
 import { buildToadFacts, pipelineCounts, cleanHistory, cleanQuestion, MONEY_KEY, restoreToadAnswer, safeToadLinks, scrubContacts, scrubMoney, stripMoney, TOAD_SCREENS, type ToadFactsInput } from "@/lib/ai/toad-snapshot";
-import type { RosterClient } from "@/lib/types";
+import type { ClientAction, RosterClient } from "@/lib/types";
 
 const eye = { x: 100, y: 100 };
 
@@ -267,5 +272,164 @@ describe("BizToad voice (Phase 4)", () => {
     expect(pickVoice(voices)?.name).toBe("US");
     expect(pickVoice(voices.slice(0, 3))?.name).toBe("UK");
     expect(pickVoice([voices[0]!, voices[1]!])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: developers and salespeople. All names below are fictional.
+// ---------------------------------------------------------------------------
+
+/** Every key at any depth (to prove what a role's facts can never contain). */
+function allKeys(v: unknown, out = new Set<string>()): Set<string> {
+  if (Array.isArray(v)) v.forEach((x) => allKeys(x, out));
+  else if (v && typeof v === "object")
+    for (const [k, x] of Object.entries(v)) {
+      out.add(k);
+      allKeys(x, out);
+    }
+  return out;
+}
+
+describe("BizToad picks facts by database role", () => {
+  it("owner and managers get the full facts; developers and sales their own", () => {
+    expect(toadModeFor("owner")).toBe("full");
+    expect(toadModeFor("manager")).toBe("full");
+    expect(toadModeFor("developer")).toBe("developer");
+    expect(toadModeFor("sales")).toBe("sales");
+  });
+});
+
+describe("lead and prospect names get codes too", () => {
+  const leads = buildNameBook("L", [
+    { id: "g1", name: "Robin Example Roofing (fictional)" },
+    { id: "g2", name: "Al" },
+    { id: "g1", name: "duplicate id is ignored" },
+  ]);
+  it("swaps full names for codes and back, and skips very short names", () => {
+    expect(leads.codeOf.get("g1")).toBe("L1");
+    expect(leads.nameOf.size).toBe(2);
+    expect(redactNames("Call robin example roofing (fictional) today, and Al too", leads)).toBe("Call [L1] today, and Al too");
+    expect(restoreNames("Start with [L1], then L2.", leads)).toBe("Start with Robin Example Roofing (fictional), then Al.");
+  });
+  it("leaves unknown codes alone", () => {
+    expect(restoreNames("See L9 and P1", leads)).toBe("See L9 and P1");
+  });
+  it("restores lead codes in answers", () => {
+    const a = restoreToadAnswer({ answer: "Call [L1] first.", points: [], unknowns: [], links: [] }, codebookFor([]), buildStaffBook([]), TOAD_SCREENS.sales, [leads]);
+    expect(a.answer).toBe("Call Robin Example Roofing (fictional) first.");
+  });
+  it("swaps lead names in the question", () => {
+    expect(cleanQuestion("What about Robin Example Roofing (fictional)?", codebookFor([]), buildStaffBook([]), [leads])).toBe("What about [L1]?");
+  });
+});
+
+const devWork: ClientAction[] = [
+  {
+    id: "a1", kind: "work_order", title: "Fix the contact form for Pat Example (fictional), $750/mo plan", notes: "private note", priority: "high", status: "in_progress",
+    dueOn: "2026-11-20", doneAt: null, createdAt: "2026-11-01", ownerId: "s1", ownerName: "Dev Sample", client: { slug: "pat", dbId: "", name: "Pat Example (fictional)" },
+    leadGhlId: null, steps: "Check the form\nSend a test", stepsDone: [1], estMinutes: 60, sentBackCount: 1, reviewNote: "Email pat@example.com when done", blockedReason: null, promisedOn: null,
+  },
+  { id: "a2", kind: "work_order", title: "Old finished job", notes: null, priority: "normal", status: "done", dueOn: "2026-11-18", doneAt: "2026-11-19T10:00:00Z", createdAt: "2026-11-01", ownerId: "s1", ownerName: "Dev Sample", client: null, leadGhlId: null, internal: true },
+  { id: "a3", kind: "work_order", title: "Canceled job", notes: null, priority: "normal", status: "open", dueOn: null, doneAt: null, createdAt: "2026-11-01", ownerId: "s1", ownerName: "Dev Sample", client: null, leadGhlId: null, canceledAt: "2026-11-02" },
+];
+const devContacts: ClientContactDates[] = [{ slug: "pat", name: "Pat Example (fictional)", lastLoggedOn: "2026-11-10", lastInboundAt: "2026-11-15T09:00:00Z", lastOutboundAt: null, lastCallAt: null, unanswered: 0 }];
+
+describe("a developer's BizToad sees only their own work", () => {
+  const book = codebookFor([{ id: "pat", name: "Pat Example (fictional)" }]);
+  const staff = buildStaffBook([{ id: "s1", name: "Dev Sample" }]);
+  const facts = buildDeveloperToadFacts({ today: "2026-11-24", askerCode: "T1", work: devWork, contacts: devContacts, book, staff });
+  const text = JSON.stringify(facts);
+
+  it("lists their open work with steps, due dates and review notes, coded", () => {
+    expect(facts.my_open_work).toHaveLength(1);
+    const w = facts.my_open_work[0]!;
+    expect(w).toMatchObject({ client: "C1", status: "in_progress", due: "2026-11-20", overdue: true, sent_back_times: 1 });
+    expect(w.steps).toEqual([{ step: "Check the form", done: true }, { step: "Send a test", done: false }]);
+    expect(facts.my_done_last_14_days.count).toBe(1);
+    expect(facts.my_client_contacts[0]).toMatchObject({ client: "C1", last_contact: "2026-11-15" });
+    expect(facts.screens).toEqual(TOAD_SCREENS.developer);
+  });
+
+  it("never carries client names, money, contact details, health, team load or sales", () => {
+    expect(text).not.toMatch(/Pat Example|750|pat@example\.com|private note/);
+    const keys = allKeys(facts);
+    for (const k of ["health", "score", "team_load", "risk_alerts", "ranked_plan", "sales_pipeline", "clients", "notes", "owner"]) expect(keys.has(k)).toBe(false);
+    for (const k of keys) expect(MONEY_KEY.test(k)).toBe(false);
+  });
+
+  it("stays within the size limit", () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({ ...devWork[0]!, id: `x${i}`, title: `Job ${i} ${"y".repeat(100)}` }));
+    const small = buildDeveloperToadFacts({ today: "2026-11-24", askerCode: null, work: many, contacts: devContacts, book, staff }, 6000);
+    expect(JSON.stringify(small).length).toBeLessThanOrEqual(6000);
+    expect(small.my_open_work.length).toBeGreaterThan(0);
+  });
+});
+
+const lead = (id: string, assigned: string | null, extra: Partial<SalesLead> = {}): SalesLead => ({
+  ghlId: id, name: `Lead ${id} (fictional)`, pipelineId: "p1", pipelineName: "Main", stage: "New", status: "open", value: 5000, source: null,
+  createdAt: "2026-11-20T15:00:00Z", updatedAt: null, statusChangedAt: null, assignedUserId: assigned, ...extra,
+});
+const prospect = (id: string, assignedTo: string | null, status: Prospect["status"] = "new"): Prospect => ({
+  id, name: `Prospect ${id} (fictional)`, website: "https://example.com", category: "Roofer", address: "1 Main St", town: "Sampletown", lat: 1, lng: 1,
+  mapsUrl: null, rating: 4.5, reviews: 10, signals: {} as Prospect["signals"], score: 70, reasons: ["No website"], angle: "website", status, assignedTo, nextOkOn: null, runId: null, createdAt: "2026-11-20",
+});
+
+describe("a salesperson's BizToad sees only their own leads", () => {
+  const leads = [lead("mine", "ghl-me"), lead("pool", null), lead("theirs", "ghl-other"), lead("won", "ghl-me", { status: "won" })];
+  const leadBook = buildNameBook("L", leads.map((l) => ({ id: l.ghlId, name: l.name })));
+  const prospects = [prospect("p-mine", "u-me"), prospect("p-pool", null), prospect("p-theirs", "u-other"), prospect("p-closed", null, "won")];
+  const prospectBook = buildNameBook("P", prospects.map((p) => ({ id: p.id, name: p.name })));
+  const input: ToadSalesInput = {
+    today: "2026-11-24",
+    askerCode: null,
+    me: { userId: "u-me", ghlUserId: "ghl-me" },
+    pipelines: [{ id: "p1", name: "Main", hotStages: ["New"], active: true }],
+    leads,
+    touches: [
+      { leadId: "mine", kind: "call", at: "2026-11-24T15:00:00Z", by: "u-me" },
+      { leadId: "theirs", kind: "call", at: "2026-11-24T15:00:00Z", by: "u-other" },
+    ],
+    followUps: [
+      { id: "f1", leadId: "mine", title: "Call back Lead mine (fictional) about the $2,000 quote", dueOn: "2026-11-23", status: "open", ownerStaffId: null },
+      { id: "f2", leadId: "theirs", title: "Their follow-up", dueOn: "2026-11-23", status: "open", ownerStaffId: null },
+    ],
+    myTarget: 15,
+    appointments: [{ startsAt: "2026-11-25T15:00:00Z", calendar: "Discovery call", status: "confirmed" }],
+    prospects,
+    visits: [
+      { prospectId: "p-mine", kind: "walk_in", outcome: "interested", at: "2026-11-23T15:00:00Z", by: "u-me" },
+      { prospectId: "p-theirs", kind: "walk_in", outcome: "interested", at: "2026-11-23T15:00:00Z", by: "u-other" },
+    ] as ToadSalesInput["visits"],
+    board: [
+      { isMe: true, linked: true, wonDeals: 2 },
+      { isMe: false, linked: true, wonDeals: 5 },
+      { isMe: false, linked: false, wonDeals: 0 },
+    ],
+    leadBook,
+    prospectBook,
+  };
+  const facts = buildSalesToadFacts(input);
+  const text = JSON.stringify(facts);
+
+  it("own leads are theirs plus unassigned; unlinked people get only unassigned", () => {
+    expect(mySalesLeads(leads, "ghl-me").map((l) => l.ghlId)).toEqual(["mine", "pool"]);
+    expect(mySalesLeads(leads, null).map((l) => l.ghlId)).toEqual(["pool"]);
+  });
+
+  it("lists their leads, follow-ups, reach-outs, Scout pool and deal rank", () => {
+    expect(facts.my_open_leads.map((l) => l.lead)).toEqual([leadBook.codeOf.get("mine"), leadBook.codeOf.get("pool")]);
+    expect(facts.my_follow_ups).toHaveLength(1);
+    expect(facts.my_follow_ups[0]).toMatchObject({ lead: "L1", overdue: true });
+    expect(facts.reach_outs_today).toMatchObject({ done: 1, target: 15 });
+    expect(facts.scout_prospects.map((p) => p.prospect).sort()).toEqual(["P1", "P2"]);
+    expect(facts.my_scout_visits_last_7_days.count).toBe(1);
+    expect(facts.leaderboard).toEqual({ my_won_deals: 2, my_rank_by_deals: 2, people_ranked: 2 });
+  });
+
+  it("never carries names, money, websites, addresses, other reps' leads, clients or work orders", () => {
+    expect(text).not.toMatch(/fictional|5000|2,000|example\.com|1 Main St|Their follow-up|theirs/);
+    const keys = allKeys(facts);
+    for (const k of ["value", "clients", "open_work_orders", "team_load", "health", "name", "website", "address"]) expect(keys.has(k)).toBe(false);
+    for (const k of keys) expect(MONEY_KEY.test(k)).toBe(false);
   });
 });

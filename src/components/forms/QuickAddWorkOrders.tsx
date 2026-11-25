@@ -284,7 +284,8 @@ export function QuickAddWorkOrders({
   );
 }
 
-function DraftCard({ d, i, clients, staff, today, myStaffId }: { d: WorkOrderDraft; i: number; clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string; myStaffId: string | null }) {
+/** One draft to confirm or edit. Also used by Ask BizToad's "Review and add" (Phase 3). Saves only on Confirm. */
+export function DraftCard({ d, i, clients, staff, today, myStaffId }: { d: WorkOrderDraft; i: number; clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string; myStaffId: string | null }) {
   const [state, confirm, saving] = useActionState(createWorkOrder, undefined);
   const [skipped, setSkipped] = useState(false);
   // The AI can't always tell the client: pick it right here, then Confirm.

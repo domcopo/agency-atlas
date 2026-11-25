@@ -46,7 +46,7 @@ export function BizToad({
   /** Screens this person's role can open, shown while asking isn't available. */
   links: { label: string; href: string }[];
   /** Set when this person may ask (the server checks again on every question). */
-  ask?: { usedUsd: number | null; capUsd: number } | null;
+  ask?: { usedUsd: number | null; capUsd: number; mode: "full" | "developer" | "sales" } | null;
   /** Why asking isn't available (e.g. the database update hasn't been run). */
   note?: string;
 }) {
@@ -212,7 +212,7 @@ export function BizToad({
     >
       <p className="mb-1 font-display text-base font-semibold">{ask ? "Ask BizToad" : "Hi, I\u2019m BizToad."}</p>
       {ask ? (
-        <ToadChat usedUsd={ask.usedUsd} capUsd={ask.capUsd} onThinking={setThinking} onTalking={setTalking} />
+        <ToadChat usedUsd={ask.usedUsd} capUsd={ask.capUsd} mode={ask.mode} onThinking={setThinking} onTalking={setTalking} />
       ) : (
         <p className="text-muted">{note ?? "Soon you\u2019ll be able to ask me questions about your work right here."} Until then, these might help:</p>
       )}

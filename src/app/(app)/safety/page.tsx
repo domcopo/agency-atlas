@@ -152,7 +152,7 @@ export default async function SafetyPage() {
               {member?.role === "owner" && <BudgetForm current={ai.budgetUsd} />}
               {member?.role === "owner" &&
                 (toad.ready ? (
-                  <ToadSettingsForm enabled={toad.enabled} monthlyUsd={toad.monthlyUsd} perPersonUsd={toad.perPersonUsd} />
+                  <ToadSettingsForm enabled={toad.enabled} roles={toad.roles} monthlyUsd={toad.monthlyUsd} perPersonUsd={toad.perPersonUsd} />
                 ) : (
                   <p className="text-xs text-faint">BizToad&apos;s on/off switch and caps appear here after database update 0030.</p>
                 ))}

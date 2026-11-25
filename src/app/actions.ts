@@ -11,12 +11,12 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { askAi, CARE_DRAFT_SCHEMA, CARE_DRAFT_TASK, CARE_MOVES_SCHEMA, CARE_MOVES_TASK, isAiConfigured, textRequestWorstCase, TOAD_SCHEMA, TOAD_TASK, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
-import { buildToadFacts, cleanHistory, cleanQuestion, pipelineCounts, restoreToadAnswer, TOAD_LIMITS, TOAD_SCREENS, type ToadAnswer } from "@/lib/ai/toad-snapshot";
-import { buildCodebook, buildStaffBook, clientFacts, opsClientFacts, pipelineFacts, redact, redactStaff, restore, restoreClients, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt } from "@/lib/ai/snapshot";
+import { askAi, CARE_DRAFT_SCHEMA, CARE_DRAFT_TASK, CARE_MOVES_SCHEMA, CARE_MOVES_TASK, isAiConfigured, textRequestWorstCase, TOAD_DRAFT_SCHEMA, TOAD_DRAFT_TASK, TOAD_SCHEMA, TOAD_TASK, OPS_BRIEFING_SCHEMA, OPS_BRIEFING_TASK, PROFILE_SCHEMA, PROFILE_TASK, WORK_ORDERS_SCHEMA, WORK_ORDERS_TASK, WORK_PROMPT_SCHEMA, WORK_PROMPT_TASK, QUICK_ADD_SCHEMA, QUICK_ADD_TASK, type AiResult } from "@/lib/ai/client";
+import { buildDeveloperToadFacts, buildNameBook, buildSalesToadFacts, buildToadFacts, cleanHistory, cleanQuestion, pipelineCounts, restoreToadAnswer, TOAD_LIMITS, TOAD_SCREENS, toadModeFor, type NameBook, type ToadAnswer, type ToadScreen } from "@/lib/ai/toad-snapshot";
+import { buildCodebook, buildStaffBook, clientFacts, codebookFor, opsClientFacts, pipelineFacts, redact, redactStaff, restore, restoreClients, restoreOpsBriefing, restoreProfile, restoreQuickAdd, restoreWorkOrderDrafts, restoreWorkPrompt, type Codebook, type StaffBook } from "@/lib/ai/snapshot";
 import { byImportance, EST_OPTIONS, isImportant, needsReview, parseSteps } from "@/lib/ops";
 import { buildOwnerSummary, findLeaks } from "@/lib/owner-summary";
-import type { RosterClient, WorkOrderDrafts } from "@/lib/types";
+import type { RosterClient, WorkOrderDraft, WorkOrderDrafts } from "@/lib/types";
 import { findSecrets } from "@/lib/kit";
 import { matchClient } from "@/lib/billing";
 import {
@@ -37,6 +37,11 @@ import {
   getRoster,
   getToday,
   getScout,
+  getDeveloperActions,
+  getLeaderboard,
+  getMyClientContacts,
+  getSales,
+  getUpcomingAppointments,
   getToadStatus,
   getWatch,
   getWatchAuditImport,
@@ -65,7 +70,7 @@ import { AGENCY_SLUG } from "@/lib/agency";
 import { isPdf, MAX_PDF_BYTES, MAX_UPLOAD_TOTAL_BYTES } from "@/lib/uploads";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
-import { asTouchKind, checkTouchNote, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
+import { asTouchKind, checkTouchNote, nyDay, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { isLead } from "@/lib/roles";
 import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
@@ -2331,7 +2336,9 @@ async function aiPreflight(): Promise<{ error: string } | { remaining: number }>
 // refuses past the caps, the AI budget or the rate limit). Nothing is saved but the cost.
 // ---------------------------------------------------------------------------
 
-export type ToadReply = { error?: string; answer?: ToadAnswer; costUsd?: number };
+/** Lists for the "Review and add" card (owner and managers only, who can read them anyway). */
+export type ToadDraftPickers = { clients: { slug: string; name: string }[]; staff: { id: string; name: string }[]; today: string; myStaffId: string | null };
+export type ToadReply = { error?: string; answer?: ToadAnswer; costUsd?: number; draft?: WorkOrderDraft; pickers?: ToadDraftPickers };
 
 /** The database's refusal → plain words. */
 function toadRefusal(message: string | undefined, code: string | undefined): string {
@@ -2347,6 +2354,16 @@ function toadRefusal(message: string | undefined, code: string | undefined): str
   return "BizToad couldn't check the budget just now. Nothing was spent. Try again in a minute.";
 }
 
+type ToadPrepared = {
+  data: Record<string, unknown>;
+  book: Codebook;
+  staff: StaffBook;
+  extra: NameBook[];
+  screens: ToadScreen[];
+  /** Owner/managers only: what a work order draft needs to be checked and shown. */
+  drafts?: { loads: ReturnType<typeof personLoads>; pickers: ToadDraftPickers };
+};
+
 export async function askToad(question: unknown, history: unknown): Promise<ToadReply> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
@@ -2356,9 +2373,48 @@ export async function askToad(question: unknown, history: unknown): Promise<Toad
   if (!status.enabled) return { error: "BizToad is switched off right now." };
   if (!status.roles.includes(me.role)) return { error: "Asking BizToad isn't switched on for your role yet." };
   if (!isAiConfigured()) return { error: "The AI isn't set up yet." };
-  // Phase 2 builds facts for the owner and managers only. Other roles come in Phase 3.
-  if (!isLead(me.role)) return { error: "Asking BizToad isn't ready for your role yet." };
 
+  // Which facts: from the role stored in the database, never from anything the browser sends.
+  // Each builder reads as the signed-in person, so the database decides what's included.
+  const mode = toadModeFor(me.role);
+  const prepared = mode === "full" ? await toadLeadFacts(me, question, history) : mode === "developer" ? await toadDeveloperFacts(me, question, history) : await toadSalesFacts(me, question, history);
+  if ("error" in prepared) return prepared;
+  const { data, book, staff, extra, screens, drafts } = prepared;
+
+  const task = drafts ? TOAD_DRAFT_TASK : TOAD_TASK;
+  const schema = drafts ? TOAD_DRAFT_SCHEMA : TOAD_SCHEMA;
+  const maxOutputTokens = drafts ? TOAD_LIMITS.draftOutputTokens : TOAD_LIMITS.maxOutputTokens;
+  const worst = Math.min(1, Math.max(0.01, Math.ceil(textRequestWorstCase({ task, data, maxOutputTokens }) * 10_000) / 10_000));
+  const db = await createDatabaseClient();
+  const reserve = await db.from("toad_spend").insert({ usd: worst });
+  if (reserve.error) return { error: toadRefusal(reserve.error.message, reserve.error.code) };
+
+  const result = await askAi({ task, data, schema, maxOutputTokens, remainingUsd: worst });
+  await logAiUsage(db, "ask_toad", result);
+  if (!result.ok) return { error: result.message };
+  const reply: ToadReply = { answer: restoreToadAnswer(result.data, book, staff, screens, extra), costUsd: result.costUsd };
+
+  // A work order draft (owner/managers): checked like Smart add, NEVER saved here. The
+  // "Review and add" card saves it only when a person taps Confirm (the normal add action).
+  if (drafts) {
+    const raw = (result.data ?? {}) as { work_order_drafts?: unknown };
+    const d = restoreQuickAdd({ orders: Array.isArray(raw.work_order_drafts) ? raw.work_order_drafts.slice(0, 1) : [] }, book, staff).orders[0];
+    if (d) {
+      const checked = checkDraftDue({ today: drafts.pickers.today, aiDays: d.aiDueDays, priority: d.priority, estMinutes: d.estMinutes, load: d.assigneeId ? (drafts.loads.get(d.assigneeId) ?? null) : null });
+      d.dueOn = checked.dueOn;
+      d.dueNote = checked.moved;
+      d.contactWarning = contactDetailsIn([d.title, ...d.steps, d.why].join("\n")).length > 0;
+      reply.draft = d;
+      reply.pickers = drafts.pickers;
+    }
+  }
+  return reply;
+}
+
+type ToadAsker = NonNullable<Awaited<ReturnType<typeof getCurrentMember>>>;
+
+/** Owner and managers (Phase 2): clients, work orders, team load, the plan, risks, pipeline counts. */
+async function toadLeadFacts(me: ToadAsker, question: unknown, history: unknown): Promise<ToadPrepared | { error: string }> {
   const ops = await getOps();
   const today = ops.today;
   const current = ops.clients.filter((c) => c.status === "active" || c.status === "paused");
@@ -2419,19 +2475,68 @@ export async function askToad(question: unknown, history: unknown): Promise<Toad
     pipeline: pipelineCounts(ghl),
   });
 
-  const data = { question: q, conversation, facts };
-  const worst = Math.min(1, Math.max(0.01, Math.ceil(textRequestWorstCase({ task: TOAD_TASK, data, maxOutputTokens: TOAD_LIMITS.maxOutputTokens }) * 10_000) / 10_000));
-  const db = await createDatabaseClient();
-  const reserve = await db.from("toad_spend").insert({ usd: worst });
-  if (reserve.error) return { error: toadRefusal(reserve.error.message, reserve.error.code) };
-
-  const result = await askAi({ task: TOAD_TASK, data, schema: TOAD_SCHEMA, maxOutputTokens: TOAD_LIMITS.maxOutputTokens, remainingUsd: worst });
-  await logAiUsage(db, "ask_toad", result);
-  if (!result.ok) return { error: result.message };
-  return { answer: restoreToadAnswer(result.data, book, staff, TOAD_SCREENS.full), costUsd: result.costUsd };
+  return {
+    data: { question: q, conversation, facts },
+    book,
+    staff,
+    extra: [],
+    screens: TOAD_SCREENS.full,
+    // Drafts need the 0013 setup (cancel + quick add), like Smart add.
+    drafts: ops.cancel
+      ? { loads, pickers: { clients: current.map((c) => ({ slug: c.id, name: c.name })), staff: team.map((m) => ({ id: m.id, name: m.name })), today, myStaffId: me.staffId } }
+      : undefined,
+  };
 }
 
-/** Owner only: BizToad on/off for everyone and the two monthly caps (the database checks too). */
+/** Developers (Phase 3): their own work (my_work) and their clients' contact dates only. */
+async function toadDeveloperFacts(me: ToadAsker, question: unknown, history: unknown): Promise<ToadPrepared | { error: string }> {
+  const [work, contacts] = await Promise.all([getDeveloperActions(), getMyClientContacts()]);
+  // Codes for the clients on their own list only (they can't read the client list).
+  const seen = new Map<string, string>();
+  for (const a of work) if (a.client) seen.set(a.client.slug, a.client.name);
+  for (const c of contacts) seen.set(c.slug, c.name);
+  const book = codebookFor([...seen].map(([id, name]) => ({ id, name })));
+  // They can't read the team list either: only their own name gets a code.
+  const staff = buildStaffBook(me.staffId ? [{ id: me.staffId, name: me.name }] : []);
+  const q = cleanQuestion(question, book, staff);
+  if (!q) return { error: "Type a question first." };
+  const facts = buildDeveloperToadFacts({ today: getToday(), askerCode: me.staffId ? (staff.codeOf.get(me.staffId) ?? null) : null, work, contacts, book, staff });
+  return { data: { question: q, conversation: cleanHistory(history, book, staff), facts }, book, staff, extra: [], screens: TOAD_SCREENS.developer };
+}
+
+/** Salespeople (Phase 3): their own leads, follow-ups, target, appointments, Scout, deal counts. */
+async function toadSalesFacts(me: ToadAsker, question: unknown, history: unknown): Promise<ToadPrepared | { error: string }> {
+  const [sales, appointments, scout, board] = await Promise.all([getSales(), getUpcomingAppointments(), getScout(), getLeaderboard()]);
+  // Every lead and prospect they can read gets a code (so names typed in a question are
+  // swapped too), but only their own leads become facts.
+  const leadBook = buildNameBook("L", sales.leads.map((l) => ({ id: l.ghlId, name: l.name })));
+  const prospectBook = buildNameBook("P", scout.prospects.map((p) => ({ id: p.id, name: p.name })));
+  const extra = [leadBook, prospectBook];
+  const book = codebookFor([]);
+  const staff = buildStaffBook(me.staffId ? [{ id: me.staffId, name: me.name }] : []);
+  const q = cleanQuestion(question, book, staff, extra);
+  if (!q) return { error: "Type a question first." };
+  const facts = buildSalesToadFacts({
+    today: nyDay(new Date().toISOString()),
+    askerCode: me.staffId ? (staff.codeOf.get(me.staffId) ?? null) : null,
+    me: { userId: me.userId, ghlUserId: me.ghlUserId },
+    pipelines: sales.pipelines,
+    leads: sales.leads,
+    touches: sales.touches,
+    followUps: sales.followUps,
+    myTarget: sales.myTarget,
+    appointments,
+    prospects: scout.prospects,
+    visits: scout.visits,
+    // Deal counts only: the builder never copies names or dollar totals.
+    board: board.ready && !board.sample ? board.rows.map((r) => ({ isMe: r.isMe, linked: r.linked, wonDeals: r.wonDeals })) : null,
+    leadBook,
+    prospectBook,
+  });
+  return { data: { question: q, conversation: cleanHistory(history, book, staff, extra), facts }, book, staff, extra, screens: TOAD_SCREENS.sales };
+}
+
+/** Owner only: BizToad on/off for everyone, who may ask, and the two monthly caps (the database checks too). */
 export async function setToadSettings(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
   await notWhilePreviewing();
   const me = await getCurrentMember();
@@ -2440,10 +2545,13 @@ export async function setToadSettings(_prev: { error?: string; ok?: boolean } | 
   const perPerson = Number(form.get("per_person_usd"));
   if (!Number.isFinite(monthly) || monthly < 0 || monthly > 200) return { error: "The team total must be between $0 and $200." };
   if (!Number.isFinite(perPerson) || perPerson < 0 || perPerson > 50) return { error: "The per-person cap must be between $0 and $50." };
+  // Which roles may ask: only known roles; the owner is always included (the database checks the names too).
+  const picked = form.getAll("roles").map((r) => String(r));
+  const roles = ["owner", ...(["manager", "developer", "sales"] as const).filter((r) => picked.includes(r))];
   const db = await createDatabaseClient();
   const { data, error } = await db
     .from("toad_settings")
-    .update({ enabled: form.get("enabled") === "on", monthly_usd: Math.round(monthly * 100) / 100, per_person_usd: Math.round(perPerson * 100) / 100 })
+    .update({ enabled: form.get("enabled") === "on", roles, monthly_usd: Math.round(monthly * 100) / 100, per_person_usd: Math.round(perPerson * 100) / 100 })
     .eq("id", true)
     .select("id");
   if (error && MISSING_TABLE.has(error.code ?? "")) return { error: "This needs database update 0030 first." };

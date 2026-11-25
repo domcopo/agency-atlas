@@ -2317,7 +2317,9 @@ set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","a
 select test.expect($$insert into public.toad_spend (usd) values (0.05)$$, 1, 'once sales is switched on, a salesperson can ask');
 select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('ask_toad', 'claude-opus-5-5', 1, 1, 0.01, 'ok')$$, 1, 'and log their own BizToad cost');
 select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('briefing', 'claude-opus-5-5', 1, 1, 0.01, 'ok')$$, -1, 'but no other AI feature');
-select test.expect('select * from public.ai_usage', 0, 'and still cannot read the AI cost log');
+-- 0033: they now read their OWN BizToad cost row, and nothing else in the cost log.
+select test.expect($$select * from public.ai_usage where feature <> 'ask_toad' or requested_by <> '00000000-0000-0000-0000-0000000000a6'$$, 0, 'and still cannot read anyone else''s AI costs');
+select test.expect('select * from public.ai_usage', 1, 'they read only their own BizToad cost row (0033)');
 commit;
 
 -- The whole-app AI budget and the BizToad switch.
@@ -2342,6 +2344,48 @@ set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","a
 select test.expect($$insert into public.toad_spend (usd) values (0.01)$$, -2, 'nobody can ask while BizToad is off (the guard refuses it before the rules even look)');
 commit;
 update public.toad_settings set enabled = true, roles = '{owner,manager}';
+
+-- ---------------------------------------------------------------------------
+-- 7fa. BizToad Phase 3 (0033): developers and salespeople read only their OWN BizToad
+--      cost rows; nobody edits or deletes them; two-factor still required.
+-- ---------------------------------------------------------------------------
+update public.toad_settings set roles = '{owner,manager,developer,sales}';
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$insert into public.ai_usage (feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('ask_toad', 'claude-opus-5-5', 1, 1, 0.02, 'ok')$$, 1, 'once developers are switched on, a developer logs their own BizToad cost');
+select test.expect($$insert into public.ai_usage (requested_by, feature, model, input_tokens, output_tokens, cost_usd, outcome) values ('00000000-0000-0000-0000-0000000000a6', 'ask_toad', 'claude-opus-5-5', 1, 1, 0.02, 'ok')$$, -1, 'a developer cannot log a cost in someone else''s name');
+select test.expect('select * from public.ai_usage', 1, 'a developer reads only their own BizToad cost row');
+select test.expect($$select * from public.ai_usage where requested_by <> '00000000-0000-0000-0000-0000000000a3'$$, 0, 'a developer reads no one else''s AI costs (owner, manager, sales)');
+select test.expect($$update public.ai_usage set cost_usd = 0$$, -1, 'a developer cannot edit their cost rows');
+select test.expect($$delete from public.ai_usage$$, -1, 'a developer cannot delete their cost rows');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.ai_usage where requested_by = '00000000-0000-0000-0000-0000000000a3'$$, 0, 'a salesperson cannot read a developer''s BizToad costs');
+select test.expect($$update public.ai_usage set cost_usd = 0$$, -1, 'a salesperson cannot edit cost rows');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect('select * from public.ai_usage', 0, 'a developer without two-factor reads no cost rows');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a4","aal":"aal2"}';
+select test.expect('select * from public.ai_usage', 0, 'someone not on the team reads no cost rows');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$select * from public.ai_usage where requested_by = '00000000-0000-0000-0000-0000000000a3'$$, 1, 'a manager still reads the whole cost log');
+commit;
+update public.toad_settings set roles = '{owner,manager}';
 
 -- ---------------------------------------------------------------------------
 -- 7y. Calls first + daily goals (0031): an unanswered call is an "attempt" (call or video,

@@ -7,6 +7,11 @@
 // money fields are removed, emails/phone numbers in free text are blanked, and the whole
 // thing is trimmed to a size limit.
 
+import { contactSummary, type ClientContactDates } from "@/lib/ops";
+import { isHot, lastTouchByLead, nyDay, targetProgress, touchesOn, type LeadFollowUp, type LeadTouch, type SalesLead, type SalesPipeline } from "@/lib/sales";
+import type { MemberRole } from "@/lib/roles";
+import { isOpenProspect, type Prospect, type ScoutVisit } from "@/lib/scout";
+import type { ClientAction } from "@/lib/types";
 import { redact, redactStaff, restoreWithStaff, type Codebook, type StaffBook } from "./snapshot";
 
 export const TOAD_LIMITS = {
@@ -17,6 +22,8 @@ export const TOAD_LIMITS = {
   /** About 15,000 tokens of facts. */
   factsChars: 45_000,
   maxOutputTokens: 1200,
+  /** Owner/managers: room for one work order draft too. */
+  draftOutputTokens: 1800,
 } as const;
 
 export type ToadScreen = { label: string; path: string };
@@ -73,9 +80,9 @@ export function scrubMoney(text: string): string {
 }
 
 /** The asker's question: hidden characters out, length capped, names → codes, contacts blanked. */
-export function cleanQuestion(raw: unknown, book: Codebook, staff: StaffBook): string {
+export function cleanQuestion(raw: unknown, book: Codebook, staff: StaffBook, extra: NameBook[] = []): string {
   const t = typeof raw === "string" ? raw.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.questionChars) : "";
-  return scrubMoney(scrubContacts(redactStaff(redact(t, book), staff)));
+  return scrubMoney(scrubContacts(redactAll(redactStaff(redact(t, book), staff), extra)));
 }
 
 export type ToadTurn = { q: string; a: string };
@@ -84,10 +91,10 @@ export type ToadTurn = { q: string; a: string };
  * Earlier turns come back from the browser, so they're untrusted too: same cleaning, last
  * 6 only, each side capped. (Faking them can only affect the asker's own answer.)
  */
-export function cleanHistory(raw: unknown, book: Codebook, staff: StaffBook): ToadTurn[] {
+export function cleanHistory(raw: unknown, book: Codebook, staff: StaffBook, extra: NameBook[] = []): ToadTurn[] {
   if (!Array.isArray(raw)) return [];
   const one = (v: unknown) =>
-    typeof v === "string" ? scrubMoney(scrubContacts(redactStaff(redact(v.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.historyChars), book), staff))) : "";
+    typeof v === "string" ? scrubMoney(scrubContacts(redactAll(redactStaff(redact(v.replace(CONTROL, " ").trim().slice(0, TOAD_LIMITS.historyChars), book), staff), extra))) : "";
   return raw
     .slice(-TOAD_LIMITS.historyTurns)
     .map((t) => (typeof t === "object" && t !== null ? { q: one((t as ToadTurn).q), a: one((t as ToadTurn).a) } : { q: "", a: "" }))
@@ -235,11 +242,11 @@ export function safeToadLinks(raw: unknown, screens: ToadScreen[]): ToadScreen[]
 }
 
 /** The AI's answer → plain, length-limited text with names swapped back in. */
-export function restoreToadAnswer(raw: unknown, book: Codebook, staff: StaffBook, screens: ToadScreen[]): ToadAnswer {
+export function restoreToadAnswer(raw: unknown, book: Codebook, staff: StaffBook, screens: ToadScreen[], extra: NameBook[] = []): ToadAnswer {
   const r = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   // Second lock: any amount that still slipped in is blanked on the way out, too.
   const t = (v: unknown, max: number) =>
-    scrubMoney(restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff));
+    scrubMoney(restoreAll(restoreWithStaff(typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").trim().slice(0, max) : "", book, staff), extra));
   const list = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n) : []);
   return {
     answer: t(r.answer, 1200) || "Sorry, I couldn't put an answer together. Try asking another way.",
@@ -252,4 +259,255 @@ export function restoreToadAnswer(raw: unknown, book: Codebook, staff: StaffBook
     unknowns: list(r.unknowns, 3).map((u) => t(u, 200)).filter(Boolean),
     links: safeToadLinks(r.links, screens),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 (docs/BIZTOAD_PLAN.md section 12): developers and salespeople ask too.
+// Each role gets its own fact builder. Each one copies ONLY the fields listed here (never a
+// whole record), and everything still goes through stripMoney and the size limit.
+// ---------------------------------------------------------------------------
+
+export type ToadMode = "full" | "developer" | "sales";
+
+/** Which facts a role gets. Always called with the role read from the database. */
+export function toadModeFor(role: MemberRole): ToadMode {
+  return role === "owner" || role === "manager" ? "full" : role;
+}
+
+/** Other names that get codes like clients do: sales leads (L3) and Scout prospects (P5). */
+export interface NameBook {
+  prefix: "L" | "P";
+  codeOf: Map<string, string>; // id -> "L3"
+  nameOf: Map<string, string>; // "L3" -> name
+}
+
+export function buildNameBook(prefix: NameBook["prefix"], items: { id: string; name: string }[]): NameBook {
+  const codeOf = new Map<string, string>();
+  const nameOf = new Map<string, string>();
+  for (const it of items) {
+    if (codeOf.has(it.id)) continue;
+    const code = `${prefix}${codeOf.size + 1}`;
+    codeOf.set(it.id, code);
+    nameOf.set(code, it.name);
+  }
+  return { prefix, codeOf, nameOf };
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Full names (3+ letters) in free text → their codes, longest first. */
+export function redactNames(text: string, nb: NameBook): string {
+  let out = text;
+  const names = [...nb.nameOf.entries()].sort((a, b) => b[1].length - a[1].length);
+  for (const [code, name] of names) {
+    if (name.trim().length < 3) continue;
+    out = out.replace(new RegExp(`(?<![A-Za-z0-9])${escapeRe(name.trim())}(?![A-Za-z0-9])`, "gi"), `[${code}]`);
+  }
+  return out;
+}
+
+/** "[L3]" back to the lead's name. Codes that aren't in the book are left as they are. */
+export function restoreNames(text: string, nb: NameBook): string {
+  return text.replace(new RegExp(`\\[?\\b(${nb.prefix}\\d{1,4})\\b\\]?`, "g"), (whole, code: string) => nb.nameOf.get(code) ?? whole);
+}
+
+const redactAll = (text: string, books: NameBook[]) => books.reduce((t, b) => redactNames(t, b), text);
+const restoreAll = (text: string, books: NameBook[]) => books.reduce((t, b) => restoreNames(t, b), text);
+
+const clipText = (v: string | null | undefined, max: number) => (v ? v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : null);
+
+function finish<T extends Record<string, unknown>>(raw: T, trimOrder: [key: string, floor: number][], maxChars: number): T {
+  const facts = stripMoney(raw) as T;
+  for (const [key, floor] of trimOrder) {
+    while (size(facts) > maxChars && halve(facts, key, floor)) {
+      /* keep halving this list */
+    }
+    if (size(facts) <= maxChars) break;
+  }
+  return facts;
+}
+
+// --- Developers ------------------------------------------------------------
+
+export interface ToadDeveloperInput {
+  today: string;
+  askerCode: string | null;
+  /** Their own list (the my_work view: the database only returns their items). */
+  work: ClientAction[];
+  /** Contact dates for clients they work on (the my_client_contacts view). */
+  contacts: ClientContactDates[];
+  book: Codebook;
+  staff: StaffBook;
+}
+
+const isOpenItem = (a: ClientAction) => a.status !== "done" && !a.canceledAt && !a.archivedAt;
+
+/**
+ * A developer's facts: their own work orders and steps, due dates, review notes, and
+ * contact dates for their clients. No health, no team load, no sales, no money.
+ */
+export function buildDeveloperToadFacts(input: ToadDeveloperInput, maxChars: number = TOAD_LIMITS.factsChars) {
+  const { book, staff, today } = input;
+  const text = (v: string | null | undefined, max: number) => {
+    const t = clipText(v, max);
+    return t ? redactStaff(redact(t, book), staff) : null;
+  };
+  const clientOf = (a: ClientAction) => (a.internal ? "AGENCY" : a.client ? (book.codeOf.get(a.client.slug) ?? "other") : "none");
+  const open = input.work.filter(isOpenItem).sort((x, y) => (x.dueOn ?? "9999").localeCompare(y.dueOn ?? "9999"));
+  const steps = (a: ClientAction) => (a.steps ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+  const weekAgo = new Date(Date.parse(`${today}T12:00:00Z`) - 14 * 86_400_000).toISOString().slice(0, 10);
+  const done = input.work.filter((a) => a.status === "done" && !a.canceledAt && (a.doneAt ?? "").slice(0, 10) >= weekAgo);
+  return finish(
+    {
+      today,
+      asker_role: "developer",
+      asker_code: input.askerCode,
+      screens: TOAD_SCREENS.developer,
+      my_open_work: open.slice(0, 60).map((a) => ({
+        type: a.kind,
+        title: text(a.title, 120),
+        client: clientOf(a),
+        priority: a.priority,
+        status: a.status,
+        due: a.dueOn,
+        overdue: a.dueOn !== null && a.dueOn < today,
+        start_on: a.startOn ?? null,
+        promised_to_client_on: a.promisedOn ?? null,
+        steps: steps(a).slice(0, 12).map((x, i) => ({ step: text(x, 160), done: (a.stepsDone ?? []).includes(i + 1) })),
+        estimate_minutes: a.estMinutes ?? null,
+        blocked_reason: text(a.blockedReason, 200),
+        sent_back_times: a.sentBackCount ?? 0,
+        review_note: text(a.reviewNote, 300),
+      })),
+      my_done_last_14_days: { count: done.length, titles: done.slice(0, 10).map((a) => text(a.title, 100)) },
+      my_client_contacts: input.contacts.slice(0, 40).map((c) => {
+        const s = contactSummary(c, today);
+        return { client: book.codeOf.get(c.slug) ?? "other", last_contact: s.lastContact, days_since: s.daysSince, flags: s.flags.map((f) => text(f, 160)) };
+      }),
+    },
+    [
+      ["my_client_contacts", 10],
+      ["my_open_work", 15],
+      ["my_client_contacts", 0],
+      ["my_open_work", 0],
+    ],
+    maxChars,
+  );
+}
+
+// --- Salespeople -----------------------------------------------------------
+
+/** A salesperson's own leads: assigned to them, or to nobody yet. Not linked to a GoHighLevel user → unassigned only. */
+export function mySalesLeads(leads: SalesLead[], ghlUserId: string | null): SalesLead[] {
+  return leads.filter((l) => l.status === "open" && (l.assignedUserId === null || (ghlUserId !== null && l.assignedUserId === ghlUserId)));
+}
+
+export interface ToadSalesInput {
+  today: string;
+  askerCode: string | null;
+  me: { userId: string; ghlUserId: string | null };
+  pipelines: SalesPipeline[];
+  leads: SalesLead[];
+  touches: LeadTouch[];
+  followUps: LeadFollowUp[];
+  myTarget: number;
+  appointments: { startsAt: string; calendar: string | null; status: string | null }[];
+  prospects: Prospect[];
+  visits: ScoutVisit[];
+  /** The leaderboard rows (the app keeps only counts; names and dollars never go in). */
+  board: { isMe: boolean; linked: boolean; wonDeals: number }[] | null;
+  leadBook: NameBook;
+  prospectBook: NameBook;
+}
+
+/**
+ * A salesperson's facts: their own leads and follow-ups, their reach-outs against the daily
+ * target, upcoming appointments, Scout prospects they can see (theirs + the shared pool) and
+ * their place on the leaderboard by DEAL COUNT. No clients, work orders, team or money.
+ */
+export function buildSalesToadFacts(input: ToadSalesInput, maxChars: number = TOAD_LIMITS.factsChars) {
+  const { today, me, leadBook, prospectBook } = input;
+  const books = [leadBook, prospectBook];
+  const text = (v: string | null | undefined, max: number) => {
+    const t = clipText(v, max);
+    return t ? redactAll(t, books) : null;
+  };
+  const mine = mySalesLeads(input.leads, me.ghlUserId);
+  const mineIds = new Set(mine.map((l) => l.ghlId));
+  const last = lastTouchByLead(input.touches);
+  const ageDays = (iso: string | null | undefined) => (iso ? Math.max(0, Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${nyDay(iso)}T12:00:00Z`)) / 86_400_000)) : null);
+  const sorted = [...mine].sort(
+    (a, b) => Number(isHot(b, input.pipelines)) - Number(isHot(a, input.pipelines)) || (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
+  const myFollowUps = input.followUps.filter((f) => mineIds.has(f.leadId) && f.status !== "done" && f.status !== "canceled");
+  const reached = touchesOn(input.touches, me.userId, today);
+  const progress = targetProgress(reached, input.myTarget, today);
+  const pool = input.prospects
+    .filter((p) => isOpenProspect(p, today) && (p.assignedTo === null || p.assignedTo === me.userId))
+    .sort((a, b) => b.score - a.score);
+  const weekAgo = new Date(Date.parse(`${today}T12:00:00Z`) - 7 * 86_400_000).toISOString();
+  const myVisits = input.visits.filter((v) => v.by === me.userId && v.at >= weekAgo);
+  const outcomes: Record<string, number> = {};
+  for (const v of myVisits) outcomes[v.outcome] = (outcomes[v.outcome] ?? 0) + 1;
+  let board: Record<string, unknown> | null = null;
+  const meRow = input.board?.find((r) => r.isMe);
+  if (input.board && meRow) {
+    const linked = input.board.filter((r) => r.linked);
+    board = {
+      my_won_deals: meRow.wonDeals,
+      my_rank_by_deals: meRow.linked ? 1 + linked.filter((r) => r.wonDeals > meRow.wonDeals).length : null,
+      people_ranked: linked.length,
+    };
+  }
+
+  return finish(
+    {
+      today,
+      asker_role: "sales",
+      asker_code: input.askerCode,
+      screens: TOAD_SCREENS.sales,
+      linked_to_gohighlevel_user: me.ghlUserId !== null,
+      reach_outs_today: { done: progress.done, target: progress.target, weekday: progress.weekday, met: progress.met },
+      my_open_leads: sorted.slice(0, 80).map((l) => {
+        const t = last.get(l.ghlId);
+        return {
+          lead: leadBook.codeOf.get(l.ghlId) ?? "lead",
+          pipeline: text(l.pipelineName, 60),
+          stage: text(l.stage, 60),
+          hot: isHot(l, input.pipelines),
+          assigned_to_me: l.assignedUserId !== null,
+          created: l.createdAt ? nyDay(l.createdAt) : null,
+          last_reach_out: t ? { kind: t.kind, day: nyDay(t.at), by_me: t.by === me.userId } : null,
+          days_since_reach_out: t ? ageDays(t.at) : null,
+        };
+      }),
+      my_follow_ups: myFollowUps
+        .sort((a, b) => (a.dueOn ?? "9999").localeCompare(b.dueOn ?? "9999"))
+        .slice(0, 40)
+        .map((f) => ({ lead: leadBook.codeOf.get(f.leadId) ?? "lead", title: text(f.title, 120), due: f.dueOn, overdue: f.dueOn !== null && f.dueOn < today, status: f.status })),
+      appointments_next_7_days: input.appointments.slice(0, 20).map((a) => ({ starts_at: a.startsAt, calendar: text(a.calendar, 60), status: a.status })),
+      scout_prospects: pool.slice(0, 40).map((p) => ({
+        prospect: prospectBook.codeOf.get(p.id) ?? "prospect",
+        kind: text(p.category, 60),
+        town: text(p.town, 60),
+        score: p.score,
+        why: p.reasons.slice(0, 3).map((r) => text(r, 120)),
+        pitch: p.angle,
+        status: p.status,
+        claimed_by_me: p.assignedTo === me.userId,
+      })),
+      my_scout_visits_last_7_days: { count: myVisits.length, by_outcome: outcomes },
+      leaderboard: board,
+    },
+    [
+      ["scout_prospects", 10],
+      ["my_open_leads", 20],
+      ["my_follow_ups", 10],
+      ["appointments_next_7_days", 5],
+      ["my_open_leads", 0],
+      ["scout_prospects", 0],
+      ["my_follow_ups", 0],
+    ],
+    maxChars,
+  );
 }

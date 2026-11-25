@@ -8,13 +8,19 @@
 // Google, Safari may use Apple), and the words land in the box for you to check before
 // asking; nothing is sent automatically. "Read aloud" uses a voice built into this device.
 // The app records and saves nothing. Both buttons are hidden where the browser lacks them.
+//
+// Phase 3: developers and salespeople ask too (each gets only their own facts, chosen on the
+// server from their role). Owner and managers may get one work order draft back: "Review and
+// add" opens Smart add's confirm card, which saves only when a person taps Confirm.
 
-import { Mic, MicOff, Square, Volume2 } from "lucide-react";
+import { ClipboardList, Mic, MicOff, Square, Volume2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
-import { askToad } from "@/app/actions";
+import { askToad, type ToadDraftPickers } from "@/app/actions";
+import { DraftCard } from "@/components/forms/QuickAddWorkOrders";
 import type { ToadAnswer } from "@/lib/ai/toad-snapshot";
 import { pickVoice, speechText } from "@/lib/toad";
+import type { WorkOrderDraft } from "@/lib/types";
 
 type Recognizer = {
   lang: string;
@@ -33,7 +39,41 @@ const recognizerClass = (): RecognizerClass | null => {
 };
 const noSubscribe = () => () => {};
 
-type Turn = { q: string; answer?: ToadAnswer; error?: string; costUsd?: number };
+type Turn = { q: string; answer?: ToadAnswer; error?: string; costUsd?: number; draft?: WorkOrderDraft; pickers?: ToadDraftPickers };
+type ChatMode = "full" | "developer" | "sales";
+
+const INTRO: Record<ChatMode, { intro: string; example: string }> = {
+  full: {
+    intro: "Ask me about clients, work orders, the team or where to find something. I can also draft a work order for you to review. I only see what your login can see, and I never see money.",
+    example: "e.g. Which work orders are overdue?",
+  },
+  developer: {
+    intro: "Ask me about your own work orders, steps and due dates, or when your clients were last contacted. I only see your own work, and I never see money.",
+    example: "e.g. What should I work on first today?",
+  },
+  sales: {
+    intro: "Ask me about your leads, follow-ups, today's reach-outs, appointments or Scout prospects. I only see your own leads and the shared pool, and I never see money.",
+    example: "e.g. Which of my leads haven't heard from me in a week?",
+  },
+};
+
+/** "Review and add": Smart add's confirm card, opened on request. Nothing saves until Confirm. */
+function DraftOffer({ draft, pickers }: { draft: WorkOrderDraft; pickers: ToadDraftPickers }) {
+  const [open, setOpen] = useState(false);
+  if (open) {
+    return (
+      <div className="space-y-1">
+        <DraftCard d={draft} i={0} clients={pickers.clients} staff={pickers.staff} today={pickers.today} myStaffId={pickers.myStaffId && pickers.staff.some((m) => m.id === pickers.myStaffId) ? pickers.myStaffId : null} />
+        <p className="text-[11px] text-faint">Nothing is saved until you tap Confirm.</p>
+      </div>
+    );
+  }
+  return (
+    <button type="button" onClick={() => setOpen(true)} className="pressable inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-violet/40 bg-violet/10 px-3 text-[13px] font-semibold">
+      <ClipboardList aria-hidden className="size-4" /> Review and add: {draft.title.slice(0, 60)}
+    </button>
+  );
+}
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 const cents = (n: number) => (n < 0.01 ? "under 1¢" : `${Math.round(n * 100)}¢`);
@@ -41,11 +81,14 @@ const cents = (n: number) => (n < 0.01 ? "under 1¢" : `${Math.round(n * 100)}¢
 export function ToadChat({
   usedUsd,
   capUsd,
+  mode,
   onThinking,
   onTalking,
 }: {
   usedUsd: number | null;
   capUsd: number;
+  /** Which kind of login (sets the hints only; the server decides what BizToad sees). */
+  mode: ChatMode;
   onThinking: (on: boolean) => void;
   /** While reading aloud (the frog's mouth moves). */
   onTalking: (on: boolean) => void;
@@ -148,9 +191,7 @@ export function ToadChat({
   return (
     <div className="flex flex-col gap-3">
       {turns.length === 0 ? (
-        <p className="text-muted">
-          Ask me about clients, work orders, the team or where to find something. I only see what your login can see, and I never see money.
-        </p>
+        <p className="text-muted">{INTRO[mode].intro}</p>
       ) : (
         <ol ref={listRef} aria-live="polite" className="max-h-[50vh] space-y-3 overflow-y-auto pr-1">
           {turns.map((t, i) => (
@@ -180,6 +221,7 @@ export function ToadChat({
                       ))}
                     </div>
                   )}
+                  {t.draft && t.pickers && <DraftOffer draft={t.draft} pickers={t.pickers} />}
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-faint">
                       Suggestion — check before acting.{typeof t.costUsd === "number" ? ` Cost ${cents(t.costUsd)}.` : ""}
@@ -227,7 +269,7 @@ export function ToadChat({
           }}
           maxLength={1000}
           rows={2}
-          placeholder="e.g. Which work orders are overdue?"
+          placeholder={INTRO[mode].example}
           className="min-h-11 w-full resize-none rounded-2xl border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-violet"
         />
         <div className="flex gap-2">

@@ -420,6 +420,38 @@ describe("BizToad (0030)", () => {
     expect(ask).not.toMatch(/\.storage\b|writeFile|ai_briefings/);
   });
 
+  it("Phase 3: the facts are picked from the DATABASE role, never from what the browser sends", () => {
+    expect(ask).toMatch(/const me = await getCurrentMember\(\);/);
+    expect(ask).toMatch(/const mode = toadModeFor\(me\.role\);/);
+    expect(ask).not.toMatch(/toadModeFor\((question|history)/);
+    expect(ask).toMatch(/async function toadDeveloperFacts\(/);
+    expect(ask).toMatch(/async function toadSalesFacts\(/);
+  });
+
+  it("Phase 3: developers' and salespeople's facts never read clients, health, the team list or billing", () => {
+    const dev = ask.slice(ask.indexOf("async function toadDeveloperFacts("), ask.indexOf("async function toadSalesFacts("));
+    const sales = ask.slice(ask.indexOf("async function toadSalesFacts("));
+    for (const part of [dev, sales]) {
+      expect(part.length).toBeGreaterThan(100);
+      expect(part).not.toMatch(/getOps\(|getTeam\(|getRoster|getClientHealth|getRecentCheckIns|getGhlSummary|getBilling|client_money/);
+    }
+    expect(dev).toMatch(/getDeveloperActions\(\)/);
+    expect(sales).toMatch(/getSales\(\)/);
+  });
+
+  it("Phase 3: work order drafts only come back to owner/managers and are never saved by askToad", () => {
+    expect(ask).toMatch(/const task = drafts \? TOAD_DRAFT_TASK : TOAD_TASK;/);
+    const dev = ask.slice(ask.indexOf("async function toadDeveloperFacts("));
+    expect(dev).not.toMatch(/drafts:/); // developer and sales helpers never offer drafts
+    expect(ask).not.toMatch(/createWorkOrder|from\("actions"\)/);
+  });
+
+  it("0033 only lets people READ their own BizToad cost rows", () => {
+    const sql = readFileSync(join(ROOT, "supabase/migrations/0033_biztoad_phase3.sql"), "utf8").replace(/--.*$/gm, "");
+    expect(sql).toMatch(/create policy ai_usage_read_own_toad on public\.ai_usage for select to authenticated\s+using \(feature = 'ask_toad' and requested_by = \(select auth\.uid\(\)\)\)/);
+    expect(sql).not.toMatch(/\bgrant\b|for (insert|update|delete|all)|security definer|disable row level/i);
+  });
+
   it("answers are cleaned on the server and shown as plain text", () => {
     expect(ask).toMatch(/restoreToadAnswer\(/);
     expect(ask).toMatch(/cleanQuestion\(/);

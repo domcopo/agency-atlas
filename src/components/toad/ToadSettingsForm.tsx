@@ -1,12 +1,19 @@
 "use client";
 
-// Safety page, owner only: BizToad on/off for everyone and its two monthly caps (0030).
-// The database refuses changes from anyone but the owner, and checks the limits too.
+// Safety page, owner only: BizToad on/off for everyone, which roles may ask (Phase 3), and
+// its two monthly caps (0030). The database refuses changes from anyone but the owner, and
+// checks the limits and role names too. The owner can always ask.
 
 import { useActionState } from "react";
 import { setToadSettings } from "@/app/actions";
 
-export function ToadSettingsForm({ enabled, monthlyUsd, perPersonUsd }: { enabled: boolean; monthlyUsd: number; perPersonUsd: number }) {
+const ASKERS = [
+  { role: "manager", label: "Managers" },
+  { role: "developer", label: "Developers (their own work only)" },
+  { role: "sales", label: "Salespeople (their own leads only)" },
+] as const;
+
+export function ToadSettingsForm({ enabled, roles, monthlyUsd, perPersonUsd }: { enabled: boolean; roles: string[]; monthlyUsd: number; perPersonUsd: number }) {
   const [state, action, pending] = useActionState(setToadSettings, undefined);
   const field = "mt-1 min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink";
   return (
@@ -16,6 +23,16 @@ export function ToadSettingsForm({ enabled, monthlyUsd, perPersonUsd }: { enable
         <input name="enabled" type="checkbox" defaultChecked={enabled} className="size-5 accent-violet-deep" />
         On for everyone (off hides the toad for the whole team)
       </label>
+      <fieldset className="space-y-0.5">
+        <legend className="text-xs text-muted">Who can ask questions (you always can)</legend>
+        {ASKERS.map((a) => (
+          <label key={a.role} className="flex min-h-11 items-center gap-2 text-sm">
+            <input name="roles" value={a.role} type="checkbox" defaultChecked={roles.includes(a.role)} className="size-5 accent-violet-deep" />
+            {a.label}
+          </label>
+        ))}
+        <p className="text-[11px] text-faint">Tip: switch on one role at a time and try a few questions first.</p>
+      </fieldset>
       <div className="flex gap-2">
         <label className="flex-1 text-xs text-muted">
           Team total a month (US $)
