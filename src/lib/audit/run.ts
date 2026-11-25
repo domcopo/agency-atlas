@@ -20,8 +20,8 @@ export const DFS_PRICE: Record<DfsPath, number> = {
   "/v3/dataforseo_labs/google/domain_rank_overview/live": 0.03,
   "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live": 0.05,
   "/v3/on_page/lighthouse/live/json": 0.02,
-  "/v3/dataforseo_labs/google/keyword_suggestions/live": 0.05,
-  "/v3/dataforseo_labs/google/ranked_keywords/live": 0.07,
+  "/v3/dataforseo_labs/google/keyword_suggestions/live": 0.07, // $0.01 + $0.0001 per row (500)
+  "/v3/dataforseo_labs/google/ranked_keywords/live": 0.12, // $0.01 + $0.0001 per row (1,000)
   "/v3/on_page/instant_pages": 0.01,
 };
 

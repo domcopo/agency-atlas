@@ -4,7 +4,7 @@
 
 import { totalVisits } from "@/lib/audit/compute";
 import type { Fig, SiteMetrics } from "@/lib/audit/data";
-import { fmtNum } from "@/lib/audit/format";
+import { fmtNum, fmtUsd } from "@/lib/audit/format";
 import { FigValue, Missing } from "./Bits";
 
 export interface CompetitorRow {
@@ -22,6 +22,7 @@ export function CompetitorTable({ rows, showSemrush, local = false }: { rows: Co
     tops: has(rows, (s) => s.top10),
     positioned: has(rows, (s) => s.positionedFor),
     brand: has(rows, (s) => s.brandSearches),
+    value: has(rows, (s) => s.trafficValueUsd),
     links: has(rows, (s) => s.backlinkRank) || has(rows, (s) => s.referringDomains),
   };
   return (
@@ -38,6 +39,7 @@ export function CompetitorTable({ rows, showSemrush, local = false }: { rows: Co
           <th className="num">{local ? "Local visits" : "Org. visits"}</th>
           {show.packVisits && <th className="num">Pack visits</th>}
           {show.packVisits && <th className="num">Total est./mo</th>}
+          {show.value && <th className="num">Traffic value/mo</th>}
           {showSemrush && <th className="num">Semrush visits</th>}
           {show.brand && <th className="num">Brand searches</th>}
           {show.links && <th className="num">Backlink rank</th>}
@@ -70,6 +72,7 @@ export function CompetitorTable({ rows, showSemrush, local = false }: { rows: Co
               <td className="num">{show.packVisits ? <FigValue fig={site.organicVisits} /> : <b><FigValue fig={site.organicVisits} /></b>}</td>
               {show.packVisits && <td className="num"><FigValue fig={site.packVisits} /></td>}
               {show.packVisits && <td className="num"><b>{total === null ? <Missing /> : fmtNum(total)}</b></td>}
+              {show.value && <td className="num"><FigValue fig={site.trafficValueUsd} format={(v) => fmtUsd(v)} /></td>}
               {showSemrush && <td className="num"><FigValue fig={site.semrushVisits} /></td>}
               {show.brand && <td className="num"><FigValue fig={site.brandSearches} /></td>}
               {show.links && <td className="num"><FigValue fig={site.backlinkRank} /></td>}

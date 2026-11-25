@@ -27,7 +27,7 @@ export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
         <CompetitorTable rows={rows} showSemrush={config.modules.semrush} local={data.visitsScope === "local"} />
         <p className="audit-note">
           Pack: — = checked, not in the local 3-pack. Visits are search-only estimates, not total website traffic.
-          {data.visitsScope === "local" ? " Local = searches naming this area's towns, the state or \"near me\"; visits = each ranking × the state's monthly searches × the usual click share for that position (a model). Positioned for = monthly searches on terms where it holds a top-10 spot. Brand searches are US-wide." : ""}{" "}
+          {data.visitsScope === "local" ? " Local = searches naming this area's towns, the state or \"near me\"; visits = each ranking × the state's monthly searches × the usual click share for that position (a model). Positioned for = monthly searches on terms where it holds a top-10 spot. Traffic value = what those visits would cost as Google Ads at today's cost per click (a model, not revenue). Brand searches are US-wide." : ""}{" "}
           {data.narrative.pageNotes.competitors ?? ""}
         </p>
       </div>

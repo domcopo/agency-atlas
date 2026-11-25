@@ -25,13 +25,13 @@ const str = (v: unknown, max = 200): string | null => (typeof v === "string" && 
 
 export const DEPTH_RULES = {
   /** Seed searches used for discovery (the first few short services). */
-  seeds: 4,
+  seeds: 5,
   /** Suggestions asked for per seed. */
-  suggestionsPerSeed: 300,
+  suggestionsPerSeed: 500,
   /** Keywords kept in the universe (by Google Ads volume). */
-  universe: 400,
+  universe: 600,
   /** Ranked keywords read per site. */
-  rankedPerSite: 500,
+  rankedPerSite: 1000,
   /** "What they built": pages listed per competitor. */
   pagesPerSite: 6,
 } as const;
