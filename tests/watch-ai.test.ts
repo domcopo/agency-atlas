@@ -117,6 +117,7 @@ describe("citations, lists, excerpts", () => {
 
   it("scrubs phones and emails from excerpts", () => {
     expect(scrub("Call (614) 555-0110 or mail a@b.example now")).toBe("Call [phone removed] or mail [email removed] now");
+    expect(scrub("1. **Sample Plumbing**: `fast`")).toBe("1. Sample Plumbing: fast");
     const c = checkAnswer(ans("1. Sample Plumbing Co: call 614-555-0110.\n2. Rapid Rooter"), client, rivals);
     expect(c.excerpt).toContain("[phone removed]");
     expect(c.excerpt).not.toMatch(/555-0110/);

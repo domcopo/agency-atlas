@@ -127,6 +127,7 @@ export function scrub(s: string): string {
     .replace(EMAIL, "[email removed]")
     .replace(PHONE, "[phone removed]")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\*\*|__|`/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }

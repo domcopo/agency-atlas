@@ -1,6 +1,12 @@
 # Plan: AI Search Watch ("do ChatGPT and Google's AI recommend our clients?")
 
-Status: **plan only, waiting for the owner's approval (written 2026-11-25).** Nothing has been built, no migration has been written, and no money has been spent.
+Status: **G1 approved and built 2026-11-25** (branch `plan/ai-visibility`): a preview on fictional data only, at `/growth/watcher/preview/ai` (the "AI search" tab in the Watcher preview). No database, no network, $0. G2 and later still need the owner's answers to the questions at the end.
+
+**G1 as built:**
+- `src/lib/watch/ai.ts` (pure): name, website and domain-stem matching (one-word names never match by name alone), list place, citations, short excerpts with phones, emails and markdown removed, AI score (hidden below 6 answered tries), "named instead", wins/losses, question suggestions and checks, cost estimate (`AI_PRICE_USD`, unknown prices counted at $0.03), `buildAiBoard`.
+- `src/fixtures/watch-ai-sample.ts`: made-up answers for the 6 sample businesses, 3 questions each, 4 monthly rounds, ChatGPT + Gemini (3 tries) + AI Overview (1). It covers rising, slipping, never named, and one engine error.
+- `src/components/watcher/AiSearch.tsx` and `src/app/(app)/growth/watcher/preview/ai/page.tsx`: the screen, server-rendered. Each client's questions open in a `<details>`; excerpts render as plain text.
+- `getWatchAiPreview()` in `data-source.ts`; the "AI search" link in `WatchTabs`; `tests/watch-ai.test.ts` (28 tests).
 
 Builds on SEO Watcher (`docs/SEO_WATCHER_PLAN.md`: watched clients, lists, rounds, caps) and the in-app DataForSEO module from Run audit (`docs/AUDIT_RUN_PLAN.md`, `src/lib/audit/sources/dataforseo.ts`). The rules are the same as the rest of Atlas: every figure has a source and a date, a missing value shows as "not found", the app never sends anything, and GoHighLevel isn't involved.
 

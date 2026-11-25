@@ -62,6 +62,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, journey (27 touches), status changes, client memory, restart + daily goals, AI next moves/drafts | `docs/CLIENT_CARE_PLAN.md` (`0025`, `0028`, `0031`–`0033`), `src/lib/care.ts`, `src/lib/journey.ts` |
 | SEO Watcher (rankings board, demand, opportunity markets; A = sample preview, B = watched clients, lists, rounds via copy-only prompt + attach results) | `docs/SEO_WATCHER_PLAN.md`, `src/lib/watch/` (`0027`) |
+| AI Search Watch (do ChatGPT / Gemini / Google AI Overview name our clients; G1 = sample preview only at `/growth/watcher/preview/ai`, no DB/network; G2 = real questions + in-app DataForSEO rounds, needs approval) | `docs/AI_VISIBILITY_PLAN.md`, `src/lib/watch/ai.ts` |
 | BizToad (animated toad; Phase 1 look/motion; Phase 2 Ask BizToad for owner + managers, caps in `toad_settings`/`toad_spend`; Phase 3 developers + sales with their own facts only, picked by DB role via `toadModeFor`, leads/prospects coded L/P, one work order draft for owner/managers via Smart add's `DraftCard`; voice: push-to-talk + read aloud) | `docs/BIZTOAD_PLAN.md` (`0030`, `0034`), `src/lib/toad.ts`, `src/lib/ai/toad-snapshot.ts`, `src/components/toad/` |
 | Billing (owner only) | `docs/BILLING_PLAN.md` |
 | Owner summary / AI CEO feed, bot runs | `docs/OWNER_SUMMARY_SETUP.md`, `docs/BOT_RUNS_PLAN.md` |

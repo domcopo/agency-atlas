@@ -112,7 +112,7 @@ function ClientCard({ view: v }: { view: AiClientView }) {
                 {r.cells.map((c) => (
                   <li key={c.engine} className={c.mentioned > 0 ? "text-teal" : undefined}>
                     {AI_ENGINE_LABEL[c.engine]}: {c.checked === 0 ? "not checked" : `named ${c.mentioned}/${c.checked}`}
-                    {c.bestPlace !== null && ` · #${c.bestPlace} in list`}
+                    {c.bestPlace !== null && ` · best #${c.bestPlace} in a list`}
                     {c.cited && (
                       <span className="ml-1 inline-flex items-center gap-0.5 text-sky">
                         <CircleCheck aria-hidden className="size-3" />
