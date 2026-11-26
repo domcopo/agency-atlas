@@ -332,6 +332,8 @@ export interface RosterClient {
   backupName?: string;
   /** Day the care plan (onboarding touches) starts counting (0025). */
   careStartedOn?: ISODate;
+  /** Owner's "Place by start date" (0038): touches before this step count as placed. */
+  journeyPlacedStep?: number;
   /** Plan tier per service (0025). Empty before 0025 or when none is set. */
   plans?: ClientPlanRef[];
   /** Short "client memory" notes (0028): what they want, how to talk to them, what to ask next. */

@@ -1,8 +1,7 @@
-// Client care at a glance: the small growth line, the journey board and today's goal.
+// Client care at a glance: the small growth line and today's goal (card on Home, chip on Clients).
 
 import Link from "next/link";
 import { cn } from "@/lib/format";
-import { JOURNEY_STAGES } from "@/lib/journey";
 
 /** A tiny line of active clients per month, with the 3-month change. Hidden with fewer than 2 points. */
 export function GrowthLine({ points }: { points: { month: string; active: number }[] }) {
@@ -34,39 +33,6 @@ export function GrowthLine({ points }: { points: { month: string; active: number
   );
 }
 
-/** How many current clients are in each stage. Tapping a stage filters the list below. */
-export function JourneyBoard({ counts, overdue, dueToday, active }: { counts: number[]; overdue: number; dueToday: number; active: number | null }) {
-  return (
-    <section className="glass rounded-3xl p-3.5" aria-labelledby="board-h">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <h2 id="board-h" className="text-sm font-semibold">
-          Journey board
-        </h2>
-        <span className={cn("text-[11px]", overdue ? "font-semibold text-amber" : "text-faint")}>
-          {overdue} overdue · {dueToday} due today
-        </span>
-      </div>
-      <ol className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-        {JOURNEY_STAGES.map((name, i) => (
-          <li key={name}>
-            <Link
-              href={active === i ? "/clients#list" : `/clients?stage=${i}#list`}
-              aria-current={active === i ? "true" : undefined}
-              className={cn(
-                "pressable flex min-h-14 flex-col items-center justify-center rounded-2xl border px-1 text-center",
-                active === i ? "border-violet bg-violet/15" : "border-line bg-white/[0.03]",
-              )}
-            >
-              <span className="font-display text-lg font-bold leading-none">{counts[i] ?? 0}</span>
-              <span className="mt-1 text-[10px] leading-tight text-muted">{name}</span>
-            </Link>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
 /** Today's goal for the signed-in person: points, real conversations, clients moved up. */
 export function CareGoalCard({ points, goal, calls, moved, pct }: { points: number; goal: number; calls: number; moved: number; pct: number }) {
   return (
@@ -87,5 +53,33 @@ export function CareGoalCard({ points, goal, calls, moved, pct }: { points: numb
         {calls} call{calls === 1 ? "" : "s"} connected · {moved} client{moved === 1 ? "" : "s"} moved up a stage
       </p>
     </section>
+  );
+}
+
+/** Today's goal as a small chip next to the page title (the card's numbers, smaller). */
+export function CareGoalChip({ points, goal, calls, pct, href }: { points: number; goal: number; calls: number; pct: number; href?: string }) {
+  const label = `Today's goal: ${points} of ${goal} points, ${calls} call${calls === 1 ? "" : "s"} connected`;
+  const body = (
+    <>
+      <span className="relative size-4" aria-hidden>
+        <svg viewBox="0 0 20 20" className="size-4 -rotate-90">
+          <circle cx="10" cy="10" r="8" fill="none" strokeWidth="3" className="stroke-white/15" />
+          <circle cx="10" cy="10" r="8" fill="none" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${(pct / 100) * 50.3} 50.3`} className={pct >= 100 ? "stroke-lime" : "stroke-violet"} />
+        </svg>
+      </span>
+      <span>
+        {points}/{goal} <span className="font-normal text-faint">pts today</span>
+      </span>
+    </>
+  );
+  const cls = "inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line bg-white/[0.03] px-2.5 text-[11px] font-semibold";
+  return href ? (
+    <Link href={href} aria-label={`${label}. Set goals.`} title={label} className={cn(cls, "pressable hover:border-violet/50")}>
+      {body}
+    </Link>
+  ) : (
+    <span role="img" aria-label={label} title={label} className={cls}>
+      {body}
+    </span>
   );
 }

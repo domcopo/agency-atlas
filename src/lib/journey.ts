@@ -1,6 +1,8 @@
 // The client journey (docs/CLIENT_CARE_PLAN.md, Step 1B): the owner's 27-touch plan for the
 // first 90 days, grouped into 6 stages, then an ongoing "Grow" rhythm. Pure, tested in
-// tests/journey.test.ts. Change wording or timing HERE (an in-app editor comes later).
+// tests/journey.test.ts. The wording here is the starting copy: after 0038 the owner and
+// managers edit it in Clients → Journey steps (journey_steps), and stepsFromConfig()
+// merges their edits over these defaults. Step numbers and stages never change.
 //
 // Atlas never sends anything: the rep copies a message, sends it from GoHighLevel, and
 // taps Done. Templates use [First name] / [Your name] placeholders; never real names.
@@ -23,7 +25,53 @@ export interface JourneyTouch {
   ask?: string;
   /** Copy-only draft. [Business] is filled in; [First name] / [Your name] are for the rep. */
   template?: string;
+  /** What this touch delivers (0038). "none" = a conversation only. */
+  deliverable: Deliverable;
 }
+
+/**
+ * Deliverable types (0038). Keep the keys in step with the journey_steps check in
+ * 0038_journey_steps.sql (a test compares them).
+ */
+export const JOURNEY_DELIVERABLES = [
+  ["none", "No deliverable"],
+  ["baseline_audit", "Baseline audit (from the sale)"],
+  ["progress_update", "Progress update / mini-audit"],
+  ["heat_map", "Heat map snapshot"],
+  ["monthly_report", "Monthly audit report"],
+  ["gbp_recs", "Google Business Profile recommendations"],
+  ["pages_update", "Pages completed update"],
+  ["review_photo_ask", "Review / photo ask"],
+  ["survey", "Survey"],
+  ["referral_ask", "Referral ask"],
+] as const;
+export type Deliverable = (typeof JOURNEY_DELIVERABLES)[number][0];
+
+export function asDeliverable(v: unknown): Deliverable | null {
+  return JOURNEY_DELIVERABLES.some(([k]) => k === v) ? (v as Deliverable) : null;
+}
+
+export function deliverableLabel(d: Deliverable): string {
+  return JOURNEY_DELIVERABLES.find(([k]) => k === d)?.[1] ?? "No deliverable";
+}
+
+/** The starting deliverables (owner-approved 2026-11-25); the same values seed 0038. */
+const DEFAULT_DELIVERABLES: Partial<Record<number, Deliverable>> = {
+  1: "baseline_audit",
+  3: "pages_update",
+  4: "pages_update",
+  5: "heat_map",
+  7: "review_photo_ask",
+  8: "monthly_report",
+  11: "gbp_recs",
+  14: "progress_update",
+  15: "review_photo_ask",
+  16: "monthly_report",
+  24: "monthly_report",
+  26: "survey",
+  27: "referral_ask",
+  101: "monthly_report",
+};
 
 export const JOURNEY_STAGES = ["Kickoff", "First results", "Month 2", "Month 3", "90-day wrap", "Grow"] as const;
 export const GROW_STAGE = 5;
@@ -40,7 +88,7 @@ const T = (
   say: string,
   ask?: string,
   template?: string,
-): JourneyTouch => ({ step, stage, day, how, channel, withSeo, title, say, ask, template });
+): JourneyTouch => ({ step, stage, day, how, channel, withSeo, title, say, ask, template, deliverable: DEFAULT_DELIVERABLES[step] ?? "none" });
 
 export const JOURNEY_TOUCHES: readonly JourneyTouch[] = [
   T(1, 0, 0, "Call", "call", false, "Kickoff call", "Welcome them, explain how we work and the first two weeks, and say a heat map is coming in week 2.", "Services, real service area, photos, Google and website access, who to contact, phrases to avoid."),
@@ -86,8 +134,102 @@ export const GROW_TOUCHES: readonly JourneyTouch[] = [
   T(103, 5, 0, "Call", "call", true, "Quarterly review", "Competitor review (if their tier has one) and upsell ideas: what would grow them next?"),
 ];
 
-export function touchByStep(step: number): JourneyTouch | undefined {
-  return JOURNEY_TOUCHES.find((t) => t.step === step) ?? GROW_TOUCHES.find((t) => t.step === step);
+/** The whole plan: the 27 onboarding touches and the Grow rhythm. */
+export interface JourneySteps {
+  touches: readonly JourneyTouch[];
+  grow: readonly JourneyTouch[];
+}
+export const DEFAULT_STEPS: JourneySteps = { touches: JOURNEY_TOUCHES, grow: GROW_TOUCHES };
+
+export function touchByStep(step: number, steps: JourneySteps = DEFAULT_STEPS): JourneyTouch | undefined {
+  return steps.touches.find((t) => t.step === step) ?? steps.grow.find((t) => t.step === step);
+}
+
+/** A journey_steps row as read from the database (0038). */
+export interface JourneyStepRow {
+  step: number;
+  day: number;
+  title: string;
+  how: string;
+  channel: string;
+  with_seo: boolean;
+  say: string;
+  ask: string | null;
+  template: string | null;
+  deliverable: string;
+}
+
+/**
+ * The owner's edited steps over the defaults. Step numbers and stages always come from code;
+ * a row with a bad value (or a missing row) keeps the default for that field, and days are
+ * kept in order, so a broken row can never break the journey.
+ */
+export function stepsFromConfig(rows: JourneyStepRow[] | null | undefined): JourneySteps {
+  if (!rows?.length) return DEFAULT_STEPS;
+  const byStep = new Map(rows.map((r) => [Number(r.step), r]));
+  const merge = (t: JourneyTouch, minDay: number): JourneyTouch => {
+    const r = byStep.get(t.step);
+    if (!r) return { ...t, day: Math.max(t.day, minDay) };
+    const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() && v.length <= max ? v.trim() : null);
+    const day = Number.isInteger(Number(r.day)) && Number(r.day) >= 0 && Number(r.day) <= 120 ? Number(r.day) : t.day;
+    return {
+      ...t,
+      day: t.step > 100 ? 0 : Math.max(day, minDay),
+      title: str(r.title, 60) ?? t.title,
+      how: str(r.how, 60) ?? t.how,
+      channel: asTouchChannel(r.channel) ?? t.channel,
+      withSeo: typeof r.with_seo === "boolean" ? r.with_seo : t.withSeo,
+      say: str(r.say, 400) ?? t.say,
+      ask: r.ask === null ? undefined : (str(r.ask, 300) ?? t.ask),
+      template: r.template === null ? undefined : (str(r.template, 1000) ?? t.template),
+      deliverable: asDeliverable(r.deliverable) ?? t.deliverable,
+    };
+  };
+  let minDay = 0;
+  const touches = JOURNEY_TOUCHES.map((t) => {
+    const m = merge(t, minDay);
+    minDay = m.day;
+    return m;
+  });
+  return { touches, grow: GROW_TOUCHES.map((t) => merge(t, 0)) };
+}
+
+/** Checks the edit form for one step (owner/managers). Returns the cleaned row or an error. */
+export function parseJourneyStep(
+  raw: { step: string; day: string; title: string; how: string; channel: string; withSeo: boolean; say: string; ask: string; template: string; deliverable: string },
+  steps: JourneySteps = DEFAULT_STEPS,
+): { ok: true; row: Omit<JourneyStepRow, "step"> & { step: number } } | { ok: false; error: string } {
+  const step = Number(raw.step);
+  const touch = touchByStep(step, steps);
+  if (!touch) return { ok: false, error: "Unknown step." };
+  const clean = (v: string) => v.replace(/[ \t]+/g, " ").trim();
+  const title = clean(raw.title);
+  if (!title || title.length > 60) return { ok: false, error: "Give the step a short name (up to 60 characters)." };
+  const how = clean(raw.how);
+  if (!how || how.length > 60) return { ok: false, error: "Say how it's done, e.g. \"Text\" or \"Email + report\" (up to 60 characters)." };
+  const channel = asTouchChannel(raw.channel);
+  if (!channel) return { ok: false, error: "Pick call, text, email or video." };
+  const say = clean(raw.say);
+  if (!say || say.length > 400) return { ok: false, error: "\"What to say\" is needed (up to 400 characters)." };
+  const ask = clean(raw.ask);
+  if (ask.length > 300) return { ok: false, error: "Keep \"What to ask for\" under 300 characters." };
+  const template = raw.template.replace(/\r\n/g, "\n").trim();
+  if (template.length > 1000) return { ok: false, error: "Keep the draft under 1,000 characters." };
+  const deliverable = asDeliverable(raw.deliverable);
+  if (!deliverable) return { ok: false, error: "Pick a deliverable (or \"No deliverable\")." };
+  const all = `${say}\n${ask}\n${template}`;
+  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}/.test(all) || /\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}/.test(all))
+    return { ok: false, error: "Leave out emails and phone numbers. Use placeholders like [First name]." };
+  let day = 0;
+  if (step <= 27) {
+    if (!/^\d{1,3}$/.test(raw.day.trim())) return { ok: false, error: "Day should be a whole number of days after kickoff (0 to 120)." };
+    day = Number(raw.day.trim());
+    const i = steps.touches.findIndex((t) => t.step === step);
+    const before = i > 0 ? steps.touches[i - 1]!.day : 0;
+    const after = i < steps.touches.length - 1 ? steps.touches[i + 1]!.day : 120;
+    if (day < before || day > after) return { ok: false, error: `Touch ${step} has to stay between day ${before} and day ${after} so the touches stay in order.` };
+  }
+  return { ok: true, row: { step, day, title, how, channel, with_seo: raw.withSeo, say, ask: ask || null, template: template || null, deliverable } };
 }
 
 /** A ready-to-copy draft: the template, or a short one made from what to say. */
@@ -123,7 +265,8 @@ export interface JourneyPlanRhythm {
   competitorReviewMonths: number;
 }
 
-export type Tick = "done" | "skipped" | "next" | "todo";
+/** "placed" = before the touch the owner placed this client on (0038): not done, never overdue. */
+export type Tick = "done" | "skipped" | "placed" | "next" | "todo";
 
 export interface JourneyState {
   /** "onboarding" = in the 27 touches; "grow" = after them (or started before the journey existed). */
@@ -149,8 +292,19 @@ const latest = (xs: string[]) => [...xs].sort().pop() ?? null;
  * - After all 27 (or with no start date: existing clients start in Grow): the next of
  *   monthly report, mid-month check-in (if the tier has one) and quarterly review.
  */
-export function journeyState(input: { startedOn?: string | null; touches: TouchLog[]; plan?: JourneyPlanRhythm | null; lastContact?: string | null; today: string }): JourneyState {
+export function journeyState(input: {
+  startedOn?: string | null;
+  touches: TouchLog[];
+  plan?: JourneyPlanRhythm | null;
+  lastContact?: string | null;
+  today: string;
+  /** Owner's placement by start date (0038): touches before this step count as placed. */
+  placedStep?: number | null;
+  steps?: JourneySteps;
+}): JourneyState {
   const { today } = input;
+  const steps = input.steps ?? DEFAULT_STEPS;
+  const placed = input.startedOn && input.placedStep && input.placedStep >= 2 && input.placedStep <= 27 ? input.placedStep : 1;
   const startedOn = input.startedOn ?? null;
   const all = startedOn ? input.touches.filter((t) => t.happenedOn >= startedOn) : [];
   // Unanswered calls keep a touch open; they only move its due date.
@@ -158,13 +312,14 @@ export function journeyState(input: { startedOn?: string | null; touches: TouchL
   const tries = all.filter((t) => t.status === "attempt");
   const byStep = new Map<number, TouchLog>();
   for (const t of logs) if (!byStep.has(t.step) || byStep.get(t.step)!.happenedOn < t.happenedOn) byStep.set(t.step, t);
-  const firstOpen = startedOn ? JOURNEY_TOUCHES.find((t) => !byStep.has(t.step)) : undefined;
-  const ticks: Tick[] = JOURNEY_TOUCHES.map((t) => {
+  const firstOpen = startedOn ? steps.touches.find((t) => t.step >= placed && !byStep.has(t.step)) : undefined;
+  const ticks: Tick[] = steps.touches.map((t) => {
     const l = byStep.get(t.step);
     if (l) return l.status === "skipped" ? "skipped" : "done";
+    if (t.step < placed) return "placed";
     return firstOpen && t.step === firstOpen.step ? "next" : "todo";
   });
-  const handled = JOURNEY_TOUCHES.filter((t) => byStep.has(t.step)).length;
+  const handled = steps.touches.filter((t) => byStep.has(t.step)).length;
   if (startedOn && firstOpen) {
     const mine = tries.filter((t) => t.step === firstOpen.step);
     const lastTry = latest(mine.map((t) => t.happenedOn));
@@ -187,11 +342,11 @@ export function journeyState(input: { startedOn?: string | null; touches: TouchL
   options.push({ step: 103, due: addDays(lastOf(103) ?? base, (plan.competitorReviewMonths || 3) * 30) });
   options.sort((a, b) => a.due.localeCompare(b.due) || a.step - b.step);
   const pick = options[0]!;
-  const touch = touchByStep(pick.step)!;
+  const touch = touchByStep(pick.step, steps)!;
   return {
     mode: "grow",
     stage: GROW_STAGE,
-    ticks: startedOn ? ticks : JOURNEY_TOUCHES.map(() => "todo"),
+    ticks: startedOn ? ticks : steps.touches.map(() => "todo"),
     handled,
     next: { step: pick.step, title: touch.title, how: touch.how, due: pick.due, overdue: pick.due < today, attempts: 0 },
     startedOn,
@@ -317,6 +472,33 @@ export function restartSchedule<T extends { id: string }>(clients: T[], from: st
     if (i > 0 && i % perDay === 0) day = nextWorkingDay(day);
     return { client, start: day };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Place by start date (0038, owner, one time): existing clients go to the touch that fits
+// how long they've been with us, instead of everyone starting in Grow.
+// ---------------------------------------------------------------------------
+
+export type Placement =
+  | { kind: "place"; startedOn: string; placedStep: number | null; step: number; daysIn: number }
+  | { kind: "grow"; daysIn: number }
+  | { kind: "no_start" }
+  | { kind: "future"; startDate: string };
+
+/**
+ * Where a client with no journey yet should go, from their start date:
+ * - day 0 to 90: journey start = their start date, on the first touch due today or later
+ *   (earlier touches are "placed"; touch 1 = an ordinary start, placedStep null);
+ * - past day 90: Grow (no change);
+ * - no start date, or one in the future: left alone.
+ */
+export function placementFor(startDate: string | null | undefined, today: string, steps: JourneySteps = DEFAULT_STEPS): Placement {
+  if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return { kind: "no_start" };
+  if (startDate > today) return { kind: "future", startDate };
+  const daysIn = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86_400_000);
+  if (daysIn > JOURNEY_DAYS) return { kind: "grow", daysIn };
+  const touch = steps.touches.find((t) => t.day >= daysIn) ?? steps.touches[steps.touches.length - 1]!;
+  return { kind: "place", startedOn: startDate, placedStep: touch.step > 1 ? touch.step : null, step: touch.step, daysIn };
 }
 
 // ---------------------------------------------------------------------------

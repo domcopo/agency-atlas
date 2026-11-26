@@ -2834,6 +2834,88 @@ select test.expect($$select * from public.role_guide_parts$$, -1, 'signed out ca
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7cf. Journey steps (0038): owner/managers edit the 27 steps' words, day, channel and
+--      deliverable; VAs read; developers and sales read nothing; nobody adds or deletes
+--      steps; days stay in order. clients.journey_placed_step: owner only; a restart clears it.
+-- ---------------------------------------------------------------------------
+insert into public.clients (slug, name, start_date, status, services)
+  values ('jl-place', 'Journey Place (fictional)', '2026-10-01', 'active', '{SEO}');
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal2"}';
+select test.expect('select * from public.journey_steps', 30, 'VA reads the 27 touches and 3 Grow steps');
+select test.expect($$update public.journey_steps set title = 'Changed by VA' where step = 1$$, 0, 'VA cannot edit a step');
+select test.expect($$insert into public.journey_steps (step, stage, day, title, how, channel, say) values (28, 4, 100, 'x', 'x', 'call', 'x')$$, -1, 'VA cannot add a step');
+select test.expect('delete from public.journey_steps', -1, 'VA cannot delete steps');
+select test.expect($$update public.clients set care_started_on = '2026-10-01', journey_placed_step = 10 where slug = 'jl-place'$$, -1, 'VA cannot place a client on the journey');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect('select * from public.journey_steps', 0, 'developer reads no journey steps');
+select test.expect($$update public.journey_steps set title = 'x' where step = 1$$, 0, 'developer cannot edit a step');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect('select * from public.journey_steps', 0, 'sales reads no journey steps');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.journey_steps set title = 'Kickoff call (test)', deliverable = 'baseline_audit' where step = 1$$, 1, 'manager edits a step');
+select test.expect($$select * from public.journey_steps where step = 1 and updated_by = '00000000-0000-0000-0000-0000000000a2'$$, 1, 'the database records who saved it');
+select test.expect($$update public.journey_steps set updated_by = '00000000-0000-0000-0000-0000000000a1' where step = 1$$, -1, 'nobody types who saved it');
+select test.expect($$update public.journey_steps set step = 99 where step = 2$$, -1, 'step numbers are fixed');
+select test.expect($$update public.journey_steps set stage = 3 where step = 2$$, -1, 'stages are fixed');
+select test.expect($$update public.journey_steps set day = 50 where step = 3$$, -2, 'days stay in order (touch 3 cannot jump past touch 4)');
+select test.expect($$update public.journey_steps set day = 5 where step = 3$$, 1, 'a day inside its neighbours is fine');
+select test.expect($$update public.journey_steps set deliverable = 'free_gift' where step = 3$$, -2, 'only known deliverable types');
+select test.expect($$update public.journey_steps set channel = 'fax' where step = 3$$, -2, 'only call, text, email or video');
+select test.expect($$update public.journey_steps set template = 'Write to owner@example.com' where step = 3$$, -2, 'no email addresses in a draft');
+select test.expect($$update public.journey_steps set template = 'Call 330 555 0123' where step = 3$$, -2, 'no phone numbers in a draft');
+select test.expect($$update public.journey_steps set title = ' ' where step = 3$$, -2, 'a step needs a title');
+select test.expect($$update public.journey_steps set day = 5 where step = 101$$, -2, 'Grow steps have no day');
+select test.expect($$insert into public.journey_steps (step, stage, day, title, how, channel, say) values (28, 4, 100, 'x', 'x', 'call', 'x')$$, -1, 'manager cannot add a step');
+select test.expect('delete from public.journey_steps where step = 27', -1, 'manager cannot delete a step');
+select test.expect($$update public.clients set care_started_on = '2026-10-01', journey_placed_step = 10 where slug = 'jl-place'$$, -1, 'manager cannot place a client (owner only)');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$update public.clients set care_started_on = '2026-10-01', journey_placed_step = 10 where slug = 'jl-place'$$, 1, 'owner places a client at touch 10 from their start date');
+select test.expect($$select id from public.clients where slug = 'jl-place' and journey_placed_step = 10$$, 1, 'the placement is saved');
+select test.expect($$update public.clients set journey_placed_step = 1 where slug = 'jl-place'$$, -2, 'placing at touch 1 is just a normal start');
+select test.expect($$update public.clients set journey_placed_step = 28 where slug = 'jl-place'$$, -2, 'only touches 2 to 27');
+select test.expect($$update public.clients set care_started_on = null, journey_placed_step = 5 where slug = 'jl-place'$$, -2, 'a placement needs a journey start');
+select test.expect('delete from public.journey_steps', -1, 'even the owner cannot delete steps');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.clients set care_started_on = current_date where slug = 'jl-place'$$, 1, 'manager restarts that client''s journey');
+select test.expect($$select id from public.clients where slug = 'jl-place' and journey_placed_step is null$$, 1, 'a restart clears the placement');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal1"}';
+select test.expect('select * from public.journey_steps', 0, 'owner without two-factor reads no journey steps');
+select test.expect($$update public.journey_steps set title = 'No 2FA' where step = 2$$, 0, 'no two-factor, no edits');
+commit;
+
+begin;
+set local role anon;
+select test.expect('select * from public.journey_steps', -1, 'signed out cannot read journey steps');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$
