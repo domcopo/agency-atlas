@@ -3539,6 +3539,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       .update({ status, error: error ? error.slice(0, 300) : null, actual_usd: Math.min(50, Math.round(costUsd * 10000) / 10000), ai_usd: aiUsd, steps: [...state].map(([label, s]) => ({ label, state: s })), finished_at: new Date().toISOString() })
       .eq("id", runId);
   };
+  /** Why a run stopped without saving: the audit keeps its last results. */
+  const keptNote = () => `Nothing was saved, so the last results stay. ${problems[0] ?? "The main lookups didn't answer."} Check the DataForSEO credit and try again.`;
   /** Runs lookups a few at a time; a failed lookup leaves its numbers "not found". */
   const runLookups = async (list: Lookup[]) => {
     const byStep = new Map<string, Lookup[]>();
@@ -3559,7 +3561,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
                 costUsd += a.costUsd ?? DFS_PRICE[l.path];
                 return;
               } catch (e) {
-                costUsd += DFS_PRICE[l.path];
+                // Refused or failed lookups aren't billed; only a timeout might be.
+                if (!(e instanceof DfsError) || e.mayBeCharged) costUsd += DFS_PRICE[l.path];
                 // Their side hiccuped (e.g. 40101): one more try after a short pause, if the budget allows.
                 if (attempt === 0 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
                   await new Promise((r) => setTimeout(r, 1500));
@@ -3586,6 +3589,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const plan = planAdsRun(intake, sections);
       budgetUsd = plan.estimateUsd;
       await runLookups(plan.first);
+      if (answers.size === 0) return await finish("failed", keptNote());
       const serps = adsMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
       const extra: Lookup[] = [];
       if (sections.includes("ads_spend")) {
@@ -3612,6 +3616,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
+      if (answers.size === 0) return await finish("failed", keptNote());
       const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
@@ -3625,6 +3630,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
       const rankedVolume = plan.rankedVolume(answers, sites.map((x) => x.domain), universe);
       if (rankedVolume) await runLookups([rankedVolume]);
+      // Without the search counts or any site's rankings the pages would be mostly "not found":
+      // keep the last good results instead of replacing them (a run with no credit wiped one).
+      if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());
       let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");

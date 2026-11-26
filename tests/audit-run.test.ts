@@ -283,6 +283,40 @@ describe("run audit wiring", () => {
     expect(bgFn).toMatch(/parseSeoResults\(block/);
     expect(bgFn).toMatch(/askAi\(\{ task: AUDIT_WORDS_TASK, data: input\.data, schema: AUDIT_WORDS_SCHEMA/);
   });
+
+  it("a run that gets no answers, or misses the search counts or every site's rankings, keeps the last results (2026-11-26: no credit wiped an audit)", () => {
+    const a = read("src/app/actions.ts");
+    const bgFn = a.slice(a.indexOf("async function runAuditInBackground"), a.indexOf("async function saveRunResults"));
+    expect(bgFn.match(/if \(answers\.size === 0\) return await finish\("failed", keptNote\(\)\);/g)?.length).toBe(2); // SEO and Google Ads
+    const guard = bgFn.indexOf('if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());');
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(bgFn.indexOf("saveRunResults(db, audit.id, block, { competitors"));
+    expect(bgFn).toMatch(/Nothing was saved, so the last results stay\./);
+    // Refused lookups aren't billed by DataForSEO, so they don't count toward the run's cost.
+    expect(bgFn).toMatch(/if \(!\(e instanceof DfsError\) \|\| e\.mayBeCharged\) costUsd \+= DFS_PRICE\[l\.path\];/);
+  });
+
+  it("only a timeout is marked as possibly billed", async () => {
+    const { DfsError, dfsLookup } = await import("@/lib/audit/sources/dataforseo");
+    expect(new DfsError("x").mayBeCharged).toBe(false);
+    const prev = { u: process.env.DATAFORSEO_LOGIN, p: process.env.DATAFORSEO_PASSWORD };
+    process.env.DATAFORSEO_LOGIN = "test-login";
+    process.env.DATAFORSEO_PASSWORD = "test-password";
+    const realFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response("", { status: 402 })) as typeof fetch;
+      const refused = await dfsLookup("/v3/serp/google/organic/live/advanced", {}).catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(DfsError);
+      expect((refused as InstanceType<typeof DfsError>).mayBeCharged).toBe(false);
+      globalThis.fetch = (async () => { throw new Error("timeout"); }) as typeof fetch;
+      const lost = await dfsLookup("/v3/serp/google/organic/live/advanced", {}).catch((e: unknown) => e);
+      expect((lost as InstanceType<typeof DfsError>).mayBeCharged).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (prev.u === undefined) delete process.env.DATAFORSEO_LOGIN; else process.env.DATAFORSEO_LOGIN = prev.u;
+      if (prev.p === undefined) delete process.env.DATAFORSEO_PASSWORD; else process.env.DATAFORSEO_PASSWORD = prev.p;
+    }
+  });
 });
 
 describe("audit page as steps", () => {
