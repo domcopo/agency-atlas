@@ -12,7 +12,8 @@ You are given finished numbers only. Rules:
 - Use ONLY the numbers given. Never add, estimate or guess a number, a price or a fact that isn't in the data.
 - Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...). No websites, emails or phone numbers.
 - Plain, confident English a business owner understands. No hype, no guarantees.
-- If the data is thin, say less.`;
+- If the data is thin, say less.
+- If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.`;
 
 export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -55,7 +56,22 @@ export interface WordsInput {
 }
 
 /** The coded, numbers-only view of a results block that Claude gets. */
-export function wordsInput(block: Obj, company: string, niche: string): WordsInput {
+/** The revenue page's inputs, so the notes describe that model instead of saying it is missing. */
+export interface RevenueInputs {
+  averageJobUsd: number;
+  averageJobConfirmed: boolean;
+  visitsThatBecomeJobsPercent: number;
+}
+
+export function wordsInput(block: Obj, company: string, niche: string, model?: RevenueInputs): WordsInput {
+  const revenue = model
+    ? {
+        how: "The revenue page shows a model: modeled visits x the share that become jobs x the average job. It is a model, not reported revenue.",
+        average_job_usd: model.averageJobUsd,
+        average_job_from: model.averageJobConfirmed ? "the business owner" : "an assumption",
+        visits_that_become_jobs_percent: model.visitsThatBecomeJobsPercent,
+      }
+    : null;
   const sites = arr(block.sites).map(obj);
   const comps = arr(block.competitors).map(obj);
   const code = new Map<string, string>();
@@ -80,6 +96,8 @@ export function wordsInput(block: Obj, company: string, niche: string): WordsInp
       kind_of_business: niche,
       demand_by_city: arr(block.demand).map(obj).map((d) => ({ city: d.city, searches_per_month: val(d.searches) })),
       near_me_searches_per_month: val(block.nearMeSearches),
+      home_town_plain_searches_per_month: val(block.homeTownSearches),
+      ...(revenue ? { revenue_model: revenue } : {}),
       money_keywords: arr(block.keywords)
         .map(obj)
         .filter((k) => k.money === true)

@@ -2,7 +2,7 @@
 // model, homepage check. Pure functions; every business and number here is fictional (.example).
 
 import { describe, expect, it } from "vitest";
-import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, pathOtherState, variantKey, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
+import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, pathOtherState, searchGroup, variantKey, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
 import { goalScenario } from "@/lib/audit/compute";
 
 const markets = auditMarkets("Denver", ["Arvada", "Lakewood", "Jefferson County"], "CO");
@@ -228,5 +228,17 @@ describe("one count per group of word-order variants", () => {
     expect(pathOtherState("/us/en/location/unitedstates/newyork/brooklyn", "OH")).toBe(true);
     expect(pathOtherState("/us/en/location/unitedstates/ohio/cleveland/cle", "OH")).toBe(false);
     expect(pathOtherState("/car-rental-cleveland-oh.html", "OH")).toBe(false);
+  });
+});
+
+describe("searchGroup: Google's one-search variants (2026-11-25 Denver review)", () => {
+  const m = auditMarkets("Denver", ["Colorado Springs"], "CO");
+  it("a town search drops the state; a state-only search keeps it", () => {
+    expect(searchGroup("sell my house fast denver co", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast denver colorado", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast colorado", m, "CO")).not.toBe(searchGroup("sell my house fast", m, "CO"));
+    // A town whose name holds the state's name keeps it.
+    expect(searchGroup("we buy houses colorado springs", m, "CO")).not.toBe(searchGroup("we buy houses springs", m, "CO"));
+    expect(searchGroup("we buy houses colorado springs co", m, "CO")).toBe(searchGroup("we buy houses colorado springs", m, "CO"));
   });
 });

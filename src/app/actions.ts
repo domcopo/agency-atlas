@@ -3631,7 +3631,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       await saveSteps();
       const left = isAiConfigured() ? await getAiBudgetLeft() : null;
       if (left !== null && left > 0.05 && Date.now() < deadline) {
-        const input = wordsInput(block, intake.company, intake.niche);
+        const input = wordsInput(block, intake.company, intake.niche, { averageJobUsd: intake.avgJobUsd, averageJobConfirmed: intake.avgJobConfirmed, visitsThatBecomeJobsPercent: Math.round(intake.visitToJobRate * 1000) / 10 });
         const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 8000, remainingUsd: left }); // thinking counts toward this, so leave room
         await logAiUsage(db, "audit_words", result);
         if (result.ok) {

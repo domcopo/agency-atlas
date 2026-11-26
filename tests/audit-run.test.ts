@@ -41,8 +41,10 @@ describe("planning a run", () => {
   it("the estimate is the worst case of every lookup, competitors included", () => {
     const plan = planSeoRun(seoIntake, ["summary", "heatmap", "keywords"]);
     expect(plan.first.map((l) => l.id)).toEqual(["suggest:0", "suggest:1", "serp:0", "serp:1", "serp:2", "serp:3", "maps:area", "pack:0", "pack:1"]);
-    expect(plan.second(["we buy houses denver"]).map((l) => l.id)).toEqual(["volume", "difficulty"]);
-    // "near me" is counted for the home town, not the whole state.
+    // The map term is always counted for the home town (it gives the map pack its visits).
+    expect(plan.second(["we buy houses denver"]).map((l) => [l.id, l.task.keywords])).toEqual([["volume", ["we buy houses denver"]], ["volume:near", ["we buy houses"]], ["difficulty", ["we buy houses denver"]]]);
+    // "near me" and plain searches are counted for the home town, not the whole state.
+    expect(plan.second(["we buy houses", "we buy houses denver", "we buy houses near me", "we buy houses colorado"]).find((l) => l.id === "volume:near")?.task.keywords).toEqual(["we buy houses", "we buy houses near me"]);
     expect(plan.second(["we buy houses denver", "we buy houses near me"]).map((l) => [l.id, l.task.location_name])).toEqual([["volume", "Colorado,United States"], ["volume:near", "Denver,Colorado,United States"], ["difficulty", undefined]]);
     expect(plan.perSite("milehighhomes.example", "Mile High Homes (fictional)", true).map((l) => l.id)).toEqual(["ranked:milehighhomes.example", "maps:milehighhomes.example", "instant:milehighhomes.example"]);
     expect(plan.perSite("peakoffers.example", "Peak Offers (fictional)", false).map((l) => l.id)).toEqual(["ranked:peakoffers.example", "maps:peakoffers.example"]);
@@ -185,7 +187,8 @@ describe("SEO: answers → block → checker", () => {
     const sug = new Map<string, DfsAnswer>([["suggest:0", ans([{ items: [{ keyword: "we buy houses aurora colorado", keyword_info: { search_volume: 900 } }, { keyword: "we buy houses lakewood colorado", keyword_info: { search_volume: 80 } }, { keyword: "we buy houses colorado", keyword_info: { search_volume: 250 } }] }])]]);
     const u = seoUniverse(seoIntake, sug, 1, area);
     expect(u).toContain("we buy houses lakewood");
-    expect(u).toContain("we buy houses lakewood colorado");
+    // Google counts "… lakewood colorado" as the same search as "… lakewood": kept once.
+    expect(u).not.toContain("we buy houses lakewood colorado");
     expect(u).toContain("we buy houses colorado");
     expect(u).not.toContain("we buy houses aurora colorado");
     const plan = planSeoRun(seoIntake, ["summary"], area);
@@ -337,5 +340,66 @@ describe("counting competitors' searches for the state", () => {
     const b = buildSeoBlock(seoIntake, ["summary"], { answers: a, competitors: [{ domain: "peakoffers.example", name: "Peak Offers (fictional)", town: "Denver" }], retrieved: TODAY, costUsd: 0, calls: 0, universe: ["we buy houses denver"] });
     const peak = (b.sites as { website: string; organicVisits: number }[]).find((x) => x.website === "peakoffers.example");
     expect(peak?.organicVisits).toBe(280); // denver 1000 × 28%; "home buyers arvada" (US 400) has no state count
+  });
+});
+
+describe("2026-11-25 review: variants once, plain home-town searches, map-pack visits, revenue notes", () => {
+  const ranked = (domain: string, rows: [string, number][]) => ans([{ items: rows.map(([keyword, rank]) => ({ keyword_data: { keyword, keyword_info: { search_volume: 9999 } }, ranked_serp_element: { serp_item: { rank_group: rank, domain, relative_url: "/" } } })) }]);
+  const answers = new Map<string, DfsAnswer>([
+    ["suggest:0", ans([{ items: [
+      { keyword: "we buy houses denver co", keyword_info: { search_volume: 90 } },
+      { keyword: "we buy houses denver colorado", keyword_info: { search_volume: 90 } },
+      { keyword: "we buy houses colorado", keyword_info: { search_volume: 30 } },
+    ] }])],
+    ["volume", ans([
+      { keyword: "we buy houses denver", search_volume: 90 },
+      { keyword: "we buy houses denver co", search_volume: 90 },
+      { keyword: "we buy houses denver colorado", search_volume: 90 },
+      { keyword: "we buy houses colorado", search_volume: 30 },
+      { keyword: "we buy houses", search_volume: 900 }, // state-wide: not used for the home town
+    ])],
+    ["volume:near", ans([{ keyword: "we buy houses", search_volume: 500 }, { keyword: "we buy houses near me", search_volume: 40 }])],
+    ["pack:0", serp([{ type: "local_pack", rank_group: 2, domain: "milehighhomes.example" }])],
+    ["ranked:peakoffers.example", ranked("peakoffers.example", [["we buy houses denver", 4], ["we buy houses denver co", 1], ["we buy houses denver colorado", 2]])],
+  ]);
+  const competitors = [{ domain: "peakoffers.example", name: "Peak Offers (fictional)", town: "Denver" }];
+  const universe = seoUniverse(seoIntake, answers, 1);
+  const block = buildSeoBlock(seoIntake, ["summary", "heatmap", "keywords"], { answers, competitors, retrieved: TODAY, costUsd: 0.1, calls: 5, universe });
+  const r = parseSeoResults(block, { intake: seoIntake, markets, today: TODAY });
+
+  it("'… denver', '… denver co' and '… denver colorado' are one search; the state alone is not", () => {
+    expect(universe).toContain("we buy houses denver");
+    expect(universe).not.toContain("we buy houses denver co");
+    expect(universe).not.toContain("we buy houses denver colorado");
+    expect(universe).toContain("we buy houses colorado");
+    if (!r.ok) throw new Error(r.errors.join("; "));
+    // Denver counted once (90), not three times (270).
+    expect(r.data.demand[0]?.searches.value).toBe(90);
+    // The competitor's three variants count once, at the best spot (#1): 90 × 28% ≈ 25.
+    expect(r.data.sites[1]?.organicVisits.value).toBe(25);
+    expect(r.data.sites[1]?.organicKeywords.value).toBe(1);
+  });
+
+  it("plain searches are counted for the home town, and the map pack earns visits", () => {
+    if (!r.ok) throw new Error(r.errors.join("; "));
+    expect(r.data.homeTownSearches?.value).toBe(500);
+    expect(r.data.keywords.find((k) => k.keyword === "we buy houses")?.volume.value).toBe(500);
+    // #2 in the home town's pack: 500 × 10%; the competitor isn't in it: 0.
+    expect(r.data.sites[0]?.packVisits.value).toBe(50);
+    expect(r.data.sites[1]?.packVisits.value).toBe(0);
+  });
+
+  it("no home-town answer = pack visits unknown, never a guess", () => {
+    const less = new Map([...answers].filter(([id]) => id !== "volume:near"));
+    const b = buildSeoBlock(seoIntake, ["summary", "heatmap", "keywords"], { answers: less, competitors, retrieved: TODAY, costUsd: 0.1, calls: 4, universe });
+    expect((b.sites as { localPackVisits: unknown }[])[0]?.localPackVisits).toBeNull();
+    expect(b.homeTownSearches).toBeNull();
+  });
+
+  it("the notes writer is told the revenue model, so it never says job values are missing", () => {
+    const input = wordsInput(block, "Mile High Homes (fictional)", "home buyers", { averageJobUsd: 230, averageJobConfirmed: true, visitsThatBecomeJobsPercent: 3 });
+    expect(input.data.revenue_model).toMatchObject({ average_job_usd: 230, average_job_from: "the business owner", visits_that_become_jobs_percent: 3 });
+    expect(input.data.home_town_plain_searches_per_month).toBe(500);
+    expect(wordsInput(block, "x", "y").data.revenue_model).toBeUndefined();
   });
 });

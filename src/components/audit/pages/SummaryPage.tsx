@@ -51,7 +51,7 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
           data.grids.some((gr) => gr.kind === "pack")
             ? { value: `${pack.inPack} of ${pack.checked}`, label: "Local 3-pack appearances", detail: `${data.grids.length} terms searched from each city served`, color: "#12c48b" }
             : { value: fmtNum(rank, 2), label: "Avg Google Maps rank", detail: `${data.grids.length} geo-grid terms, ${data.grids[0]?.size ?? 0}×${data.grids[0]?.size ?? 0} points`, color: "#12c48b" },
-          { value: fmtNum(demand), label: "Local searches / month", detail: "Near-me + every market's own searches, added once" },
+          { value: fmtNum(demand), label: "Local searches / month", detail: data.homeTownSearches ? "Near-me + plain home-town searches + every market's own, added once" : "Near-me + every market's own searches, added once" },
           {
             value: (
               <>

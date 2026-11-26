@@ -38,6 +38,9 @@ export const DEPTH_RULES = {
 
 /** Share of searchers who click each Google position (a common industry curve; a model). */
 export const CTR: Record<number, number> = { 1: 0.28, 2: 0.15, 3: 0.1, 4: 0.07, 5: 0.05, 6: 0.04, 7: 0.03, 8: 0.025, 9: 0.02, 10: 0.02 };
+/** Share of searchers who click each spot in the Google map pack (#1–3; a cautious model). */
+export const PACK_CTR: Record<number, number> = { 1: 0.15, 2: 0.1, 3: 0.08 };
+
 export function ctr(position: number): number {
   if (!Number.isInteger(position) || position < 1) return 0;
   if (position <= 10) return CTR[position] ?? 0;
@@ -184,6 +187,21 @@ export function variantKey(keyword: string): string {
   return [...new Set([...words, ...near])].sort().join(" ");
 }
 
+/**
+ * Like variantKey, but a search that names one of the audit's towns also drops the state
+ * ("sell my house fast denver", "... denver co", "... denver colorado" are ONE group to Google,
+ * which reports the same count for each; adding them up tripled Denver's demand). A search
+ * naming only the state ("we buy houses colorado") keeps it: that is a different search.
+ */
+export function searchGroup(keyword: string, markets: Market[], state: string): string {
+  const key = variantKey(keyword);
+  const m = marketOf(keyword, markets);
+  if (!m) return key;
+  const keep = new Set(m.term.split(" ").map(stem));
+  const drop = new Set([state.toLowerCase(), ...stateName(state).toLowerCase().split(/\s+/)].map(stem).filter((w) => !keep.has(w)));
+  return key.split(" ").filter((w) => !drop.has(w)).join(" ");
+}
+
 /** Does a page address belong to another state ("/car-rental-lakewood-nj.html", "/newyork/brooklyn")? */
 export function pathOtherState(path: string, state: string): boolean {
   const tokens = path.toLowerCase().split(/[^a-z]+/).filter(Boolean);
@@ -239,7 +257,7 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
   const seen = new Set<string>();
   const add = (k: string) => {
     const key = k.trim().toLowerCase().replace(/\s+/g, " ");
-    const group = variantKey(key);
+    const group = searchGroup(key, markets, state);
     if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && !seen.has(group) && out.length < DEPTH_RULES.universe) {
       seen.add(key);
       seen.add(group);
@@ -330,6 +348,14 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
   }
+  // Variants Google counts as one search ("… denver" / "… denver co") are modeled once, at the
+  // best position among them; the tables still show each variant's own position.
+  const groups = new Map<string, Ranked>();
+  for (const r of best.values()) {
+    const g = searchGroup(r.keyword, markets, state);
+    const cur = groups.get(g);
+    if (!cur || r.position < cur.position) groups.set(g, r);
+  }
   let visits = 0;
   let valueUsd = 0;
   let positionedFor = 0;
@@ -337,7 +363,7 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
   let top10 = 0;
   const marketSet = new Set<string>();
   const pageValue = new Map<string, number>();
-  for (const r of best.values()) {
+  for (const r of groups.values()) {
     const v = volume(r.keyword) ?? r.usVolume ?? 0;
     const clicks = v * ctr(r.position);
     visits += clicks;
@@ -354,7 +380,7 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     }
   }
   return {
-    keywords: best.size,
+    keywords: groups.size,
     top3,
     top10,
     positionedFor: Math.round(positionedFor),
