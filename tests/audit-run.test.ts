@@ -159,7 +159,8 @@ describe("SEO: answers → block → checker", () => {
     expect(r.data.nearMeSearches.value).toBe(2400);
     expect(r.data.keywords.find((k) => k.keyword === "we buy houses denver")?.positions).toEqual({ "milehighhomes.example": 7, "peakoffers.example": 1 });
     const own = r.data.sites[0]!;
-    expect([own.gbpRating.value, own.gbpReviews.value, own.gbpPhotos.value, own.packPosition.value]).toEqual([4.9, 41, 12, 0]);
+    // Pack position = the home town's map search, the same one the heat map shows (#2 in Denver).
+    expect([own.gbpRating.value, own.gbpReviews.value, own.gbpPhotos.value, own.packPosition.value]).toEqual([4.9, 41, 12, 2]);
     // Local model: 1300 × 28% + 500 × 10% + 40 × 1% ≈ 414 visits; Boston is outside the market.
     const peak = r.data.sites[1]!;
     expect(peak.organicVisits.value).toBe(414);

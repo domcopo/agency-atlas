@@ -496,6 +496,10 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const packs = on.has("heatmap") ? cities.slice(0, RUN_RULES.packCities).map((city, i) => ({ city, serp: readSerp(run.answers.get(`pack:${i}`)) })) : [];
   // The home-town search; if it failed, the home town's map-pack search (same town) stands in.
   const hqSerp = serps[0] ?? packs[0]?.serp ?? null;
+  // The "Pack" column uses the same home-town map search as the heat map and pack visits when
+  // that search showed a pack (two different searches made a Denver audit say "not in the pack"
+  // next to pack visits for the same businesses).
+  const packSerp = packs[0]?.serp?.hasPack ? packs[0].serp : hqSerp;
   const brand = readVolume(run.answers.get("brand"));
   const brandFor = (name: string) => {
     const phrase = searchPhrase(name.replace(/\s*\([^)]*\)/g, ""));
@@ -523,15 +527,16 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const siteRows = sites.map((d) => {
     const m = models.get(d);
     const prof = readProfile(run.answers.get(`maps:${d}`), d);
-    const packRow = hqSerp?.pack.find(isSite(d));
+    const packRow = packSerp?.pack.find(isSite(d));
+    const anyPackRow = packRow ?? hqSerp?.pack.find(isSite(d));
     const onMap = mapPlaces.find((m) => m.domain === d);
     const fromPacks = packs.filter((p) => p.serp?.organic.some((o) => o.domain === d && o.rank <= RUN_RULES.serpDepth) || p.serp?.pack.some(isSite(d))).map((p) => p.city);
     const row: Record<string, unknown> = {
       website: d,
-      googleRating: prof?.rating ?? packRow?.rating ?? onMap?.rating ?? null,
-      googleReviews: prof?.reviews ?? packRow?.reviews ?? onMap?.reviews ?? null,
+      googleRating: prof?.rating ?? anyPackRow?.rating ?? onMap?.rating ?? null,
+      googleReviews: prof?.reviews ?? anyPackRow?.reviews ?? onMap?.reviews ?? null,
       googlePhotos: prof?.photos ?? null,
-      localPackPosition: hqSerp ? (packRow?.rank ?? (hqSerp.hasPack ? 0 : null)) : null,
+      localPackPosition: packSerp ? (packRow?.rank ?? (packSerp.hasPack ? 0 : null)) : null,
       organicKeywords: m?.keywords ?? null,
       organicVisits: m?.visits ?? null,
       localPackVisits: packVisits(d),
