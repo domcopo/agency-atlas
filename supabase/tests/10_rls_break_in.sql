@@ -2808,6 +2808,71 @@ select test.expect($$select * from public.role_guide_parts$$, -1, 'signed out ca
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7cf. Work hub (0038): only the owner and managers set "Done when"; developers read it on
+--      their own items. Dismissed suggestions: owner/managers only, add-only, stamped by
+--      the database, one per client + rule + reason. Two-factor everywhere.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set done_when = 'Form sends to the test inbox (test)' where id = '00000000-0000-0000-0000-00000000ae01'$$, 1, 'manager sets Done when');
+select test.expect($$update public.actions set done_when = repeat('x', 501) where id = '00000000-0000-0000-0000-00000000ae01'$$, -2, 'Done when is length-limited');
+select test.expect($$update public.actions set done_when = '   ' where id = '00000000-0000-0000-0000-00000000ae01'$$, -2, 'Done when cannot be blank spaces');
+select test.expect($$update public.actions set done_when = 'password: hunter2' where id = '00000000-0000-0000-0000-00000000ae01'$$, -2, 'no passwords in Done when');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'routine', 'No work in 30 days (test)')$$, 1, 'manager dismisses a suggestion');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'routine', 'No work in 30 days (test)')$$, -3, 'the same suggestion and reason is saved once');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'routine', 'No work in 45 days (test)')$$, 1, 'a new reason is a new dismissal');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'anything', 'x')$$, -2, 'unknown rules are rejected');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason, dismissed_by) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x', '00000000-0000-0000-0000-0000000000a1')$$, -1, 'who dismissed cannot be typed in');
+select test.expect($$select * from public.work_suggestion_dismissals where dismissed_by = '00000000-0000-0000-0000-0000000000a2'$$, 2, 'the database records who dismissed it');
+select test.expect($$update public.work_suggestion_dismissals set reason = 'changed'$$, -1, 'dismissals cannot be edited');
+select test.expect($$delete from public.work_suggestion_dismissals$$, -1, 'dismissals cannot be deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+select test.expect($$select * from public.work_suggestion_dismissals$$, 2, 'owner reads dismissals');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'At risk (test)')$$, 1, 'owner dismisses a suggestion');
+select test.expect($$update public.actions set done_when = null where id = '00000000-0000-0000-0000-00000000ad02'$$, 1, 'owner can clear Done when');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.actions where id = '00000000-0000-0000-0000-00000000ae01' and done_when like 'Form sends%'$$, 1, 'a developer reads Done when on their own work order');
+select test.expect($$update public.actions set done_when = 'whenever' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'a developer cannot change Done when');
+select test.expect($$select * from public.work_suggestion_dismissals$$, 0, 'a developer cannot read dismissals');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x (test)')$$, -1, 'a developer cannot dismiss suggestions');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+select test.expect($$select * from public.work_suggestion_dismissals$$, 0, 'sales cannot read dismissals');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x (test)')$$, -1, 'sales cannot dismiss suggestions');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a8","aal":"aal2"}';
+select test.expect($$select * from public.work_suggestion_dismissals$$, 0, 'a VA cannot read dismissals');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x (test)')$$, -1, 'a VA cannot dismiss suggestions');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal1"}';
+select test.expect($$select * from public.work_suggestion_dismissals$$, 0, 'no dismissals without two-factor');
+select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x (test)')$$, -1, 'no dismissing without two-factor');
+commit;
+
+begin;
+set local role anon;
+select test.expect($$select * from public.work_suggestion_dismissals$$, -1, 'signed out cannot read dismissals');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 8. Every table has RLS on, and anon has no table permissions at all.
 -- ---------------------------------------------------------------------------
 do $$

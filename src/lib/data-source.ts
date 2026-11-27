@@ -65,6 +65,7 @@ import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
 import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, journeyState, type DayLog, type JourneyState, type TouchChannel, type TouchLog } from "@/lib/journey";
 import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
+import { SUGGESTION_RULES, suggestionKey } from "@/lib/work-hub";
 import { chooseHomeLayout, HOME_LAYOUT_COOKIE, type HomeLayout, type SalesAppointment } from "@/lib/home-layouts";
 import { AI_MODEL, budgetState, monthStartIso } from "@/lib/ai/budget";
 import { isAiConfigured } from "@/lib/ai/client";
@@ -880,13 +881,14 @@ function orderDetails(r: Record<string, unknown>) {
  * All actions (open and done), read as the signed-in person. ready=false before 0006 is run.
  * promises=false before 0009 (no blocked reason / promise date yet): reads still work.
  */
-export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; review: boolean; cancel: boolean; actions: ClientAction[]; canceled: ClientAction[] }> => {
-  const none = { ready: false, promises: false, orders: false, review: false, cancel: false, actions: [] as ClientAction[], canceled: [] as ClientAction[] };
+export const getActions = cache(async (): Promise<{ ready: boolean; promises: boolean; orders: boolean; review: boolean; cancel: boolean; doneWhen: boolean; actions: ClientAction[]; canceled: ClientAction[] }> => {
+  const none = { ready: false, promises: false, orders: false, review: false, cancel: false, doneWhen: false, actions: [] as ClientAction[], canceled: [] as ClientAction[] };
   if (!usesDatabase()) return none;
   const db = await createDatabaseClient();
   const read = (cols: string) => db.from("actions").select(cols).order("created_at", { ascending: false }).limit(2000);
   // Newest setup level first; step down if a later setup step hasn't been run yet.
   const levels = [
+    { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at, internal, done_when`, promises: true, orders: true, review: true, cancel: true, doneWhen: true }, // 0038
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at, internal`, promises: true, orders: true, review: true, cancel: true }, // 0022
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, archived_at`, promises: true, orders: true, review: true, cancel: true }, // 0017
     { cols: `${ACTION_COLS}, ${PROMISE_COLS}, ${ORDER_COLS}, ${REVIEW_COLS}, ${CANCEL_COLS}, ${STEPS_DONE_COL}`, promises: true, orders: true, review: true, cancel: true }, // 0016
@@ -906,6 +908,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
   }
   if (res.error) return none;
   const { promises, orders, review, cancel } = level;
+  const doneWhen = "doneWhen" in level && level.doneWhen === true;
   const byDbId = new Map((await roster()).clients.map((c) => [c.dbId, c]));
   const staffName = new Map(team.members.map((m) => [m.id, m.name]));
   // Trash (0019): trashed items, and every item of a trashed client, are left out.
@@ -934,6 +937,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
         promisedOn: r.promised_on ?? null,
         canceledAt: r.canceled_at ?? null,
         cancelNote: r.cancel_note ?? null,
+        doneWhen: typeof r.done_when === "string" && r.done_when ? r.done_when : null,
       } as ClientAction;
     });
   // Canceled work (0013) is kept but left out of every list, count and rule; the owner sees it apart.
@@ -943,6 +947,7 @@ export const getActions = cache(async (): Promise<{ ready: boolean; promises: bo
     orders,
     review,
     cancel,
+    doneWhen,
     actions: all.filter((a) => a.status !== "canceled"),
     canceled: all.filter((a) => a.status === "canceled").sort((x, y) => (y.canceledAt ?? "").localeCompare(x.canceledAt ?? "")),
   };
@@ -1003,7 +1008,7 @@ export const getHealthHistory = cache(async (): Promise<{ ready: boolean; byClie
 
 /** Health, flags and priorities for everyone, computed once per request. */
 export const getOps = cache(async () => {
-  const [{ clients }, { ready, promises, orders, review, cancel, actions, canceled }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
+  const [{ clients }, { ready, promises, orders, review, cancel, doneWhen, actions, canceled }, allDeals, history] = await Promise.all([roster(), getActions(), getOpenDeals(), getHealthHistory()]);
   const t = today();
   const checkIns = new Map(clients.map((c) => [c.id, getCheckIn(c)]));
   const health = new Map<string, HealthSummary | null>(clients.map((c) => [c.id, healthSummary(c, checkIns.get(c.id)!, actions, t)]));
@@ -1029,7 +1034,7 @@ export const getOps = cache(async () => {
     : [];
   const counts = { at_risk: 0, needs_attention: 0, opportunity: 0, healthy: 0 };
   for (const h of health.values()) if (h) counts[h.state]++;
-  return { orders, review, cancel, canceled, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
+  return { orders, review, cancel, doneWhen, canceled, ready, promises, historyReady: history.ready, clients, actions, health, checkIns, scores, trends, risks, priorities, counts, gaps: ownershipGaps(clients, actions), today: t, deals, leadNames, newLeads };
 });
 
 /** One client's health word + reasons, and its open and recent items. */
@@ -1261,6 +1266,28 @@ export const getWorkOrderDetail = cache(async (id: string) => {
     comments: (c.data ?? []).map((r) => ({ id: r.id as string, mine: r.author === me?.userId, authorName: (r.author_name as string | null) ?? "Teammate", body: String(r.body), at: String(r.created_at) })),
     history: (h.data ?? []).map((r) => ({ at: String(r.at), actorName: (r.actor_name as string | null) ?? null, field: r.field as HistoryEntry["field"], oldValue: (r.old_value as string | null) ?? null, newValue: (r.new_value as string | null) ?? null })),
   };
+});
+
+/**
+ * Dismissed Work hub suggestions (0038), as suggestionKey()s. Owner and managers only (the
+ * database refuses everyone else too). ready=false before 0038 is run: nothing is hidden.
+ */
+export const getSuggestionDismissals = cache(async (): Promise<{ ready: boolean; keys: Set<string> }> => {
+  const none = { ready: false, keys: new Set<string>() };
+  if (!usesDatabase()) return none;
+  const me = await getMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return none;
+  const db = await createDatabaseClient();
+  const [{ data, error }, { clients }] = await Promise.all([db.from("work_suggestion_dismissals").select("client_id, rule, reason").limit(2000), roster()]);
+  if (error) return none;
+  const slugOf = new Map(clients.map((c) => [c.dbId, c.id]));
+  const keys = new Set<string>();
+  for (const r of data ?? []) {
+    const slug = slugOf.get(String(r.client_id));
+    const rule = SUGGESTION_RULES.find((x) => x === r.rule);
+    if (slug && rule && typeof r.reason === "string") keys.add(suggestionKey(slug, rule, r.reason));
+  }
+  return { ready: true, keys };
 });
 
 /** In-app notices (0017). Written only by the database; each person reads only their own. */

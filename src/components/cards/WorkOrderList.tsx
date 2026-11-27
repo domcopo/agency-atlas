@@ -75,7 +75,7 @@ export function ReviewButtons({ a }: { a: ClientAction }) {
 }
 
 /** Owner only (the database refuses anyone else): hide work for good, kept in history, can be restored. */
-function CancelForm({ a }: { a: ClientAction }) {
+export function CancelForm({ a }: { a: ClientAction }) {
   return (
     <details>
       <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center text-xs font-semibold text-rose">Cancel this work order</summary>
@@ -88,6 +88,36 @@ function CancelForm({ a }: { a: ClientAction }) {
         </button>
       </form>
       <p className="mt-1 text-[11px] text-faint">It leaves every list and workload but isn&apos;t deleted: restore it any time from &quot;Canceled&quot;.</p>
+    </details>
+  );
+}
+
+/** Steps, time needed and the GoHighLevel link it came from (owner and managers; the server checks). */
+export function DetailsForm({ a }: { a: ClientAction }) {
+  const steps = parseSteps(a.steps);
+  return (
+    <details>
+      <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit steps, time and link</summary>
+      <form key={`details-${a.steps ?? ""}-${a.estMinutes ?? ""}-${a.sourceLink ?? ""}-${a.sourceNote ?? ""}`} action={updateAction} className="mt-1.5 space-y-1.5">
+        <input type="hidden" name="actionId" value={a.id} />
+        <input type="hidden" name="op" value="details" />
+        <textarea name="steps" rows={4} maxLength={2000} defaultValue={steps.join("\n")} placeholder="One step per line" aria-label="Steps" className={cn(input, "w-full py-1.5")} />
+        <div className="flex flex-wrap gap-1.5">
+          <select name="est" defaultValue={a.estMinutes && EST_OPTIONS.some(([v]) => v === a.estMinutes) ? String(a.estMinutes) : ""} aria-label="Time needed" className={cn(input, "flex-1")}>
+            <option value="">Time: not sure</option>
+            {EST_OPTIONS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <input name="linkNote" maxLength={200} defaultValue={a.sourceNote ?? ""} placeholder="Where it came from" aria-label="Where it came from" className={cn(input, "flex-[2]")} />
+        </div>
+        <input name="link" type="url" maxLength={500} defaultValue={a.sourceLink ?? ""} placeholder="https://… GoHighLevel conversation link" aria-label="GoHighLevel conversation link" className={cn(input, "w-full")} />
+        <button type="submit" className={btn}>
+          Save details
+        </button>
+      </form>
     </details>
   );
 }
@@ -223,29 +253,7 @@ function ItemCard({
                   Reassign
                 </button>
               </form>
-              <details>
-                <summary className="pressable inline-flex min-h-9 cursor-pointer list-none items-center text-xs font-semibold text-violet">Edit steps, time and link</summary>
-                <form key={`details-${a.steps ?? ""}-${a.estMinutes ?? ""}-${a.sourceLink ?? ""}-${a.sourceNote ?? ""}`} action={updateAction} className="mt-1.5 space-y-1.5">
-                  <input type="hidden" name="actionId" value={a.id} />
-                  <input type="hidden" name="op" value="details" />
-                  <textarea name="steps" rows={4} maxLength={2000} defaultValue={steps.join("\n")} placeholder="One step per line" aria-label="Steps" className={cn(input, "w-full py-1.5")} />
-                  <div className="flex flex-wrap gap-1.5">
-                    <select name="est" defaultValue={a.estMinutes && EST_OPTIONS.some(([v]) => v === a.estMinutes) ? String(a.estMinutes) : ""} aria-label="Time needed" className={cn(input, "flex-1")}>
-                      <option value="">Time: not sure</option>
-                      {EST_OPTIONS.map(([v, l]) => (
-                        <option key={v} value={v}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
-                    <input name="linkNote" maxLength={200} defaultValue={a.sourceNote ?? ""} placeholder="Where it came from" aria-label="Where it came from" className={cn(input, "flex-[2]")} />
-                  </div>
-                  <input name="link" type="url" maxLength={500} defaultValue={a.sourceLink ?? ""} placeholder="https://… GoHighLevel conversation link" aria-label="GoHighLevel conversation link" className={cn(input, "w-full")} />
-                  <button type="submit" className={btn}>
-                    Save details
-                  </button>
-                </form>
-              </details>
+              <DetailsForm a={a} />
               {canUseAi && a.kind !== "follow_up" && <WorkPromptButton actionId={a.id} />}
               {canCancel && <CancelForm a={a} />}
             </>

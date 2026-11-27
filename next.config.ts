@@ -51,6 +51,8 @@ const nextConfig: NextConfig = {
       { source: "/sales/audits/new", destination: "/audits/seo/new", permanent: false },
       { source: "/sales/audits/:id/edit", destination: "/audits/:id/edit", permanent: false },
       { source: "/sales/audits/:id", destination: "/audits/:id", permanent: false },
+      // Work orders live in the Work hub (docs/WORK_HUB_PLAN.md); /work/orders redirects in its page.
+      { source: "/work-orders", destination: "/work", permanent: false },
     ];
   },
   async headers() {
