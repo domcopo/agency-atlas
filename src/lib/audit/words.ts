@@ -10,7 +10,7 @@
 export const AUDIT_WORDS_TASK = `You write the short words for a local SEO audit of a prospect, for a marketing agency.
 You are given finished numbers only. Rules:
 - Use ONLY the numbers given. Never add, estimate or guess a number, a price or a fact that isn't in the data.
-- Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...). No websites, emails or phone numbers.
+- Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...), each code written in full every time ("COMPETITOR 1, COMPETITOR 2 and COMPETITOR 3", never "COMPETITORS 1, 2 and 3" or "COMPETITOR 2 to 5"). No websites, emails or phone numbers.
 - Plain, confident English a business owner understands. No hype, no guarantees.
 - If the data is thin, say less.
 - If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.
@@ -130,7 +130,10 @@ export function applyWords(block: Obj, answer: unknown, codes: [string, string][
   const a = obj(answer);
   const named = (t: unknown, max: number) => {
     if (typeof t !== "string") return "";
-    let s = t;
+    // A shortened list ("COMPETITORS 2, 3 and 5", "COMPETITOR 1, 2 and 3") is written out in
+    // full first, so no bare numbers are left where names belong (a Denver audit read
+    // "held by Need To Sell My House Fast in Denver, 2 and 1").
+    let s = t.replace(/COMPETITORS?\s+(\d+)((?:\s*(?:,\s*(?:and\s+|&\s*)?|and\s+|&\s*)\d+\b)+)/g, (_, first: string, rest: string) => `COMPETITOR ${first}${rest.replace(/(\d+)/g, "COMPETITOR $1")}`);
     // Longest codes first, so "COMPETITOR 10" isn't half-replaced by "COMPETITOR 1".
     for (const [c, n] of [...codes].sort((x, y) => y[0].length - x[0].length)) s = s.split(c).join(n);
     return s.slice(0, max);

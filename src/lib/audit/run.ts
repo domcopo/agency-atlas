@@ -51,7 +51,7 @@ export const RUN_RULES = {
   packCities: 12,
   serpDepth: 20,
   /** Big directories are never "competitors". */
-  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com", "yahoo.com", "bing.com", "expedia.com", "kayak.com", "priceline.com", "booking.com", "tripadvisor.com", "orbitz.com", "travelocity.com", "hotwire.com", "cheaptickets.com", "momondo.com", "skyscanner.com", "rentalcars.com", "carrentals.com", "discovercars.com", "easyterra.com", "autoslash.com", "turo.com", "getaround.com", "costcotravel.com", "realestatebees.com", "fastexpert.com", "clever.com"],
+  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com", "yahoo.com", "bing.com", "expedia.com", "kayak.com", "priceline.com", "booking.com", "tripadvisor.com", "orbitz.com", "travelocity.com", "hotwire.com", "cheaptickets.com", "momondo.com", "skyscanner.com", "rentalcars.com", "carrentals.com", "discovercars.com", "easyterra.com", "autoslash.com", "turo.com", "getaround.com", "costcotravel.com", "realestatebees.com", "fastexpert.com", "clever.com", "entrepreneur.com", "inc.com", "medium.com", "nar.realtor"],
   /** A run that started this long ago and never finished is treated as stopped. */
   staleMinutes: 10,
 } as const;
@@ -84,7 +84,8 @@ const lower = (s: string) => s.trim().toLowerCase();
 export function mapTermOf(intake: { niche: string; services: string[] }): string {
   const niche = searchPhrase(intake.niche);
   const services = intake.services.map(searchPhrase).filter((s): s is string => !!s);
-  if (niche && services.some((s) => ` ${s} `.includes(` ${niche} `))) return niche;
+  // Only a narrower kind counts: a service that IS the type ("real estate investor") doesn't.
+  if (niche && services.some((s) => s !== niche && ` ${s} `.includes(` ${niche} `))) return niche;
   return services[0] ?? niche ?? lower(intake.niche).slice(0, 60);
 }
 
@@ -119,7 +120,8 @@ export function moneyKeywords(services: string[], cities: string[], state = ""):
   return out;
 }
 
-const isDirectory = (d: string) => RUN_RULES.directories.some((x) => d === x || d.endsWith(`.${x}`));
+// Blogs ("blog.…") are articles, not businesses competing for the job.
+const isDirectory = (d: string) => d.startsWith("blog.") || RUN_RULES.directories.some((x) => d === x || d.endsWith(`.${x}`));
 
 // ---------------------------------------------------------------------------
 // SEO: the plan
