@@ -1,6 +1,6 @@
 # Work hub plan (owner + manager Work screen)
 
-Status (2026-11-27): plan approved. **All five phases built** (not committed). Phase 5 is waiting for the owner to test. **Migration 0038 written** (`supabase/migrations/0038_work_hub.sql`, approved 2026-11-26), **not run yet**: the owner runs it in the SQL Editor. Break-in tests for it pass (`npm run test:rls`).
+Status (2026-11-27): **all five phases built, pushed to main and live** (0a534c8). **Migration 0038 run by the owner 2026-11-27** (`supabase/migrations/0038_work_hub.sql`; break-in tests pass with `npm run test:rls`).
 
 0038 notes:
 - **Done when** (`actions.done_when`, up to 500 characters, no passwords or keys). Only the owner and managers can set it; the database refuses everyone else (its own trigger, `actions_done_when_guard`, so the older developer rule from 0017 is not rewritten). Developers can read it on their own items. It isn't in the work order history yet.
