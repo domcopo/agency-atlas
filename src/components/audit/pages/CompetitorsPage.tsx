@@ -40,9 +40,9 @@ export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   );
 }
 
-/** Up to 4 money searches for the matrix, ones where someone ranks first (rows of dashes say little). */
+/** Up to 3 money searches for the matrix (a 4th row is cut off under a long note), ones where someone ranks first (rows of dashes say little). */
 function matrixRows(keywords: AuditData["keywords"]): AuditData["keywords"] {
   const rows = keywords.filter((k) => k.money && k.positionsChecked !== false);
   const someone = (k: AuditData["keywords"][number]) => Object.values(k.positions).some((p) => typeof p === "number" && p > 0);
-  return [...rows.filter(someone), ...rows.filter((k) => !someone(k))].slice(0, 4);
+  return [...rows.filter(someone), ...rows.filter((k) => !someone(k))].slice(0, 3);
 }
