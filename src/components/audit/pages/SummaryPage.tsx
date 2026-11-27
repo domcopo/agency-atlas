@@ -1,6 +1,6 @@
 // Page 1: headline numbers, search-visit leaderboard, and the headline.
 
-import { adsEquivalent, avgMapsRank, packCityPresence, packPresence, clientSite, leaderboard, localDemand, revenueFromVisits, revenueScenarios, totalVisits, weightedCpc } from "@/lib/audit/compute";
+import { adsEquivalent, avgMapsRank, goalScenario, packCityPresence, packPresence, clientSite, leaderboard, localDemand, revenueFromVisits, revenueScenarios, totalVisits, weightedCpc } from "@/lib/audit/compute";
 import type { AuditPageProps } from "../Slide";
 import { fmtDate, fmtNum, fmtPct, fmtUsd } from "@/lib/audit/format";
 import { BasisTag, FigValue, ModelTag } from "../Bits";
@@ -12,7 +12,8 @@ import { Slide } from "../Slide";
 export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
-  const base = revenueScenarios(config, demand)?.find((r) => r.baseline) ?? null;
+  const scenarios = revenueScenarios(config, demand);
+  const base = scenarios?.find((r) => r.baseline) ?? null;
   const you = clientSite(config, data);
   const leader = [...data.sites].sort((a, b) => (b.organicKeywords.value ?? -1) - (a.organicKeywords.value ?? -1))[0];
   const leaderName = config.competitors.find((c) => c.domain === leader?.domain)?.name ?? leader?.domain ?? "";
@@ -24,7 +25,7 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const short = config.company.name.replace(/\s*\((sample|fictional)\)$/i, "");
   const nowVisits = you ? totalVisits(you) : null;
   const nowPlace = board.findIndex((r) => r.isClient) + 1;
-  const goalVisits = base?.visits ?? null;
+  const goalVisits = goalScenario(scenarios, nowVisits)?.visits ?? null;
   const goalPlace = goalVisits === null ? null : board.filter((r) => !r.isClient && (r.visits ?? -1) >= goalVisits).length + 1;
   const goal = config.goal;
   const cities = packCityPresence(data.grids);
@@ -50,7 +51,7 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
           data.grids.some((gr) => gr.kind === "pack")
             ? { value: `${pack.inPack} of ${pack.checked}`, label: "Local 3-pack appearances", detail: `${data.grids.length} terms searched from each city served`, color: "#12c48b" }
             : { value: fmtNum(rank, 2), label: "Avg Google Maps rank", detail: `${data.grids.length} geo-grid terms, ${data.grids[0]?.size ?? 0}×${data.grids[0]?.size ?? 0} points`, color: "#12c48b" },
-          { value: fmtNum(demand), label: "Local searches / month", detail: "Near-me + every market's own searches, added once" },
+          { value: fmtNum(demand), label: "Local searches / month", detail: data.homeTownSearches ? "Near-me + plain home-town searches + every market's own, added once" : "Near-me + every market's own searches, added once" },
           {
             value: (
               <>
@@ -83,6 +84,7 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
             goal={goal && goalVisits !== null ? { label: `${short}: ${goal.months}-month goal`, visits: goalVisits, revenueMo: revenueFromVisits(config, goalVisits) } : undefined}
           />
           <p className="audit-note" style={{ marginTop: 6 }}>
+            {board.some((r) => r.visits === null) ? "Rows with no number weren't measured (DataForSEO had no answer), so they aren't ranked. " : ""}
             Visits = organic + local-pack estimates (search only, not total website traffic){data.visitsScope === "national" ? "; each site's US-wide total, not this area only" : ""}.
             {config.modules.semrush ? " Semrush figures shown beside, not merged." : " Semrush was not run."}
             {rate ? (

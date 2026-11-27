@@ -9,6 +9,7 @@ import { Slide } from "../Slide";
 export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const names = new Map(config.markets.map((m) => [m.id, m]));
+  const hqName = config.markets.find((m) => m.hq)?.name ?? "the home town";
   const all = data.demand.map((d) => ({ label: names.get(d.marketId)?.name ?? d.marketId, fig: d.searches, highlight: names.get(d.marketId)?.hq }));
   // Many markets: show the biggest by name and add the rest up in one row (computed, never guessed).
   const MAX_ROWS = 9;
@@ -19,6 +20,7 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const restMissing = rest.length - restFound.length;
   const bars = [
     { label: "“Near me” searches (location decided by Google)", fig: data.nearMeSearches },
+    ...(data.homeTownSearches ? [{ label: `Plain searches from ${hqName} (no town named)`, fig: data.homeTownSearches }] : []),
     ...shown,
     ...(rest.length
       ? [
@@ -29,7 +31,7 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
         ]
       : []),
   ];
-  const money = data.keywords.filter((k) => k.money);
+  const money = data.keywords.filter((k) => k.money && k.positionsChecked !== false);
   const short = shortLabels(config.competitors.map((c) => c.name));
   const cols = [
     { domain: config.company.domain, label: "You", isClient: true },

@@ -26,9 +26,9 @@ export function sumFound(figs: Fig[]): number | null {
   return found.length ? found.reduce((s, f) => s + (f.value as number), 0) : null;
 }
 
-/** Local searches/month: "near me" + every market's own searches. */
+/** Local searches/month: "near me" + the home town's plain searches + every market's own searches. */
 export function localDemand(data: AuditData): number | null {
-  return sumFound([data.nearMeSearches, ...data.demand.map((d) => d.searches)]);
+  return sumFound([data.nearMeSearches, ...(data.homeTownSearches ? [data.homeTownSearches] : []), ...data.demand.map((d) => d.searches)]);
 }
 
 /** Cost per click weighted by search volume (keywords missing either figure are skipped). */
@@ -65,6 +65,16 @@ export function revenueScenarios(config: AuditConfig, demand: number | null): Sc
     const revenueMo = jobs * job;
     return { name: s.name, demandCaptured: s.demandCaptured, visits, leads, jobs, revenueMo, revenueYr: revenueMo * 12, baseline: s.name === config.baselineScenario };
   });
+}
+
+/**
+ * The scenario to aim for: the baseline, or the next larger one when the business already gets
+ * that many visits. Never a "goal" below today (null when every scenario is below today).
+ */
+export function goalScenario(rows: ScenarioRow[] | null, now: number | null): ScenarioRow | null {
+  if (!rows) return null;
+  const at = Math.max(0, rows.findIndex((r) => r.baseline));
+  return rows.slice(at).find((r) => now === null || r.visits > now) ?? null;
 }
 
 /** What extra visits per month would be worth, through the same funnel. */

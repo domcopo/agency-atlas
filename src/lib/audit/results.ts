@@ -434,6 +434,7 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
   };
 
   const nearMeSearches = fig(c, r.nearMeSearches, "Near-me searches", [0, 10_000_000]);
+  const homeTownSearches = r.homeTownSearches === undefined ? undefined : fig(c, r.homeTownSearches, "Home-town searches", [0, 10_000_000]);
   // D1 homepage check (optional): plain text only, short, no contact details.
   // A line that fails the text rules is left out (with a warning) rather than sinking the audit.
   const ins = obj(r.inspection) ?? {};
@@ -457,6 +458,7 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     sourcesUsed: sourcesUsed(c, r.sources),
     demand,
     nearMeSearches,
+    ...(homeTownSearches ? { homeTownSearches } : {}),
     keywords,
     visitsScope: r.visitsScope === "national" ? "national" : "local",
     organicDepth: 100,

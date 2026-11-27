@@ -2678,6 +2678,32 @@ select test.expect($$select * from public.ai_month_budget$$, -1, 'signed out can
 commit;
 
 -- ---------------------------------------------------------------------------
+-- 7ce. Audit spend settles (0037): a finished run gives back the unused part of its
+--      estimate (at least 30% stays counted); people cannot add settlements, change or
+--      delete ledger rows, or settle a run twice.
+-- ---------------------------------------------------------------------------
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a6","aal":"aal2"}';
+-- Run af01 (estimate $1.20) finished above at $0.42: $0.78 comes back.
+select test.expect($$select * from public.audit_spend where kind = 'settle' and run_id = '00000000-0000-0000-0000-00000000af01' and usd = -0.78$$, 1, 'a finished run gives back the unused part of its estimate');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd, kind, run_id) values ('00000000-0000-0000-0000-00000000ad01', 'dataforseo', -5, 'settle', '00000000-0000-0000-0000-00000000af01')$$, -1, 'people cannot add a settlement');
+select test.expect($$insert into public.audit_spend (audit_id, provider, usd) values ('00000000-0000-0000-0000-00000000ad01', 'dataforseo', -5)$$, -2, 'a negative reservation is refused');
+select test.expect($$update public.audit_runs set actual_usd = 0 where id = '00000000-0000-0000-0000-00000000af01'$$, 0, 'a finished run''s cost cannot be lowered later');
+select test.expect($$select * from public.audit_spend where kind = 'settle'$$, 1, 'still one settlement for that run');
+select test.expect($$update public.audit_spend set usd = -9 where kind = 'settle'$$, -1, 'settlements cannot be changed');
+select test.expect($$delete from public.audit_spend where kind = 'settle'$$, -1, 'settlements cannot be deleted');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1","aal":"aal2"}';
+-- Owner's run af02 (estimate $0.50) claims a $0 cost: 30% ($0.15) stays counted, $0.35 back.
+select test.expect($$update public.audit_runs set status = 'done', actual_usd = 0, finished_at = now() where id = '00000000-0000-0000-0000-00000000af02'$$, 1, 'owner finishes their run');
+select test.expect($$select * from public.audit_spend where run_id = '00000000-0000-0000-0000-00000000af02' and usd = -0.35$$, 1, 'at least 30% of an estimate always stays counted');
+commit;
+
+-- ---------------------------------------------------------------------------
 -- 7ce. Role guides, personal goals, ideas (0036): owner/managers read every guide; everyone
 --      else reads only their own role's; managers can't edit the owner's guide. Goals: you
 --      read your own, may only tick them done. Ideas: sent as yourself, read your own; the

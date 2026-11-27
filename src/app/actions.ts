@@ -90,9 +90,9 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readMaps, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
@@ -3612,6 +3612,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let calls = 0;
   let aiUsd: number | null = null;
   let wordsNote: string | null = null;
+  // What this run may spend in total (its estimate, set aside before it started). A failed
+  // lookup is retried once only while the spend stays inside it.
+  let budgetUsd = 0;
   const saveSteps = () => db.from("audit_runs").update({ steps: [...state].map(([label, s]) => ({ label, state: s })) }).eq("id", runId);
   const finish = async (status: "done" | "failed", error: string | null) => {
     if (status === "done") state.set("Checking and saving", "done");
@@ -3621,6 +3624,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       .update({ status, error: error ? error.slice(0, 300) : null, actual_usd: Math.min(50, Math.round(costUsd * 10000) / 10000), ai_usd: aiUsd, steps: [...state].map(([label, s]) => ({ label, state: s })), finished_at: new Date().toISOString() })
       .eq("id", runId);
   };
+  /** Why a run stopped without saving: the audit keeps its last results. */
+  const keptNote = () => `Nothing was saved, so the last results stay. ${problems[0] ?? "The main lookups didn't answer."} Check the DataForSEO credit and try again.`;
   /** Runs lookups a few at a time; a failed lookup leaves its numbers "not found". */
   const runLookups = async (list: Lookup[]) => {
     const byStep = new Map<string, Lookup[]>();
@@ -3633,14 +3638,24 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         if (Date.now() > deadline) break;
         await Promise.all(
           group.slice(i, i + 6).map(async (l) => {
-            calls++;
-            try {
-              const a = await dfsLookup(l.path, l.task);
-              answers.set(l.id, a);
-              costUsd += a.costUsd ?? DFS_PRICE[l.path];
-            } catch (e) {
-              costUsd += DFS_PRICE[l.path];
-              if (problems.length < 3) problems.push(e instanceof DfsError ? e.message : "A lookup failed.");
+            for (let attempt = 0; attempt < 2; attempt++) {
+              calls++;
+              try {
+                const a = await dfsLookup(l.path, l.task);
+                answers.set(l.id, a);
+                costUsd += a.costUsd ?? DFS_PRICE[l.path];
+                return;
+              } catch (e) {
+                // Refused or failed lookups aren't billed; only a timeout might be.
+                if (!(e instanceof DfsError) || e.mayBeCharged) costUsd += DFS_PRICE[l.path];
+                // Their side hiccuped (e.g. 40101): one more try after a short pause, if the budget allows.
+                if (attempt === 0 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                  continue;
+                }
+                if (problems.length < 3) problems.push(`${l.step}: ${e instanceof DfsError ? e.message : "a lookup failed."}`);
+                return;
+              }
             }
           }),
         );
@@ -3657,7 +3672,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.ads!.intake!;
       const sections = audit.ads!.sections;
       const plan = planAdsRun(intake, sections);
+      budgetUsd = plan.estimateUsd;
       await runLookups(plan.first);
+      if (answers.size === 0) return await finish("failed", keptNote());
       const serps = adsMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
       const extra: Lookup[] = [];
       if (sections.includes("ads_spend")) {
@@ -3676,32 +3693,44 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       await saveRunResults(db, audit.id, block, {}, checked.summary.retrieved);
     } else {
       const intake = audit.intake!;
-      const plan = planSeoRun(intake, audit.sections);
+      // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
+      // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 20).map((t) => t.label), others: statePlaces(intake.state) };
+      const plan = planSeoRun(intake, audit.sections, area);
+      budgetUsd = plan.estimateUsd;
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
-      const universe = seoUniverse(intake, answers, plan.seeds.length);
+      if (answers.size === 0) return await finish("failed", keptNote());
+      const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
+      // The town-by-town searches count too, so one failed search can't leave the audit with no competitors.
+      const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors(serps, intake.domain).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area"))).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
-      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe });
+      const rankedVolume = plan.rankedVolume(answers, sites.map((x) => x.domain), universe);
+      if (rankedVolume) await runLookups([rankedVolume]);
+      // Without the search counts or any site's rankings the pages would be mostly "not found":
+      // keep the last good results instead of replacing them (a run with no credit wiped one).
+      if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());
+      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");
       await saveSteps();
       const left = isAiConfigured() ? await getAiBudgetLeft() : null;
       if (left !== null && left > 0.05 && Date.now() < deadline) {
-        const input = wordsInput(block, intake.company, intake.niche);
-        const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 1500, remainingUsd: left });
+        const input = wordsInput(block, intake.company, intake.niche, { averageJobUsd: intake.avgJobUsd, averageJobConfirmed: intake.avgJobConfirmed, visitsThatBecomeJobsPercent: Math.round(intake.visitToJobRate * 1000) / 10 });
+        const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 8000, remainingUsd: left }); // thinking counts toward this, so leave room
         await logAiUsage(db, "audit_words", result);
         if (result.ok) {
           block = applyWords(block, result.data, input.codes);
           aiUsd = result.costUsd;
-        }
+        } else wordsNote = `Claude's notes weren't written (${result.message})`;
       }
       state.set("Writing the notes", "done");
       state.set("Checking and saving", "working");
@@ -3717,7 +3746,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems[0]}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
   }

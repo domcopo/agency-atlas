@@ -8,7 +8,7 @@
 // Search counts always come from Google Ads for the state (DataForSEO keyword data);
 // DataForSEO Labs is US-wide, so it is used to FIND searches and rankings, not to count them.
 
-import { stateName } from "./geo";
+import { stateName, US_STATES } from "./geo";
 import { contactDetailIn, normalizeDomain } from "./intake";
 import { placeState } from "./places";
 
@@ -38,6 +38,9 @@ export const DEPTH_RULES = {
 
 /** Share of searchers who click each Google position (a common industry curve; a model). */
 export const CTR: Record<number, number> = { 1: 0.28, 2: 0.15, 3: 0.1, 4: 0.07, 5: 0.05, 6: 0.04, 7: 0.03, 8: 0.025, 9: 0.02, 10: 0.02 };
+/** Share of searchers who click each spot in the Google map pack (#1–3; a cautious model). */
+export const PACK_CTR: Record<number, number> = { 1: 0.15, 2: 0.1, 3: 0.08 };
+
 export function ctr(position: number): number {
   if (!Number.isInteger(position) || position < 1) return 0;
   if (position <= 10) return CTR[position] ?? 0;
@@ -54,10 +57,39 @@ export interface Market {
   label: string;
   /** How people type it in a search ("warren", "sharon"). */
   term: string;
+  /** A town near the home town that isn't one of the audit's own markets (searches only). */
+  nearby?: boolean;
 }
 
+const termOf = (label: string, state: string) => placeState(label, state).name.toLowerCase().replace(/\s+county$/, " county");
+
 export function auditMarkets(hqTown: string, cities: string[], state: string): Market[] {
-  return [hqTown, ...cities].map((label) => ({ label, term: placeState(label, state).name.toLowerCase().replace(/\s+county$/, " county") }));
+  return [hqTown, ...cities].map((label) => ({ label, term: termOf(label, state) }));
+}
+
+/** Towns within ~30 miles of the home town (from the place list), minus the audit's own markets. */
+export function nearbyMarkets(labels: string[], own: Market[], state: string): Market[] {
+  const taken = new Set(own.map((m) => m.term));
+  const out: Market[] = [];
+  for (const label of labels) {
+    const term = termOf(label, state);
+    if (term.length < 3 || taken.has(term)) continue;
+    taken.add(term);
+    out.push({ label, term, nearby: true });
+  }
+  return out;
+}
+
+/**
+ * The wider area searched for an audit: its markets (+ nearby towns), the state, and every
+ * other place name in that state (so "we buy houses columbus ohio" isn't counted for a
+ * Youngstown audit just because it says "ohio").
+ */
+export interface Area {
+  markets: Market[];
+  state: string;
+  /** Lower-case place names in the state (cities, townships, counties). */
+  others?: ReadonlySet<string>;
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -78,9 +110,118 @@ export function localPattern(markets: Market[], state: string): string {
   return names.map(escape).join("|");
 }
 
-export function isLocal(keyword: string, markets: Market[], state: string): boolean {
+/** Does the search name a place in the state that isn't one of these markets? */
+export function namesOtherPlace(keyword: string, markets: Market[], others: ReadonlySet<string> | undefined): boolean {
+  if (!others?.size) return false;
+  const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
+  const own = new Set(markets.map((m) => m.term));
+  for (let n = 1; n <= 3; n++)
+    for (let i = 0; i + n <= words.length; i++) {
+      const g = words.slice(i, i + n).join(" ");
+      if (others.has(g) && !own.has(g)) return true;
+    }
+  return false;
+}
+
+// Two-letter codes that are also everyday words at the end of a search ("near me", "rent a car
+// co") are not read as a state.
+const CODE_WORDS = new Set(["me", "in", "or", "hi", "ok", "co"]);
+
+/**
+ * Does the search name ANOTHER state ("car rental brooklyn ny", "lakewood new jersey")? Many
+ * towns share a name with a bigger place elsewhere (Brooklyn OH / NY, Lakewood OH / NJ), so a
+ * search that names another state is never counted for this audit's town of the same name.
+ */
+export function namesOtherState(keyword: string, state: string, markets: Market[] = []): boolean {
+  const k = ` ${keyword.toLowerCase().replace(/[.,]/g, " ").replace(/\s+/g, " ").trim()} `;
+  const own = markets.map((m) => m.term);
+  for (const [code, name] of Object.entries(US_STATES)) {
+    if (code === state.toUpperCase()) continue;
+    const n = name.toLowerCase();
+    if (k.includes(` ${n} `) && !own.some((t) => t.includes(n))) return true;
+  }
+  const last = k.trim().split(" ").pop() ?? "";
+  return last.length === 2 && !CODE_WORDS.has(last) && last.toUpperCase() !== state.toUpperCase() && last.toUpperCase() in US_STATES && k.trim().split(" ").length > 1;
+}
+
+export function isLocal(keyword: string, markets: Market[], state: string, others?: ReadonlySet<string>): boolean {
   const k = ` ${keyword.toLowerCase()} `;
-  return markets.some((m) => k.includes(` ${m.term} `)) || k.includes(` ${stateName(state).toLowerCase()} `) || k.includes(" near me ");
+  if (namesOtherState(keyword, state, markets)) return false;
+  if (markets.some((m) => k.includes(` ${m.term} `)) || k.includes(" near me ")) return true;
+  // The state's name alone counts only when no other town of the state is named.
+  return k.includes(` ${stateName(state).toLowerCase()} `) && !namesOtherPlace(keyword, markets, others);
+}
+
+// ---------------------------------------------------------------------------
+// What the business sells: a search must be about it to count for anyone
+// ---------------------------------------------------------------------------
+
+const STOP = new Set(["a", "an", "the", "for", "my", "we", "our", "your", "and", "of", "to", "in", "near", "me", "best", "top", "cheap", "local", "service", "services", "company", "companies"]);
+const stem = (w: string) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+
+export interface Topic {
+  /** Word stems of the business type and services ("car", "rental", "daily"…), towns left out. */
+  words: string[];
+  /** How many of those words a search must contain: 2, or 1 when a seed is a single word ("plumber"). */
+  need: number;
+  /** Searches already judged relevant (the audit's keyword universe) always count. */
+  known?: ReadonlySet<string>;
+}
+
+export function topicOf(phrases: string[], markets: Market[]): Topic {
+  const towns = new Set(markets.flatMap((m) => m.term.split(" ")));
+  const per = phrases.map((p) => [...new Set(p.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOP.has(w) && !towns.has(w)).map(stem))]).filter((w) => w.length);
+  const words = [...new Set(per.flat())].slice(0, 30);
+  return { words, need: Math.max(1, Math.min(2, ...per.map((w) => w.length))) };
+}
+
+/**
+ * Google Ads gives word-order variants the SAME count ("car rental near me", "near me car
+ * rental", "car rental in near me" are one group of searches). One key per group, so a total
+ * never counts the same searches three times.
+ */
+const FILLER = new Set(["a", "an", "the", "in", "on", "at", "for", "of", "to", "near", "me"]);
+export function variantKey(keyword: string): string {
+  const words = keyword.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w && !FILLER.has(w)).map(stem);
+  const near = ` ${keyword.toLowerCase()} `.includes(" near me ") ? ["@near"] : [];
+  return [...new Set([...words, ...near])].sort().join(" ");
+}
+
+/**
+ * Like variantKey, but a search that names one of the audit's towns also drops the state
+ * ("sell my house fast denver", "... denver co", "... denver colorado" are ONE group to Google,
+ * which reports the same count for each; adding them up tripled Denver's demand). A search
+ * naming only the state ("we buy houses colorado") keeps it: that is a different search.
+ */
+export function searchGroup(keyword: string, markets: Market[], state: string): string {
+  const key = variantKey(keyword);
+  const m = marketOf(keyword, markets);
+  if (!m) return key;
+  const keep = new Set(m.term.split(" ").map(stem));
+  const drop = new Set([state.toLowerCase(), ...stateName(state).toLowerCase().split(/\s+/)].map(stem).filter((w) => !keep.has(w)));
+  return key.split(" ").filter((w) => !drop.has(w)).join(" ");
+}
+
+/** Does a page address belong to another state ("/car-rental-lakewood-nj.html", "/newyork/brooklyn")? */
+export function pathOtherState(path: string, state: string): boolean {
+  const tokens = path.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const own = state.toUpperCase();
+  return tokens.some((t) => {
+    if (t.length === 2) return !CODE_WORDS.has(t) && t.toUpperCase() !== own && t.toUpperCase() in US_STATES;
+    return Object.entries(US_STATES).some(([code, name]) => code !== own && name.length > 4 && t === name.toLowerCase().replace(/\s+/g, ""));
+  });
+}
+
+/** Is the search about what this business sells? ("hotels cleveland" isn't, for a car rental.) */
+export function onTopic(keyword: string, topic: Topic): boolean {
+  if (!topic.words.length || topic.known?.has(keyword.toLowerCase())) return true;
+  const have = new Set(keyword.toLowerCase().split(/[^a-z0-9]+/).map(stem));
+  return topic.words.filter((w) => have.has(w)).length >= topic.need;
+}
+
+/** A loose filter for DataForSEO (any one topic word); onTopic() makes the exact call afterwards. */
+export function topicPattern(topic: Topic): string {
+  return topic.words.filter((w) => w.length >= 3).map(escape).join("|");
 }
 
 // ---------------------------------------------------------------------------
@@ -111,13 +252,15 @@ export function readSuggestions(a: DfsAnswer | undefined): Suggestion[] {
  * houses warren"), plus suggestions that name a town, the state or "near me" (most searched
  * first). Informational-only searches ("how to …") are left out.
  */
-export function buildUniverse(seeds: string[], markets: Market[], state: string, suggestions: Suggestion[], extra: string[] = []): string[] {
+export function buildUniverse(seeds: string[], markets: Market[], state: string, suggestions: Suggestion[], extra: string[] = [], others?: ReadonlySet<string>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (k: string) => {
     const key = k.trim().toLowerCase().replace(/\s+/g, " ");
-    if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && out.length < DEPTH_RULES.universe) {
+    const group = searchGroup(key, markets, state);
+    if (key && key.length <= 80 && key.split(" ").length <= 10 && !seen.has(key) && !seen.has(group) && out.length < DEPTH_RULES.universe) {
       seen.add(key);
+      seen.add(group);
       out.push(key);
     }
   };
@@ -125,7 +268,7 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
   for (const k of extra) add(k);
   for (const s of seeds) for (const m of markets) add(`${s} ${m.term}`);
   const local = suggestions
-    .filter((g) => isLocal(g.keyword, markets, state) && !/^(how|what|why|when|is|can|does|do)\b/.test(g.keyword) && g.intent !== "navigational")
+    .filter((g) => isLocal(g.keyword, markets, state, others) && !/^(how|what|why|when|is|can|does|do)\b/.test(g.keyword) && g.intent !== "navigational")
     .sort((a, b) => (b.usVolume ?? 0) - (a.usVolume ?? 0));
   for (const g of local) add(g.keyword);
   return out;
@@ -150,6 +293,8 @@ export interface Ranked {
   /** Path of the ranking page ("/sell-my-house-fast-warren/"), when given. */
   path: string | null;
   usVolume: number | null;
+  /** US cost per click for the search (used when the state's figure is missing). */
+  cpc: number | null;
 }
 
 export function readRanked(a: DfsAnswer | undefined, domain: string): Ranked[] {
@@ -163,7 +308,7 @@ export function readRanked(a: DfsAnswer | undefined, domain: string): Ranked[] {
     const itemDomain = typeof item.domain === "string" ? normalizeDomain(item.domain) : domain;
     if (!keyword || position === null || position < 1 || position > 100 || itemDomain !== domain) continue;
     const rel = str(item.relative_url, 160);
-    out.push({ keyword, position: Math.round(position), path: rel && rel.startsWith("/") ? rel.replace(/[^A-Za-z0-9/_.~%-]/g, "") : null, usVolume: num(obj(kd.keyword_info).search_volume) });
+    out.push({ keyword, position: Math.round(position), path: rel && rel.startsWith("/") ? rel.replace(/[^A-Za-z0-9/_.~%-]/g, "") : null, usVolume: num(obj(kd.keyword_info).search_volume), cpc: num(obj(kd.keyword_info).cpc) });
   }
   return out;
 }
@@ -179,7 +324,7 @@ export interface SiteModel {
   visits: number;
   /** What those visits would cost as ads (visits × cost per click). */
   valueUsd: number;
-  /** Towns where it ranks in the top 20 (audit labels). */
+  /** The audit's own towns where it ranks in the top 20 (nearby towns left out). */
   markets: string[];
   /** Best position per search (for the ranking tables). */
   positions: Map<string, number>;
@@ -192,12 +337,26 @@ export interface SiteModel {
  * for the state when known, else DataForSEO's US figure for that town-named search) × the
  * click share of its position.
  */
-export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string): SiteModel {
+export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>, topic?: Topic, twin?: (k: string) => string | null): SiteModel {
   const best = new Map<string, Ranked>();
   for (const r of ranked) {
-    if (!isLocal(r.keyword, markets, state)) continue;
+    // "near me" results depend on where the searcher stands; a US-wide ranking says nothing
+    // about this area, so those searches stay out of the model (they still count as demand).
+    if (!isLocal(r.keyword, markets, state, others) || ` ${r.keyword} `.includes(" near me ")) continue;
+    // A travel site ranking for "hotels cleveland" says nothing about car rentals.
+    if (topic && !onTopic(r.keyword, topic)) continue;
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
+  }
+  // Variants Google counts as one search ("… denver" / "… denver co", or wordings it gives the
+  // same figures: `twin`) are modeled once, at the best position among them; the tables still
+  // show each variant's own position.
+  const groups = new Map<string, Ranked>();
+  for (const r of best.values()) {
+    const t = twin?.(r.keyword);
+    const g = t ? `twin|${t}` : searchGroup(r.keyword, markets, state);
+    const cur = groups.get(g);
+    if (!cur || r.position < cur.position) groups.set(g, r);
   }
   let visits = 0;
   let valueUsd = 0;
@@ -206,11 +365,11 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
   let top10 = 0;
   const marketSet = new Set<string>();
   const pageValue = new Map<string, number>();
-  for (const r of best.values()) {
+  for (const r of groups.values()) {
     const v = volume(r.keyword) ?? r.usVolume ?? 0;
     const clicks = v * ctr(r.position);
     visits += clicks;
-    valueUsd += clicks * (cpc(r.keyword) ?? 0);
+    valueUsd += clicks * (cpc(r.keyword) ?? r.cpc ?? 0);
     if (r.position <= 10) {
       positionedFor += v;
       top10++;
@@ -219,17 +378,17 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     const m = marketOf(r.keyword, markets);
     if (m && r.position <= 20) {
       marketSet.add(m.label);
-      if (r.path && r.path !== "/") pageValue.set(r.path, (pageValue.get(r.path) ?? 0) + clicks + 0.001);
+      if (r.path && r.path !== "/" && !pathOtherState(r.path, state)) pageValue.set(r.path, (pageValue.get(r.path) ?? 0) + clicks + 0.001);
     }
   }
   return {
-    keywords: best.size,
+    keywords: groups.size,
     top3,
     top10,
     positionedFor: Math.round(positionedFor),
     visits: Math.round(visits),
     valueUsd: Math.round(valueUsd),
-    markets: markets.filter((m) => marketSet.has(m.label)).map((m) => m.label),
+    markets: markets.filter((m) => !m.nearby && marketSet.has(m.label)).map((m) => m.label),
     positions: new Map([...best].map(([k, r]) => [k, r.position])),
     pages: [...pageValue].sort((a, b) => b[1] - a[1]).slice(0, DEPTH_RULES.pagesPerSite).map(([p]) => p),
   };

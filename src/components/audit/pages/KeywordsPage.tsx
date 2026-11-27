@@ -9,7 +9,10 @@ import { Slide } from "../Slide";
 export function KeywordsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const names = new Map([[config.company.domain, "You"], ...config.competitors.map((c) => [c.domain, c.name.replace(/\s*\(.*\)$/, "")] as const)]);
-  const all = clusterRows(data.keywords);
+  const every = clusterRows(data.keywords);
+  // A town Google reports 0 searches for is left off (it reads as filler); "not found" stays.
+  const all = every.filter((r) => r.volume !== 0);
+  const empty = every.length - all.length;
   // Run audit groups searches by town, so there can be many groups: the 9 biggest fit a page.
   const rows = all.slice(0, 9);
   return (
@@ -40,7 +43,7 @@ export function KeywordsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
           </tbody>
         </table>
         <p className="audit-note">
-          {data.keywords.length} searches checked{all.length > rows.length ? `; ${all.length - rows.length} smaller groups not shown` : ""}. Volumes are local search volumes, each keyword counted once. Missing figures show “not found” and are left out of totals.
+          {data.keywords.length} searches checked{all.length > rows.length ? `; ${all.length - rows.length} smaller groups not shown` : ""}{empty ? `; ${empty} with no searches left out` : ""}. Volumes are local search volumes, each keyword counted once. Missing figures show “not found” and are left out of totals.
         </p>
       </div>
       {data.narrative.pageNotes.keywords && <div className="audit-callout"><span className="audit-tag info">Opportunity</span>{data.narrative.pageNotes.keywords}</div>}

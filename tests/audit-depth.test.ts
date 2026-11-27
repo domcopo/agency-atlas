@@ -2,7 +2,8 @@
 // model, homepage check. Pure functions; every business and number here is fictional (.example).
 
 import { describe, expect, it } from "vitest";
-import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, readInspection, readRanked, readSuggestions } from "@/lib/audit/depth";
+import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, pathOtherState, searchGroup, variantKey, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
+import { goalScenario } from "@/lib/audit/compute";
 
 const markets = auditMarkets("Denver", ["Arvada", "Lakewood", "Jefferson County"], "CO");
 const answer = (items: unknown[]) => ({ result: [{ items }] });
@@ -28,6 +29,31 @@ describe("markets", () => {
     expect(groupOf("we buy houses near me", markets, "CO")).toBe("Near me");
     expect(groupOf("cash home buyers colorado", markets, "CO")).toBe("Colorado");
     expect(groupOf("we buy houses", markets, "CO")).toBe("General");
+  });
+});
+
+describe("the wider area", () => {
+  const others = new Set(["denver", "arvada", "lakewood", "aurora", "colorado springs", "jefferson county", "golden"]);
+  const near = nearbyMarkets(["Golden", "Arvada", "Wheat Ridge"], markets, "CO");
+
+  it("nearby towns: the audit's own markets aren't repeated", () => {
+    expect(near.map((m) => [m.label, m.term, m.nearby])).toEqual([["Golden", "golden", true], ["Wheat Ridge", "wheat ridge", true]]);
+  });
+
+  it("the state's name counts only when no other town of the state is named", () => {
+    expect(isLocal("we buy houses colorado", markets, "CO", others)).toBe(true);
+    expect(isLocal("we buy houses colorado springs colorado", markets, "CO", others)).toBe(false);
+    expect(isLocal("we buy houses aurora colorado", markets, "CO", others)).toBe(false);
+    expect(isLocal("we buy houses denver colorado", markets, "CO", others)).toBe(true); // its own market wins
+    expect(namesOtherPlace("sell house fast golden co", markets, others)).toBe(true);
+    expect(namesOtherPlace("sell house fast golden co", [...markets, ...near], others)).toBe(false);
+  });
+
+  it("rankings in nearby towns add visits but aren't listed as the audit's towns", () => {
+    const r = [{ keyword: "we buy houses golden", position: 1, path: "/golden/", usVolume: 100, cpc: null }];
+    const m = modelSite(r, () => null, () => null, [...markets, ...near], "CO", others);
+    expect([m.visits, m.markets, m.pages]).toEqual([28, [], ["/golden/"]]);
+    expect(groupOf("we buy houses golden", [...markets, ...near], "CO")).toBe("Golden");
   });
 });
 
@@ -90,10 +116,11 @@ describe("local click-through model", () => {
   it("visits = state searches × click share of the best position; outside the market ignored", () => {
     const state = new Map([["we buy houses denver", 1000], ["sell house arvada", 100]]);
     const m = modelSite(ranked, (k) => state.get(k) ?? null, (k) => (k === "we buy houses denver" ? 20 : null), markets, "CO");
-    // denver: 1000 × 15% (best = #2) = 150; arvada: 100 × 7% = 7; near me: no state count → US 700 × 1% = 7.
-    expect(m.visits).toBe(164);
+    // denver: 1000 × 15% (best = #2) = 150; arvada: 100 × 7% = 7. "near me" stays out: a US-wide
+    // ranking says nothing about where this area's searchers would see it.
+    expect(m.visits).toBe(157);
     expect(m.valueUsd).toBe(3000);
-    expect([m.keywords, m.top3, m.top10, m.positionedFor]).toEqual([3, 1, 2, 1100]);
+    expect([m.keywords, m.top3, m.top10, m.positionedFor]).toEqual([2, 1, 2, 1100]);
     expect(m.markets).toEqual(["Denver", "Arvada"]);
     expect(m.pages).toEqual(["/arvada/script"]); // the homepage isn't a "town page"
     expect(m.positions.get("we buy houses denver")).toBe(2);
@@ -118,5 +145,100 @@ describe("homepage check", () => {
   it("no answer = no check; no title or H1 = home town unknown", () => {
     expect(readInspection(undefined, "Denver")).toBeNull();
     expect(readInspection(answer([{ meta: {}, checks: { no_h1_tag: true } }]), "Denver")).toEqual({ title: null, h1: null, issues: ["No H1 heading on the homepage"], namesHomeTown: null });
+  });
+});
+
+describe("towns that share a name with a place in another state", () => {
+  const oh = auditMarkets("Cleveland", ["Brooklyn", "Lakewood"], "OH");
+
+  it("a search naming another state isn't local, even when the town name matches", () => {
+    expect(namesOtherState("car rental brooklyn ny", "OH")).toBe(true);
+    expect(namesOtherState("car rental lakewood new jersey", "OH")).toBe(true);
+    expect(isLocal("car rental brooklyn ny", oh, "OH")).toBe(false);
+    expect(isLocal("car rental lakewood nj", oh, "OH")).toBe(false);
+    expect(isLocal("car rental brooklyn ohio", oh, "OH")).toBe(true);
+    expect(isLocal("car rental brooklyn oh", oh, "OH")).toBe(true);
+  });
+
+  it("everyday two-letter words at the end aren't states", () => {
+    expect(namesOtherState("car rental near me", "OH")).toBe(false);
+    expect(namesOtherState("rent a car co", "OH")).toBe(false);
+    expect(namesOtherState("ny", "OH")).toBe(false);
+  });
+});
+
+describe("searches about what the business sells", () => {
+  const oh = auditMarkets("Cleveland", ["Brooklyn"], "OH");
+  const topic = topicOf(["Car Rental", "Daily car rental", "Weekly car rental"], oh);
+
+  it("two topic words are needed when every seed has two or more", () => {
+    expect(topic.need).toBe(2);
+    expect(onTopic("car rentals cleveland", topic)).toBe(true);
+    expect(onTopic("rental cars brooklyn", topic)).toBe(true);
+    expect(onTopic("hotels cleveland", topic)).toBe(false);
+    expect(onTopic("cleveland weekly news", topic)).toBe(false);
+    expect(topicPattern(topic)).toBe("car|rental|daily|weekly");
+  });
+
+  it("one word is enough for a one-word business type", () => {
+    const t = topicOf(["Plumber"], oh);
+    expect([t.need, onTopic("plumbers cleveland", t)]).toEqual([1, true]);
+  });
+
+  it("off-topic rankings stay out of the model; cost per click falls back to the ranking's own", () => {
+    const r = [
+      { keyword: "car rental cleveland", position: 1, path: "/", usVolume: 100, cpc: 2 },
+      { keyword: "hotels cleveland", position: 1, path: "/", usVolume: 10000, cpc: 1 },
+    ];
+    const m = modelSite(r, () => null, () => null, oh, "OH", undefined, topic);
+    expect([m.keywords, m.visits, m.valueUsd]).toEqual([1, 28, 56]);
+  });
+});
+
+describe("the goal is never below today", () => {
+  const rows = [
+    { name: "Conservative", demandCaptured: 0.025, visits: 23, leads: 0, jobs: 0, revenueMo: 0, revenueYr: 0, baseline: false },
+    { name: "Baseline", demandCaptured: 0.05, visits: 47, leads: 0, jobs: 0, revenueMo: 0, revenueYr: 0, baseline: true },
+    { name: "Stronger", demandCaptured: 0.08, visits: 74, leads: 0, jobs: 0, revenueMo: 0, revenueYr: 0, baseline: false },
+  ];
+  it("baseline when above today, else the next larger scenario, else none", () => {
+    expect(goalScenario(rows, 10)?.name).toBe("Baseline");
+    expect(goalScenario(rows, 66)?.name).toBe("Stronger");
+    expect(goalScenario(rows, 100)).toBeNull();
+    expect(goalScenario(null, 10)).toBeNull();
+  });
+});
+
+describe("one count per group of word-order variants", () => {
+  it("variants share a key; real differences don't", () => {
+    expect(variantKey("car rental near me")).toBe(variantKey("near me car rental"));
+    expect(variantKey("car rentals in near me")).toBe(variantKey("car rental near me"));
+    expect(variantKey("cheap car rental near me")).not.toBe(variantKey("car rental near me"));
+    expect(variantKey("car rental cleveland")).not.toBe(variantKey("car rental near me"));
+  });
+
+  it("the universe keeps only the first (most searched) of each group", () => {
+    const m = auditMarkets("Cleveland", [], "OH");
+    const sug = ["car rental near me", "near me car rental", "car rental in near me", "cheap car rental near me"].map((keyword, i) => ({ keyword, usVolume: 100 - i, difficulty: null, intent: null }));
+    expect(buildUniverse(["car rental"], m, "OH", sug)).toEqual(["car rental", "car rental cleveland", "car rental near me", "cheap car rental near me"]);
+  });
+
+  it("town pages of another state aren't shown as built for this area", () => {
+    expect(pathOtherState("/united-states/car-rental-lakewood-nj.html", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/newyork/brooklyn", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/ohio/cleveland/cle", "OH")).toBe(false);
+    expect(pathOtherState("/car-rental-cleveland-oh.html", "OH")).toBe(false);
+  });
+});
+
+describe("searchGroup: Google's one-search variants (2026-11-25 Denver review)", () => {
+  const m = auditMarkets("Denver", ["Colorado Springs"], "CO");
+  it("a town search drops the state; a state-only search keeps it", () => {
+    expect(searchGroup("sell my house fast denver co", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast denver colorado", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast colorado", m, "CO")).not.toBe(searchGroup("sell my house fast", m, "CO"));
+    // A town whose name holds the state's name keeps it.
+    expect(searchGroup("we buy houses colorado springs", m, "CO")).not.toBe(searchGroup("we buy houses springs", m, "CO"));
+    expect(searchGroup("we buy houses colorado springs co", m, "CO")).toBe(searchGroup("we buy houses colorado springs", m, "CO"));
   });
 });

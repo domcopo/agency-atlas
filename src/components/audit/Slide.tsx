@@ -5,6 +5,13 @@ import type { AuditBundle } from "@/lib/audit/data";
 import { SOURCE_LABELS } from "@/lib/audit/data";
 import { fmtDate } from "@/lib/audit/format";
 
+/** The agency's logo (light version: white background, so it blends into the white page). */
+function AgencyLogo({ height, name }: { height: number; name: string }) {
+  // A plain <img>: it must print in "Save as PDF" exactly as shown, with no image service.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src="/brand/wordmark-light.png" alt={name} height={height} width={Math.round((height * 1010) / 560)} className="audit-logo" />;
+}
+
 export const AUDIT_PAGE_COUNT = 8;
 
 /** What every page component takes. Page number and count change when checkpoints are off. */
@@ -33,6 +40,7 @@ export function Slide({ bundle, page, pageCount = AUDIT_PAGE_COUNT, title, aside
   return (
     <section className="audit-slide" aria-label={`Page ${page}: ${title}`}>
       {bundle.sample && <span className="audit-sample-chip">SAMPLE · FICTIONAL BUSINESS · DRY RUN $0</span>}
+      {kicker && <AgencyLogo height={64} name={config.agency.name} />}
       {kicker && <p className="audit-kicker">{kicker}</p>}
       <h2 className="audit-title">
         {title}
@@ -41,7 +49,11 @@ export function Slide({ bundle, page, pageCount = AUDIT_PAGE_COUNT, title, aside
       {subtitle && <p className="audit-sub">{subtitle}</p>}
       <div className="audit-body">{children}</div>
       <footer className="audit-footer">
-        <b>{config.agency.name.toUpperCase()}</b>
+        <span className="audit-footer-brand">
+          <AgencyLogo height={24} name={config.agency.name} />
+          <b>{config.agency.name.toUpperCase()}</b>
+          {config.agency.website && <span>{config.agency.website}</span>}
+        </span>
         <span>
           Custom SEO Audit · {config.company.domain} · Data retrieved {fmtDate(data.retrieved)} ({sources})
         </span>

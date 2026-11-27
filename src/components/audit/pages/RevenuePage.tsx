@@ -1,6 +1,6 @@
 // Page 7: modeled revenue opportunity with every assumption printed, plus growth chart.
 
-import { blendedJobValue, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
+import { blendedJobValue, goalScenario, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
 import type { AuditPageProps } from "../Slide";
 import { fmtNum, fmtPct, fmtUsd, shortLabels } from "@/lib/audit/format";
 import { BasisTag, ModelTag } from "../Bits";
@@ -13,10 +13,10 @@ export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
   const rows = revenueScenarios(config, demand);
-  const base = rows?.find((r) => r.baseline) ?? null;
   const you = clientSite(config, data);
   const now = you ? totalVisits(you) : null;
-  const curve = base && now !== null ? growthCurve(now, base.visits) : null;
+  const target = goalScenario(rows, now);
+  const curve = target && now !== null ? growthCurve(now, target.visits) : null;
   const nationalVisits = data.visitsScope === "national";
   const shortList = shortLabels(config.competitors.map((c) => c.name));
   const shortName = new Map(config.competitors.map((c, i) => [c.domain, shortList[i] ?? c.name]));
@@ -58,10 +58,10 @@ export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
           <h3>
             12-month modeled visits{rec ? ` — ${rec.name} plan (${rec.hoursPerMonth} hrs/mo)` : ""}
           </h3>
-          {curve ? <GrowthChart curve={curve} refs={refs} /> : <p className="audit-nf">Not found: today&apos;s visits or local demand is missing, so the curve can&apos;t be drawn.</p>}
+          {curve ? <GrowthChart curve={curve} refs={refs} /> : <p className="audit-nf">{now !== null && rows ? "Today's visits are already above every scenario, so there's no curve to draw." : "Not found: today's visits or local demand is missing, so the curve can't be drawn."}</p>}
           <p className="audit-note">
             <ModelTag />
-            From today&apos;s ≈{fmtNum(now)} search visits/mo to the {config.baselineScenario.toLowerCase()} scenario. {nationalVisits ? "Competitor lines are not drawn: their visit estimates are US-wide, not local." : "Dashed lines = competitors' current estimated visits."} {data.narrative.pageNotes.revenue ?? ""}
+            From today&apos;s ≈{fmtNum(now)} search visits/mo to the {(target?.name ?? config.baselineScenario).toLowerCase()} scenario. {nationalVisits ? "Competitor lines are not drawn: their visit estimates are US-wide, not local." : "Dashed lines = competitors' current estimated visits."} {data.narrative.pageNotes.revenue ?? ""}
           </p>
         </div>
       </div>
