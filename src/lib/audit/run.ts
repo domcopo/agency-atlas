@@ -6,7 +6,7 @@
 
 import type { AdsIntake, AdsSectionId } from "./ads";
 import { stateName } from "./geo";
-import { normalizeDomain, type AuditIntake } from "./intake";
+import { INTAKE_DEFAULTS, normalizeDomain, type AuditIntake } from "./intake";
 import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, PACK_CTR, situationSearches, isLocal, localPattern, onTopic, marketOf, modelSite, nearbyMarkets, readInspection, readRanked, readSuggestions, topicOf, topicPattern, type Market } from "./depth";
 
 /**
@@ -52,6 +52,8 @@ export const RUN_RULES = {
   serpDepth: 20,
   /** Big directories are never "competitors". */
   directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com", "yahoo.com", "bing.com", "expedia.com", "kayak.com", "priceline.com", "booking.com", "tripadvisor.com", "orbitz.com", "travelocity.com", "hotwire.com", "cheaptickets.com", "momondo.com", "skyscanner.com", "rentalcars.com", "carrentals.com", "discovercars.com", "easyterra.com", "autoslash.com", "turo.com", "getaround.com", "costcotravel.com", "realestatebees.com", "fastexpert.com", "clever.com", "entrepreneur.com", "inc.com", "medium.com", "nar.realtor"],
+  /** Towns inside the market radius searched per audit (closest first). */
+  nearbyTowns: 60,
   /** A run that started this long ago and never finished is treated as stopped. */
   staleMinutes: 10,
 } as const;
@@ -644,6 +646,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     // Searches from the home town that name no place ("we buy houses"): counted once, there.
     homeTownSearches: plainRows.length ? plainRows.reduce((a, v) => a + v, 0) : null,
     nearbySearches: nearbyRows.length ? nearbyRows.reduce((a, v) => a + v, 0) : null,
+    nearbyMiles: intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles,
     situationSearches: situationRows.length ? situationRows.reduce((a, v) => a + v, 0) : null,
     // Visits are modeled from each site's LOCAL rankings × state search counts (D1).
     visitsScope: "local",

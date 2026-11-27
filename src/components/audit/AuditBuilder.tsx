@@ -207,6 +207,11 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
                   <input name="visitToJobRate" inputMode="decimal" defaultValue={((i.visitToJobRate ?? INTAKE_DEFAULTS.visitToJobRate) * 100).toString()} className={field} />
                 </label>
               </div>
+              <label className={label}>
+                Market radius (miles)
+                <input name="radiusMiles" inputMode="numeric" defaultValue={(i.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).toString()} className={field} />
+                <span className="text-[11px] text-faint">Towns this close to the home town count as the market. 45 is the default; go wider for businesses that travel far, narrower for walk-in shops ({INTAKE_LIMITS.radiusMin}–{INTAKE_LIMITS.radiusMax}).</span>
+              </label>
               <label className="flex min-h-11 items-center gap-3 text-sm">
                 <input type="checkbox" name="avgJobConfirmed" defaultChecked={i.avgJobConfirmed ?? false} className="size-5 accent-violet" />
                 <span>

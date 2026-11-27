@@ -9,6 +9,7 @@ import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/int
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
 import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
 import { modelSite } from "@/lib/audit/depth";
+import { nearbyTowns } from "@/lib/audit/places-list";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
 
@@ -541,5 +542,30 @@ describe("2026-11-27: 30-mile towns and seller situations count as demand", () =
     if (!r.ok) throw new Error(r.errors.join("; "));
     // #1 × (plain 500 + "we buy houses denver" 90) × 15% = 89 (situations and Golden left out).
     expect(r.data.sites[0]?.packVisits.value).toBe(89);
+  });
+});
+
+describe("2026-11-27: market radius per audit (45 miles by default)", () => {
+  const base = { company: "Mile High Homes (fictional)", domain: "milehighhomes.example", niche: "Home buyers", hqTown: "Denver", state: "CO", services: "We buy houses", avgJobUsd: 10000 };
+  it("defaults to 45, accepts 10-100, refuses anything else", () => {
+    const d = parseIntake(base);
+    expect(d.ok && d.intake.radiusMiles).toBe(45);
+    const w = parseIntake({ ...base, radiusMiles: "60" });
+    expect(w.ok && w.intake.radiusMiles).toBe(60);
+    expect(parseIntake({ ...base, radiusMiles: "500" }).ok).toBe(false);
+    expect(parseIntake({ ...base, radiusMiles: "abc" }).ok).toBe(false);
+  });
+  it("a wider radius reaches more towns", () => {
+    const near = nearbyTowns("CO", "Denver", 500, 15).length;
+    const far = nearbyTowns("CO", "Denver", 500, 45).length;
+    expect(near).toBeGreaterThan(0);
+    expect(far).toBeGreaterThan(near);
+    expect(nearbyTowns("CO", "Denver", 500, 45).every((t) => t.miles <= 45)).toBe(true);
+  });
+  it("the run uses the audit's radius and the results say which", () => {
+    const src = readFileSync("src/app/actions.ts", "utf8");
+    expect(src).toMatch(/nearbyTowns\(intake\.state, intake\.hqTown, RUN_RULES\.nearbyTowns, intake\.radiusMiles \?\? INTAKE_DEFAULTS\.radiusMiles\)/);
+    const block = buildSeoBlock({ ...seoIntake, radiusMiles: 60 }, ["summary"], { answers: new Map(), competitors: [], retrieved: TODAY, costUsd: 0, calls: 0, universe: [] });
+    expect(block.nearbyMiles).toBe(60);
   });
 });

@@ -22,7 +22,7 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
     { label: "“Near me” searches (location decided by Google)", fig: data.nearMeSearches },
     ...(data.homeTownSearches ? [{ label: `Plain searches from ${hqName} (no town named)`, fig: data.homeTownSearches }] : []),
     ...(data.situationSearches ? [{ label: `Seller situations from ${hqName} (inherited, foreclosure, as-is…)`, fig: data.situationSearches }] : []),
-    ...(data.nearbySearches ? [{ label: `Other towns within 30 miles of ${hqName}`, fig: data.nearbySearches }] : []),
+    ...(data.nearbySearches ? [{ label: `Other towns within ${data.nearbyMiles ?? 30} miles of ${hqName}`, fig: data.nearbySearches }] : []),
     ...shown,
     ...(rest.length
       ? [

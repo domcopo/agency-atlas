@@ -87,7 +87,7 @@ import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, u
 import { parseAuditConfig } from "@/lib/audit/config";
 import { cleanCity, cleanDomain, cleanKeyword, cleanNiche, cleanPosition } from "@/lib/watch/lists";
 import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue, WATCH_RESULTS_MAX_BYTES } from "@/lib/watch/rounds";
-import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
+import { buildAuditConfig, INTAKE_DEFAULTS, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
@@ -3404,6 +3404,7 @@ export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<
     avgJobUsd: text(form, "avgJobUsd", 20),
     avgJobConfirmed: form.get("avgJobConfirmed") === "on",
     visitToJobRate: text(form, "visitToJobRate", 10),
+    radiusMiles: text(form, "radiusMiles", 4),
     competitors,
     modules: { dataforseo: form.get("mod_dataforseo") === "on", leadsnap: form.get("mod_leadsnap") === "on", semrush: form.get("mod_semrush") === "on" },
     wantsAds: form.get("wantsAds") === "on",
@@ -3695,7 +3696,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.intake!;
       // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
       // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
-      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 40).map((t) => t.label), others: statePlaces(intake.state) };
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, RUN_RULES.nearbyTowns, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).map((t) => t.label), others: statePlaces(intake.state) };
       const plan = planSeoRun(intake, audit.sections, area);
       budgetUsd = plan.estimateUsd;
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;

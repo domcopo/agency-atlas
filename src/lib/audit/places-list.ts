@@ -52,16 +52,16 @@ export function placePosition(state: string, name: string): [number, number] | n
  * Towns within NEARBY_MILES of the home town, closest first, across state lines. Counties are
  * left out; a township is left out when the town of the same name is already listed.
  */
-export function nearbyTowns(state: string, home: string, limit = 24): NearbyTown[] {
+export function nearbyTowns(state: string, home: string, limit = 24, radius = NEARBY_MILES): NearbyTown[] {
   const at = placePosition(state, home);
   if (!at) return [];
   const out: (NearbyTown & { name: string })[] = [];
   for (const [st, places] of Object.entries(COORDS)) {
     for (const [name, pos] of Object.entries(places)) {
       if (/ County$/.test(name) || (st === state && name === home)) continue;
-      if (Math.abs(pos[0] - at[0]) > 0.6) continue; // quick skip: more than ~40 miles north/south
+      if (Math.abs(pos[0] - at[0]) > radius / 69 + 0.05) continue; // quick skip: too far north/south (~69 miles a degree)
       const miles = milesBetween(at, pos);
-      if (miles <= NEARBY_MILES) out.push({ name, label: placeLabel(name, st, state), miles: Math.round(miles) });
+      if (miles <= radius) out.push({ name, label: placeLabel(name, st, state), miles: Math.round(miles) });
     }
   }
   const names = new Set(out.map((o) => o.label));

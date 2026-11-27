@@ -49,7 +49,7 @@ export function milesBetween(a: readonly [number, number], b: readonly [number, 
 }
 
 /** Most audits are local: places farther than this from the home town get a "keep it?" note. */
-export const NEARBY_MILES = 30;
+export const NEARBY_MILES = 45;
 
 /** One typed entry → one or more clean place names. */
 export function splitPlace(entry: string, state: string): string[] {

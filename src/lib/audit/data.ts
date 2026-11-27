@@ -137,6 +137,8 @@ export interface AuditData {
   homeTownSearches?: Fig;
   /** Searches naming towns within ~30 miles that aren't the audit's own markets; absent on older results. */
   nearbySearches?: Fig;
+  /** The market radius those towns were picked with (miles). */
+  nearbyMiles?: number;
   /** Seller-situation searches from the home town ("sell inherited house"); home buyers only. */
   situationSearches?: Fig;
   keywords: KeywordRow[];

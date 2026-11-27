@@ -462,6 +462,7 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     nearMeSearches,
     ...(homeTownSearches ? { homeTownSearches } : {}),
     ...(nearbySearches ? { nearbySearches } : {}),
+    ...(typeof r.nearbyMiles === "number" && Number.isInteger(r.nearbyMiles) && r.nearbyMiles >= 1 && r.nearbyMiles <= 200 ? { nearbyMiles: r.nearbyMiles } : {}),
     ...(situationSearches ? { situationSearches } : {}),
     keywords,
     visitsScope: r.visitsScope === "national" ? "national" : "local",
