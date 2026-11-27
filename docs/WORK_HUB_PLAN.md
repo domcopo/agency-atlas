@@ -1,6 +1,6 @@
 # Work hub plan (owner + manager Work screen)
 
-Status (2026-11-27): plan approved. **All five phases built** (not committed). Phase 5 is waiting for the owner to test. **Migration 0038 written** (`supabase/migrations/0038_work_hub.sql`, approved 2026-11-26), **not run yet**: the owner runs it in the SQL Editor. Break-in tests for it pass (`npm run test:rls`).
+Status (2026-11-27): **all five phases built, pushed to main and live** (0a534c8). **Migration 0038 run by the owner 2026-11-27** (`supabase/migrations/0038_work_hub.sql`; break-in tests pass with `npm run test:rls`).
 
 0038 notes:
 - **Done when** (`actions.done_when`, up to 500 characters, no passwords or keys). Only the owner and managers can set it; the database refuses everyone else (its own trigger, `actions_done_when_guard`, so the older developer rule from 0017 is not rewritten). Developers can read it on their own items. It isn't in the work order history yet.
@@ -183,3 +183,28 @@ That is a bigger, security-sensitive change. I recommend leaving it out of this 
 - `/work/orders` is linked from about 10 places. The redirect covers them all, and the preview rules (`previewAllows`) keep the same paths.
 - Saving fields on their own could save a half-typed value. To avoid that, they save when you leave the field (not on every keystroke) and only when the value changed.
 - The founder can still be assigned work. "Not available" only changes the Team view's numbers.
+
+## Developers see "Done when" (approved and built 2026-11-27; 0039 written, not run)
+
+**Why:** "Done when" says what finished looks like. Developers need it most, but today only the owner and managers see it. Developers read their list through the `my_work` database view, which was built before the column existed.
+
+**Scope (small):**
+- **Migration `0039_my_work_done_when.sql`** (the owner runs it in the SQL Editor):
+  - `create or replace view public.my_work`, the same as 0022 with `a.done_when` added at the end.
+  - Nothing else changes: same rows (a developer's own items only, two-factor required), same permissions, no new table. Developers still can't change it; the 0038 trigger already refuses them.
+  - Undo is in the file as a comment: re-create the 0022 view.
+- **App:**
+  - `getDeveloperActions` (`src/lib/data-source.ts`) reads `done_when` and steps down to today's columns if 0039 hasn't been run, so nothing breaks before it is.
+  - `DeveloperWork.tsx`: when set, a short lime "Done when: …" line sits above the steps on the developer's card.
+  - The full work order page shows it to developers too.
+  - Preview as a developer already gets it (it reads the normal list).
+- **Tests:**
+  - New break-in tests in `10_rls_break_in.sql`: a developer sees Done when on their own item through `my_work`; never another person's item; no rows without two-factor; still can't change it.
+  - A pin that 0039 keeps every 0022 column in order.
+  - Then `npm run check` and `npm run test:rls`.
+
+**Risks:**
+- If a column were left out of the view, developers' lists could break. The app's step-down read and the column-order test guard against that.
+- No GoHighLevel, AI, money or client contact details are involved.
+
+**Not included:** per-person weekly hours (a separate change).

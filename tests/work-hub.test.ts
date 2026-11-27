@@ -287,3 +287,33 @@ describe("Undo and the Shortcuts list", () => {
     expect(read("supabase/migrations/0038_work_hub.sql")).toMatch(/^-- Agency Atlas: Work hub fields/);
   });
 });
+
+describe("0039: developers see Done when", () => {
+  const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+  const viewCols = (sql: string) => {
+    const m = sql.match(/create or replace view public\.my_work as\s+select([\s\S]*?)\s+from public\.actions a/);
+    return (m?.[1] ?? "").split(",").map((c) => c.trim()).filter(Boolean);
+  };
+
+  it("keeps every 0022 my_work column in order and only adds done_when at the end", () => {
+    const before = viewCols(read("supabase/migrations/0022_internal_work_orders.sql"));
+    const after = viewCols(read("supabase/migrations/0039_my_work_done_when.sql"));
+    expect(before.length).toBeGreaterThan(20);
+    expect(after).toEqual([...before, "a.done_when"]);
+  });
+
+  it("keeps the same rows rule (own items, two-factor) and changes nothing else", () => {
+    const sql = read("supabase/migrations/0039_my_work_done_when.sql").replace(/--.*$/gm, "");
+    const where = (s: string) => s.slice(s.indexOf("from public.actions a"), s.indexOf(";", s.indexOf("from public.actions a")));
+    expect(where(sql)).toBe(where(read("supabase/migrations/0022_internal_work_orders.sql").replace(/--.*$/gm, "")));
+    expect(sql).not.toMatch(/\b(drop|grant|revoke|alter|create table|security_invoker)\b/i);
+  });
+
+  it("the developer list reads done_when and steps down before 0039", () => {
+    const ds = read("src/lib/data-source.ts");
+    expect(ds).toContain("${V2_COLS}, internal, done_when`);");
+    expect(ds).toContain("${V2_COLS}, internal`)); // before 0039");
+    expect(ds).toContain('doneWhen: typeof r.done_when === "string" ? r.done_when : null,');
+    expect(read("src/components/cards/DeveloperWork.tsx")).toContain("{a.doneWhen && (");
+  });
+});

@@ -108,6 +108,13 @@ function Card({ a, today, readOnly, stepsReady, open }: { a: ClientAction; today
         </summary>
 
         <div className="space-y-2.5 border-t border-line px-3 pb-3 pt-2.5">
+          {/* What finished looks like (0039). Set by the owner or a manager; read only here. */}
+          {a.doneWhen && (
+            <p className="rounded-xl border border-lime/30 bg-lime/5 px-3 py-2 text-xs">
+              <span className="font-semibold text-lime">Done when: </span>
+              {a.doneWhen}
+            </p>
+          )}
           {(a.promisedOn || a.estMinutes) && (
             <p className="text-[11px]">
               {a.promisedOn && <span className={missed ? "font-semibold text-rose" : "text-amber"}>{missed ? "Promise to the client missed" : "Promised to the client by"} {a.promisedOn}</span>}
