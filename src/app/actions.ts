@@ -77,6 +77,7 @@ import { AGENCY_SLUG } from "@/lib/agency";
 import { isPdf, MAX_PDF_BYTES, MAX_UPLOAD_TOTAL_BYTES } from "@/lib/uploads";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
+import { SUGGESTION_RULES } from "@/lib/work-hub";
 import { asTouchKind, checkTouchNote, nyDay, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { canCare, isLead } from "@/lib/roles";
 import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
@@ -96,6 +97,7 @@ import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/l
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
+import { readAllRows } from "@/lib/paging";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
 
@@ -591,19 +593,24 @@ export async function addSuggestedAction(form: FormData) {
 /** Done / reopen / reschedule / assign / status / priority on one action. */
 export async function updateAction(form: FormData) {
   await notWhilePreviewing();
+  await applyUpdate(form);
+}
+
+/** Every status, date, owner, priority and detail change. Returns a problem in plain words, or null when saved. */
+async function applyUpdate(form: FormData): Promise<string | null | undefined> {
   const me = await getCurrentMember();
-  if (!me) return;
+  if (!me) return "Please sign in again.";
   const id = text(form, "actionId", 40);
   const op = text(form, "op", 12);
-  if (!isUuid(id)) return;
+  if (!isUuid(id)) return "Couldn't save. Reload and try again.";
   // Developers may only change the status of their own items, and say why it's blocked (the database enforces this too).
-  if (me.role === "developer" && op !== "done" && op !== "status") return;
+  if (me.role === "developer" && op !== "done" && op !== "status") return "Ask a manager to change this.";
   // Salespeople: their lead follow-ups' status and dates only (the database allows lead follow-ups only).
   const SALES_OPS = ["done", "reopen", "reschedule", "status", "priority"];
   if (me.role === "sales" && !SALES_OPS.includes(op)) return;
   const db = await createDatabaseClient();
   const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, kind, title, status").eq("id", id).maybeSingle();
-  if (!current) return; // not found, or not allowed to see it
+  if (!current) return "That item isn't there any more."; // not found, or not allowed to see it
   const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; kind: "follow_up" | "issue" | "work_order"; title: string; status: string };
   const manager = me.role === "owner" || me.role === "manager";
   // A developer's "done" on a work order or issue means "ready for review" (0011): a manager approves it.
@@ -620,24 +627,24 @@ export async function updateAction(form: FormData) {
     summary = `Done: ${a.title}`;
     kind = "action_done";
   } else if (op === "approve") {
-    if (!manager || a.status !== "review") return;
+    if (!manager || a.status !== "review") return "Only a manager can review this, while it's in review.";
     patch = { status: "done", done_at: new Date().toISOString(), review_note: null };
     summary = `Approved as done: ${a.title}`;
     kind = "action_done";
   } else if (op === "sendback") {
-    if (!manager || a.status !== "review") return;
+    if (!manager || a.status !== "review") return "Only a manager can review this, while it's in review.";
     const note = text(form, "note", 200);
     patch = { status: "open", done_at: null, review_note: note || null };
     summary = `Sent back${note ? ` (${note})` : ""}: ${a.title}`;
   } else if (op === "cancel") {
     // Owner only (0013; the database refuses anyone else too). Kept, never deleted.
-    if (me.role !== "owner" || a.status === "canceled") return;
+    if (me.role !== "owner" || a.status === "canceled") return "Only the owner can cancel work.";
     const note = text(form, "note", 200);
     patch = { status: "canceled", cancel_note: note || null };
     summary = `Canceled${note ? ` (${note})` : ""}: ${a.title}`;
     kind = "action_status"; // the history table's existing kinds; the summary says "Canceled"
   } else if (op === "restore") {
-    if (me.role !== "owner" || a.status !== "canceled") return;
+    if (me.role !== "owner" || a.status !== "canceled") return "Only the owner can restore canceled work.";
     patch = { status: "open", done_at: null };
     summary = `Restored: ${a.title}`;
     kind = "action_reopened";
@@ -654,20 +661,20 @@ export async function updateAction(form: FormData) {
       return d.toISOString().slice(0, 10);
     };
     const due = preset === "tomorrow" ? shift(1) : preset === "week" ? shift(7) : anyDate(text(form, "due", 10));
-    if (!due) return;
+    if (!due) return "That date doesn't look right.";
     patch = { due_on: due };
     summary = `Rescheduled to ${due}: ${a.title}`;
     kind = "action_rescheduled";
   } else if (op === "assign") {
     const ownerId = text(form, "ownerId", 40);
     const name = ownerId ? await staffExists(db, ownerId) : null;
-    if (ownerId && !name) return;
+    if (ownerId && !name) return "That person isn't on the team.";
     patch = { owner_staff_id: ownerId || null };
     summary = name ? `Assigned to ${name}: ${a.title}` : `Unassigned: ${a.title}`;
     kind = "action_assigned";
   } else if (op === "status") {
     const picked = oneOf(STATUSES, text(form, "status", 12));
-    if (!picked) return;
+    if (!picked) return "Pick a status.";
     const status = picked === "done" && devToReview ? "review" : picked;
     patch = status === "done" ? { status, done_at: new Date().toISOString() } : { status, done_at: null };
     // Blocked: keep a short reason. Other statuses clear it.
@@ -676,18 +683,18 @@ export async function updateAction(form: FormData) {
     summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "blocked" ? "Blocked" : status === "review" ? "Ready for review" : status === "done" ? "Done" : "Open"}: ${a.title}`;
     kind = status === "done" ? "action_done" : "action_status";
   } else if (op === "promise") {
-    if (me.role === "developer") return;
+    if (me.role === "developer") return "Ask a manager to change this.";
     const raw = text(form, "promised", 10);
     const promised = raw ? anyDate(raw) : null;
-    if (raw && !promised) return;
+    if (raw && !promised) return "That date doesn't look right.";
     patch = { promised_on: promised };
     summary = promised ? `Promised to client by ${promised}: ${a.title}` : `Promise date removed: ${a.title}`;
     kind = "action_rescheduled";
   } else if (op === "details") {
-    if (me.role === "developer") return;
+    if (me.role === "developer") return "Ask a manager to change this.";
     const linkRaw = text(form, "link", 500);
     const link = httpsLink(linkRaw);
-    if (linkRaw && !link) return;
+    if (linkRaw && !link) return "Links must start with https:// (no logins inside them).";
     const estRaw = Number(text(form, "est", 5));
     patch = {
       steps: cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : ""),
@@ -696,13 +703,38 @@ export async function updateAction(form: FormData) {
       est_minutes: (EST_CHOICES as number[]).includes(estRaw) ? estRaw : null,
     };
     summary = `Details updated: ${a.title}`;
+  } else if (op === "est" || op === "steps" || op === "ghl") {
+    // One detail at a time (the Work hub drawer saves each field on its own).
+    if (me.role === "developer") return "Ask a manager to change this.";
+    if (op === "est") {
+      const raw = text(form, "est", 5);
+      const est = Number(raw);
+      if (raw && !(EST_CHOICES as number[]).includes(est)) return "Pick a time from the list.";
+      patch = { est_minutes: raw ? est : null };
+    } else if (op === "steps") {
+      patch = { steps: cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : "") };
+    } else {
+      const linkRaw = text(form, "link", 500);
+      const link = httpsLink(linkRaw);
+      if (linkRaw && !link) return "Links must start with https:// (no logins inside them).";
+      patch = { source_link: link, source_note: text(form, "linkNote", 200) || null };
+    }
+    summary = `Details updated: ${a.title}`;
+  } else if (op === "done_when") {
+    // "Done when" (0038): owner and managers only; the database refuses everyone else too.
+    if (me.role !== "owner" && me.role !== "manager") return "Ask a manager to change this.";
+    const doneWhen = text(form, "doneWhen", 500);
+    const contact = contactDetailsIn(doneWhen);
+    if (contact.length) return `That looks like ${contact.join(" and ")}. Keep contact details in the client record.`;
+    patch = { done_when: doneWhen || null };
+    summary = `Done when updated: ${a.title}`;
   } else if (op === "priority") {
     const priority = oneOf(PRIORITIES, text(form, "priority", 10));
-    if (!priority) return;
+    if (!priority) return "Pick a priority.";
     patch = { priority };
     summary = `Priority ${priority}: ${a.title}`;
   }
-  if (!patch) return;
+  if (!patch) return "Couldn't save. Reload and try again.";
   let { error } = await db.from("actions").update(patch).eq("id", id);
   // Before 0011 there's no "review" status (a check rule refuses it): the old way, straight to done.
   if (error?.code === "23514" && patch.status === "review") {
@@ -717,12 +749,50 @@ export async function updateAction(form: FormData) {
     void _skip;
     ({ error } = await db.from("actions").update(rest).eq("id", id));
   }
+  if (error && MISSING_COLUMN.has(error.code ?? "") && "done_when" in patch) return "Needs one setup step (0038 SQL).";
   if (error) {
     console.warn(`Action update refused: ${error.code}`);
-    return;
+    return "Couldn't save. You may not be allowed to change this.";
   }
   if (me.role !== "sales") await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
   refreshOps(text(form, "slug", 90));
+  return null;
+}
+
+/**
+ * The same change as updateAction, but says whether it worked, so a field can show
+ * "Saved" or the problem (the Work hub's drawer saves fields on its own; WORK_HUB_PLAN.md).
+ */
+export async function saveActionField(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const problem = await applyUpdate(form);
+  // null = saved; a message = why not; nothing = refused without a reason (salespeople outside their lead work).
+  return problem === null ? { ok: true } : { error: problem ?? "You can't change this." };
+}
+
+/**
+ * Dismiss one Work hub suggestion (0038, owner and managers). It stays hidden while its
+ * reason is the same; the database stamps who and when, and allows no edits or deletes.
+ */
+export async function dismissSuggestion(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can dismiss suggestions." };
+  const slug = text(form, "slug", 90);
+  const rule = oneOf(SUGGESTION_RULES, text(form, "rule", 12));
+  const reason = text(form, "reason", 300);
+  if (!rule || !reason) return { error: "Couldn't dismiss this one. Reload and try again." };
+  const client = (await getRoster()).find((c) => c.id === slug);
+  if (!client?.dbId) return { error: "Only suggestions for a client can be dismissed." };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("work_suggestion_dismissals").insert({ client_id: client.dbId, rule, reason });
+  if (error && error.code !== "23505") {
+    if (MISSING_TABLE.has(error.code ?? "")) return { error: "Dismiss needs one setup step (0038 SQL)." };
+    console.warn(`Dismiss refused: ${error.code}`);
+    return { error: "Couldn't dismiss it. You may not be allowed to." };
+  }
+  refreshOps();
+  return { ok: true };
 }
 
 /**
@@ -2113,12 +2183,16 @@ export async function refreshLeads(): Promise<{ error?: string; message?: string
   await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can refresh leads." };
-  const r = await runLeadRefresh(me.role);
+  const r = await runLeadRefresh(me.role, await createDatabaseClient());
   revalidatePath("/", "layout");
   return r;
 }
 
-/** Called when someone opens Sales: refreshes in the background if the copy is over an hour old. */
+/**
+ * Called when someone opens Home or Sales: if the copy is over an hour old, refreshes it in the
+ * background AFTER the page is sent (like autoSyncGhl), so nobody waits for GoHighLevel.
+ * The next visit shows the result.
+ */
 export async function autoRefreshLeads(): Promise<void> {
   await notWhilePreviewing(); // callers catch this; a preview never refreshes anything
   const me = await getCurrentMember();
@@ -2130,13 +2204,18 @@ export async function autoRefreshLeads(): Promise<void> {
   ]);
   if (last.error) return; // before 0020
   const newest = [last.data?.[0]?.ran_at, sync.data?.[0]?.ran_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
-  if (!refreshDue(newest, new Date())) return;
-  await runLeadRefresh(me.role).catch(() => undefined);
+  if (!refreshDue(newest, new Date()) || !isGhlConfigured()) return;
+  // Sign-in and role are read now; after() can't read cookies from a page.
+  const role = me.role;
+  after(async () => {
+    const result = await runLeadRefresh(role, db).catch(() => ({ error: "stopped" }));
+    if (result.error) console.warn("Background lead refresh skipped; the Refresh button still works.");
+  });
 }
 
-async function runLeadRefresh(role: string): Promise<{ error?: string; message?: string }> {
+/** Reads the sales pipelines from GoHighLevel and saves copies. No cookies, so it can run after a page is sent. */
+async function runLeadRefresh(role: string, db: Db): Promise<{ error?: string; message?: string }> {
   if (!isGhlConfigured()) return { error: "GoHighLevel isn't connected yet." };
-  const db = await createDatabaseClient();
   const [pl, last] = await Promise.all([
     db.from("sales_pipelines").select("pipeline_id").eq("active", true),
     db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
@@ -2161,7 +2240,10 @@ async function runLeadRefresh(role: string): Promise<{ error?: string; message?:
     // Salespeople only ever see OPEN leads, so the database lets them save open leads only
     // (tested in section 7q). Leads that closed in GoHighLevel are updated by the next
     // owner or manager refresh, or the owner's Sync.
-    const { data: seen } = await db.from("ghl_opportunities").select("ghl_id").in("pipeline_id", ids).limit(5000);
+    const { data: seen } = await readAllRows(
+      (from, to, withCount) => db.from("ghl_opportunities").select("ghl_id", { count: withCount ? "exact" : undefined }).in("pipeline_id", ids).order("ghl_id").range(from, to),
+      5000,
+    );
     const visible = new Set((seen ?? []).map((r) => r.ghl_id as string));
     const open = opportunities.filter((o) => o.status === "open");
     const saved =
@@ -2209,7 +2291,10 @@ export async function saveSalesPipeline(_prev: { error?: string; ok?: boolean } 
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { error: "Unknown pipeline." };
   const db = await createDatabaseClient();
   // The name and stages must come from our own copy, not from the form.
-  const { data } = await db.from("ghl_opportunities").select("pipeline_name, stage_name").eq("pipeline_id", id).limit(5000);
+  const { data } = await readAllRows(
+    (from, to, withCount) => db.from("ghl_opportunities").select("pipeline_name, stage_name", { count: withCount ? "exact" : undefined }).eq("pipeline_id", id).order("ghl_id").range(from, to),
+    5000,
+  );
   if (!data?.length) return { error: "That pipeline isn't in the last sync." };
   const stages = new Set(data.map((r) => r.stage_name as string | null).filter((x): x is string => Boolean(x)));
   const hot = form.getAll("hot").filter((v): v is string => typeof v === "string" && stages.has(v)).slice(0, 30);

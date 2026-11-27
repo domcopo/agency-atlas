@@ -11,6 +11,7 @@ import { Check, FileText, ImagePlus, Mic, MicOff, Sparkles, UserCheck, X } from 
 import { startTransition, useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createWorkOrder, quickAddWorkOrders, type QuickAddState } from "@/app/actions";
 import { nearestEst, WorkOrderForm } from "@/components/forms/WorkOrderForm";
+import { SMART_ADD_FILES_EVENT } from "@/components/work/HubDialog";
 import { AGENCY_LABEL, AGENCY_SLUG } from "@/lib/agency";
 import { minutesLabel } from "@/lib/ops";
 import { MAX_PDF_BYTES } from "@/lib/uploads";
@@ -116,6 +117,29 @@ export function QuickAddWorkOrders({
     setPdf(f);
   }
 
+  /** Dropped files: a PDF and/or pictures (onto this box, or anywhere on the Work hub). */
+  function takeFiles(dropped: File[]) {
+    if (disabled) return;
+    const droppedPdf = dropped.find((f) => f.type === "application/pdf");
+    if (droppedPdf) addPdf(droppedPdf);
+    const pics = dropped.filter((f) => f.type.startsWith("image/"));
+    if (pics.length) void addFiles(pics);
+    if (!droppedPdf && !pics.length) setPhotoError("Only pictures (photos or screenshots) or one PDF work here.");
+  }
+  // The Work hub's page-wide drop (HubDialog) hands the files over with this event.
+  const take = useRef(takeFiles);
+  useEffect(() => {
+    take.current = takeFiles;
+  });
+  useEffect(() => {
+    const onFiles = (e: Event) => {
+      const files = (e as CustomEvent<unknown>).detail;
+      if (Array.isArray(files)) take.current(files.filter((f): f is File => f instanceof File));
+    };
+    window.addEventListener(SMART_ADD_FILES_EVENT, onFiles);
+    return () => window.removeEventListener(SMART_ADD_FILES_EVENT, onFiles);
+  }, []);
+
   function talk() {
     if (listening) {
       rec.current?.stop();
@@ -160,13 +184,9 @@ export function QuickAddWorkOrders({
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          if (disabled) return;
-          const dropped = [...e.dataTransfer.files];
-          const droppedPdf = dropped.find((f) => f.type === "application/pdf");
-          if (droppedPdf) addPdf(droppedPdf);
-          const pics = dropped.filter((f) => f.type.startsWith("image/"));
-          if (pics.length) void addFiles(pics);
+          takeFiles([...e.dataTransfer.files]);
         }}
+        data-smart-add-drop
         className={`glass space-y-2.5 rounded-3xl p-4 ${dragging ? "outline-2 outline-violet outline-dashed" : ""}`}
       >
         <label className="block text-xs text-muted">

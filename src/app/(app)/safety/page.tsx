@@ -15,7 +15,8 @@ import { GlassCard } from "@/components/cards/GlassCard";
 import { Pill } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, getToadStatus, usesDatabase } from "@/lib/data-source";
+import { getAiStatus, getGhlSummary, getMember, getOwnerSummaryStatus, getRosterSummary, getSafetyStatus, getSpending, getToadStatus, usesDatabase } from "@/lib/data-source";
+import { SpendingCard } from "@/components/cards/SpendingCard";
 import { ToadSettingsForm } from "@/components/toad/ToadSettingsForm";
 import { PublishSummaryButton } from "@/components/forms/PublishSummaryButton";
 import { hasPrivateRoster } from "@/lib/private-data";
@@ -49,6 +50,8 @@ export default async function SafetyPage() {
   const ghl = await getGhlSummary();
   const ai = await getAiStatus();
   const toad = await getToadStatus();
+  // Owner and managers: every money cap in one place (null for everyone else).
+  const spending = await getSpending();
   const ownerSummary = member?.role === "owner" ? await getOwnerSummaryStatus() : null;
   const nyTime = (at: string) => new Date(at).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const ghlStatus = !ghl.configured ? "Not connected" : !db ? "Needs the database" : !ghl.tablesReady ? "Run setup SQL (0003)" : ghl.lastSync ? "Connected · read-only" : "Ready to sync";
@@ -128,6 +131,15 @@ export default async function SafetyPage() {
           </div>
         )}
       </GlassCard>
+
+      {spending && (spending.aiLines.length > 0 || spending.dataLines.length > 0) && (
+        <>
+          <SectionTitle>Spending &amp; limits</SectionTitle>
+          <section id="spending" className="scroll-mt-4">
+            <SpendingCard view={spending} owner={member?.role === "owner"} />
+          </section>
+        </>
+      )}
 
       <SectionTitle>AI spend</SectionTitle>
       <section id="ai" className="scroll-mt-4">

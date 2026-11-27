@@ -681,12 +681,20 @@ describe("preview as developer: look only, narrows, never grants", () => {
     expect([...buttons.matchAll(/action=\{(\w+)\}/g)].map((m) => m[1])).toEqual(["updateAction", "updateAction", "updateAction"]);
     const home = readFileSync(join(ROOT, "src/components/cards/DeveloperHome.tsx"), "utf8");
     expect(home).not.toMatch(/<select|data-source|getBilling|monthlyUsd|@\/lib\/ai/);
-    // The work order page: developers get the shared buttons before the manager-only status dropdown.
+    // The work order page (body shared with the Work hub drawer since 2026-11-25): developers get the
+    // shared buttons; the status pick list is only in the owner/manager block, and a developer
+    // (or someone previewing one) is never treated as a manager.
     const page = readFileSync(join(ROOT, "src/app/(app)/work/orders/[id]/page.tsx"), "utf8");
-    const devBranch = page.indexOf(") : developer ? (");
+    expect(page).toMatch(/const manager = !developer && \(me\?\.role === "owner" \|\| me\?\.role === "manager"\);/);
+    expect(page).toMatch(/<WorkOrderDetail\b/);
+    const detail = readFileSync(join(ROOT, "src/components/work/WorkOrderDetail.tsx"), "utf8");
+    const devBranch = detail.indexOf("const developerUpdate = developer && !finished && (");
     expect(devBranch).toBeGreaterThan(-1);
-    expect(page.slice(devBranch, devBranch + 300)).toMatch(/<DeveloperButtons a=\{a\} disabled=\{preview\}/);
-    expect(page.indexOf('<select name="status"')).toBeGreaterThan(devBranch);
+    expect(detail.slice(devBranch, devBranch + 500)).toMatch(/<DeveloperButtons a=\{a\} disabled=\{preview\}/);
+    expect(detail).toMatch(/const editing = manager && !finished;/);
+    const managerBlock = detail.slice(detail.indexOf("const managerFields = editing && ("), detail.indexOf("const facts = !editing && ("));
+    expect(managerBlock).toMatch(/<StatusField\b/);
+    expect([...detail.matchAll(/<StatusField\b|<select\b/g)]).toHaveLength(1);
     // Developer Home reads only the developer's own work.
     const homePage = readFileSync(join(ROOT, "src/app/(app)/page.tsx"), "utf8");
     const devHome = homePage.slice(homePage.indexOf("if (dev) {"), homePage.indexOf("// Salespeople"));
@@ -765,7 +773,7 @@ describe("Work Orders phase 1 (0017): who may do what, no GoHighLevel", () => {
   });
 
   it("work order screens and rules never touch GoHighLevel or the AI", () => {
-    for (const f of ["src/lib/work-orders.ts", "src/components/cards/WorkOrderBoard.tsx", "src/components/forms/WorkOrderDetailForms.tsx", "src/app/(app)/work/orders/[id]/page.tsx", "src/components/shell/WorkOrdersButton.tsx"]) {
+    for (const f of ["src/lib/work-orders.ts", "src/components/cards/WorkOrderBoard.tsx", "src/components/forms/WorkOrderDetailForms.tsx", "src/app/(app)/work/orders/[id]/page.tsx", "src/components/shell/WorkOrdersButton.tsx", "src/components/work/WorkOrderDetail.tsx", "src/components/work/DrawerFields.tsx", "src/components/work/WorkDrawer.tsx", "src/components/work/WorkRow.tsx", "src/components/work/HubDialog.tsx", "src/components/work/SuggestionActions.tsx", "src/components/work/WorkPopups.tsx", "src/components/work/HubShortcuts.tsx", "src/components/work/UndoToast.tsx", "src/app/(app)/work/error.tsx", "src/lib/work-hub.ts"]) {
       const text = readFileSync(join(ROOT, f), "utf8");
       expect(text, f).not.toMatch(/@\/lib\/ghl|@\/lib\/ai|askAi|getBilling/);
     }
