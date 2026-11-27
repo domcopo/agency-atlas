@@ -489,3 +489,23 @@ describe("2026-11-27 review: lumped variants once, local rivals first, map term 
     expect(findCompetitors([readSerp(serp([{ type: "organic", rank_group: 1, domain: "www.expedia.com", title: "Expedia" }]))], "luxe.example")).toEqual([]);
   });
 });
+
+describe("2026-11-27 re-run fixes: map term only for a narrower service, blogs skipped, code lists written out", () => {
+  it("a service that IS the business type doesn't switch the map search to it", () => {
+    expect(mapTermOf({ niche: "real estate investor", services: ["We buy houses", "Sell my house fast", "Real estate investor"] })).toBe("we buy houses");
+  });
+
+  it("blogs and business magazines are never competitors", () => {
+    const s = readSerp(serp([
+      { type: "organic", rank_group: 1, domain: "blog.investorstories.example", title: "Blog" },
+      { type: "organic", rank_group: 2, domain: "www.entrepreneur.com", title: "Entrepreneur" },
+    ]));
+    expect(findCompetitors([s], "mahoning.example")).toEqual([]);
+  });
+
+  it("a shortened list of codes comes back as names, never bare numbers", () => {
+    const codes: [string, string][] = [["BUSINESS", "Us (fictional)"], ["COMPETITOR 1", "One (fictional)"], ["COMPETITOR 2", "Two (fictional)"], ["COMPETITOR 3", "Three (fictional)"]];
+    const out = applyWords({}, { headline: "The pack is held by COMPETITOR 3, 2 and 1; COMPETITORS 1 & 2 lead.", pageNotes: {}, fixes: [], scorecard: [] }, codes);
+    expect(out.headline).toBe("The pack is held by Three (fictional), Two (fictional) and One (fictional); One (fictional) & Two (fictional) lead.");
+  });
+});
