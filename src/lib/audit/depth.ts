@@ -337,7 +337,7 @@ export interface SiteModel {
  * for the state when known, else DataForSEO's US figure for that town-named search) × the
  * click share of its position.
  */
-export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>, topic?: Topic): SiteModel {
+export function modelSite(ranked: Ranked[], volume: (k: string) => number | null, cpc: (k: string) => number | null, markets: Market[], state: string, others?: ReadonlySet<string>, topic?: Topic, twin?: (k: string) => string | null): SiteModel {
   const best = new Map<string, Ranked>();
   for (const r of ranked) {
     // "near me" results depend on where the searcher stands; a US-wide ranking says nothing
@@ -348,11 +348,13 @@ export function modelSite(ranked: Ranked[], volume: (k: string) => number | null
     const cur = best.get(r.keyword);
     if (!cur || r.position < cur.position) best.set(r.keyword, r);
   }
-  // Variants Google counts as one search ("… denver" / "… denver co") are modeled once, at the
-  // best position among them; the tables still show each variant's own position.
+  // Variants Google counts as one search ("… denver" / "… denver co", or wordings it gives the
+  // same figures: `twin`) are modeled once, at the best position among them; the tables still
+  // show each variant's own position.
   const groups = new Map<string, Ranked>();
   for (const r of best.values()) {
-    const g = searchGroup(r.keyword, markets, state);
+    const t = twin?.(r.keyword);
+    const g = t ? `twin|${t}` : searchGroup(r.keyword, markets, state);
     const cur = groups.get(g);
     if (!cur || r.position < cur.position) groups.set(g, r);
   }

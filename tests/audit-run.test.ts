@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
+import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
+import { modelSite } from "@/lib/audit/depth";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
 
@@ -436,5 +437,55 @@ describe("2026-11-25 review: variants once, plain home-town searches, map-pack v
     expect(input.data.revenue_model).toMatchObject({ average_job_usd: 230, average_job_from: "the business owner", visits_that_become_jobs_percent: 3 });
     expect(input.data.home_town_plain_searches_per_month).toBe(500);
     expect(wordsInput(block, "x", "y").data.revenue_model).toBeUndefined();
+  });
+});
+
+describe("2026-11-27 review: lumped variants once, local rivals first, map term = business type", () => {
+  // Google Ads gives close variants identical figures and history (a car rental audit added the
+  // same 2,400 "near me" searches six times: 20,130 instead of ~2,500).
+  const history = Array.from({ length: 12 }, (_, i) => ({ year: 2026, month: i + 1, search_volume: 2400 }));
+  const lumped = (keyword: string) => ({ keyword, search_volume: 2400, cpc: 2.96, low_top_of_page_bid: 1.25, high_top_of_page_bid: 3.44, competition_index: 82, monthly_searches: history });
+  const answers = new Map<string, DfsAnswer>([
+    ["suggest:0", ans([{ items: [{ keyword: "we buy houses near me", keyword_info: { search_volume: 9000 } }, { keyword: "house buyers near me", keyword_info: { search_volume: 9000 } }, { keyword: "cash for houses near me", keyword_info: { search_volume: 9000 } }] }])],
+    ["volume", ans([{ keyword: "we buy houses denver", search_volume: 90 }])],
+    ["volume:near", ans([lumped("we buy houses near me"), lumped("house buyers near me"), lumped("cash for houses near me"), { keyword: "we buy houses", search_volume: 500 }])],
+  ]);
+  const universe = seoUniverse(seoIntake, answers, 1);
+  const block = buildSeoBlock(seoIntake, ["summary", "keywords"], { answers, competitors: [], retrieved: TODAY, costUsd: 0.1, calls: 3, universe });
+
+  it("wordings with the same figures and history count once, with one row", () => {
+    expect(universe.filter((k) => k.endsWith("near me")).length).toBeGreaterThanOrEqual(3);
+    expect(block.nearMeSearches).toBe(2400);
+    const rows = (block.keywords as { keyword: string }[]).filter((k) => k.keyword.endsWith("near me"));
+    expect(rows.map((k) => k.keyword)).toEqual(["we buy houses near me"]); // the money term is the one kept
+  });
+
+  it("small or history-less figures are never merged (could be a coincidence)", () => {
+    const v = readVolume(ans([{ keyword: "a", search_volume: 20, monthly_searches: history }, { keyword: "b", search_volume: 2400 }, lumped("c")]));
+    expect(v.get("a")?.twin).toBeNull();
+    expect(v.get("b")?.twin).toBeNull();
+    expect(v.get("c")?.twin).toBeTruthy();
+  });
+
+  it("a site's lumped wordings are modeled once, at its best spot", () => {
+    const rows = ["car rental cleveland", "car rentals cleveland"].map((keyword, i) => ({ keyword, position: i + 1, usVolume: 1000, cpc: 1, path: "/" }));
+    const m = modelSite(rows as never, () => 1000, () => 1, [{ id: "cleveland", label: "Cleveland", term: "cleveland", nearby: false } as never], "OH", undefined, undefined, () => "same");
+    expect(m.keywords).toBe(1);
+  });
+
+  it("the map pack is searched for the business type when a service is a kind of it", () => {
+    expect(mapTermOf({ niche: "Car Rental", services: ["Daily car rental", "Weekly car rental"] })).toBe("car rental");
+    expect(mapTermOf({ niche: "real estate investor", services: ["We buy houses"] })).toBe("we buy houses");
+    expect(mapTermOf({ niche: "We buy houses", services: ["Sell my house fast"] })).toBe("sell my house fast");
+  });
+
+  it("businesses on Google Maps or in a map pack beat sites seen only in plain results", () => {
+    const s = readSerp(serp([
+      { type: "organic", rank_group: 1, domain: "bigbrand.example", title: "Big Brand" },
+      { type: "organic", rank_group: 2, domain: "bigbrand.example", title: "Big Brand" },
+      { type: "local_pack", rank_group: 3, domain: "corner.example", title: "Corner Rentals" },
+    ]));
+    expect(findCompetitors([s, s, s], "luxe.example").map((c) => c.domain)).toEqual(["corner.example", "bigbrand.example"]);
+    expect(findCompetitors([readSerp(serp([{ type: "organic", rank_group: 1, domain: "www.expedia.com", title: "Expedia" }]))], "luxe.example")).toEqual([]);
   });
 });

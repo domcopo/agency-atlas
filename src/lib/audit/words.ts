@@ -13,7 +13,8 @@ You are given finished numbers only. Rules:
 - Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...). No websites, emails or phone numbers.
 - Plain, confident English a business owner understands. No hype, no guarantees.
 - If the data is thin, say less.
-- If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.`;
+- If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.
+- A local 3-pack position of 0 means the pack was shown and other businesses held its 3 spots; null means not checked. Never say no business is in the pack.`;
 
 export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
   type: "object",
