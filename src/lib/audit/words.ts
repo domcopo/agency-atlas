@@ -98,6 +98,8 @@ export function wordsInput(block: Obj, company: string, niche: string, model?: R
       demand_by_city: arr(block.demand).map(obj).map((d) => ({ city: d.city, searches_per_month: val(d.searches) })),
       near_me_searches_per_month: val(block.nearMeSearches),
       home_town_plain_searches_per_month: val(block.homeTownSearches),
+      nearby_towns_within_30_miles_searches_per_month: val(block.nearbySearches),
+      seller_situation_searches_per_month: val(block.situationSearches),
       ...(revenue ? { revenue_model: revenue } : {}),
       money_keywords: arr(block.keywords)
         .map(obj)

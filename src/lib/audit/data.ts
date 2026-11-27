@@ -135,6 +135,10 @@ export interface AuditData {
   nearMeSearches: Fig;
   /** Searches from the home town that name no place ("we buy houses"); absent on older results. */
   homeTownSearches?: Fig;
+  /** Searches naming towns within ~30 miles that aren't the audit's own markets; absent on older results. */
+  nearbySearches?: Fig;
+  /** Seller-situation searches from the home town ("sell inherited house"); home buyers only. */
+  situationSearches?: Fig;
   keywords: KeywordRow[];
   /** "national" = visit estimates are each site's US-wide total, so they are not drawn next to the local model. */
   visitsScope?: "local" | "national";

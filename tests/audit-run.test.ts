@@ -420,8 +420,9 @@ describe("2026-11-25 review: variants once, plain home-town searches, map-pack v
     if (!r.ok) throw new Error(r.errors.join("; "));
     expect(r.data.homeTownSearches?.value).toBe(500);
     expect(r.data.keywords.find((k) => k.keyword === "we buy houses")?.volume.value).toBe(500);
-    // #2 in the home town's pack: 500 × 10%; the competitor isn't in it: 0.
-    expect(r.data.sites[0]?.packVisits.value).toBe(50);
+    // #2 in the home town's pack × every home-town search that shows a pack (2026-11-27: plain
+    // 500 + near me 40 + "we buy houses denver" 90 = 630) × 10% = 63; the competitor isn't in it: 0.
+    expect(r.data.sites[0]?.packVisits.value).toBe(63);
     expect(r.data.sites[1]?.packVisits.value).toBe(0);
   });
 
@@ -507,5 +508,38 @@ describe("2026-11-27 re-run fixes: map term only for a narrower service, blogs s
     const codes: [string, string][] = [["BUSINESS", "Us (fictional)"], ["COMPETITOR 1", "One (fictional)"], ["COMPETITOR 2", "Two (fictional)"], ["COMPETITOR 3", "Three (fictional)"]];
     const out = applyWords({}, { headline: "The pack is held by COMPETITOR 3, 2 and 1; COMPETITORS 1 & 2 lead.", pageNotes: {}, fixes: [], scorecard: [] }, codes);
     expect(out.headline).toBe("The pack is held by Three (fictional), Two (fictional) and One (fictional); One (fictional) & Two (fictional) lead.");
+  });
+});
+
+describe("2026-11-27: 30-mile towns and seller situations count as demand", () => {
+  const answers = new Map<string, DfsAnswer>([
+    ["volume", ans([{ keyword: "we buy houses denver", search_volume: 90 }, { keyword: "we buy houses golden", search_volume: 40 }])],
+    ["volume:near", ans([{ keyword: "we buy houses", search_volume: 500 }, { keyword: "sell inherited house", search_volume: 70 }, { keyword: "avoid foreclosure", search_volume: 30 }])],
+    ["pack:0", serp([{ type: "local_pack", rank_group: 1, domain: "milehighhomes.example" }])],
+  ]);
+  const area = { nearby: ["Golden"] };
+  const universe = seoUniverse(seoIntake, answers, 0, area);
+  const block = buildSeoBlock(seoIntake, ["summary", "heatmap", "keywords"], { answers, competitors: [], retrieved: TODAY, costUsd: 0.1, calls: 3, universe, area });
+  const r = parseSeoResults(block, { intake: seoIntake, markets, today: TODAY });
+
+  it("a home buyer's universe includes seller situations; other businesses' doesn't", () => {
+    expect(universe).toContain("sell inherited house");
+    const shop = parseIntake({ company: "Corner Rentals (fictional)", domain: "corner.example", niche: "Car rental", hqTown: "Denver", state: "CO", services: "Daily car rental", avgJobUsd: 200 });
+    if (!shop.ok) throw new Error(shop.errors.join(";"));
+    expect(seoUniverse(shop.intake as AuditIntake, new Map(), 0)).not.toContain("sell inherited house");
+  });
+
+  it("nearby towns and situations are their own demand rows, added to the total once", () => {
+    if (!r.ok) throw new Error(r.errors.join("; "));
+    expect(r.data.nearbySearches?.value).toBe(40);
+    expect(r.data.situationSearches?.value).toBe(100);
+    expect(r.data.homeTownSearches?.value).toBe(500); // situations aren't counted twice
+    expect(r.data.keywords.find((k) => k.keyword === "sell inherited house")?.cluster).toBe("Seller situations");
+  });
+
+  it("situations don't earn map-pack visits (Google shows articles for them)", () => {
+    if (!r.ok) throw new Error(r.errors.join("; "));
+    // #1 × (plain 500 + "we buy houses denver" 90) × 15% = 89 (situations and Golden left out).
+    expect(r.data.sites[0]?.packVisits.value).toBe(89);
   });
 });

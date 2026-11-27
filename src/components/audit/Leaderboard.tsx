@@ -1,7 +1,7 @@
 // Search-visit leaderboard: who gets the most estimated visits from Google.
 // When Semrush ran too, its estimate sits beside DataForSEO's (never merged).
-// Optional: a modeled revenue column (visits × visit-to-job rate × job value) and a dashed
-// "goal" row showing where the client could sit.
+// Optional: a modeled revenue column (visits × visit-to-job rate × job value). Competitors are
+// numbered 1-5; the client sits below them with its overall place, then the dashed goal row.
 
 import type { LeaderRow } from "@/lib/audit/compute";
 import { fmtNum, fmtUsd } from "@/lib/audit/format";
@@ -16,11 +16,11 @@ export interface GoalRow {
 type Row = (LeaderRow & { goal?: false }) | (GoalRow & { goal: true });
 
 export function Leaderboard({ rows, showSemrush, goal }: { rows: LeaderRow[]; showSemrush: boolean; goal?: GoalRow }) {
-  const all: Row[] = [...rows];
-  if (goal) {
-    const at = all.findIndex((r) => (r.visits ?? -1) < goal.visits);
-    all.splice(at === -1 ? all.length : at, 0, { ...goal, goal: true });
-  }
+  // Like the agency's own audits: competitors ranked #1-5, then the business pinned below with
+  // its real place among everyone, then the goal (never mixed into the ranking).
+  const measuredRank = new Map(rows.filter((r) => r.visits !== null).map((r, i) => [r.domain, i + 1]));
+  const all: Row[] = [...rows.filter((r) => !r.isClient), ...rows.filter((r) => r.isClient)];
+  if (goal) all.push({ ...goal, goal: true });
   const max = Math.max(1, ...all.map((r) => r.visits ?? 0));
   const showValue = rows.some((r) => r.trafficValueUsd !== null);
   const showRevenue = rows.some((r) => r.revenueMo !== null);
@@ -59,10 +59,11 @@ export function Leaderboard({ rows, showSemrush, goal }: { rows: LeaderRow[]; sh
           }
           // Not measured = no place: listing it below the client would claim the client beats it.
           const measured = r.visits !== null;
-          if (measured) place++;
+          if (measured && !r.isClient) place++;
+          const youAt = measuredRank.get(r.domain);
           return (
             <tr key={r.domain} className={r.isClient ? "you" : undefined}>
-              <td>{measured ? place : "–"}</td>
+              <td>{r.isClient ? (youAt ? `#${youAt}` : "–") : measured ? place : "–"}</td>
               <td>{r.name}</td>
               <td>
                 <div className={`audit-bar${r.isClient ? " you" : ""}`}>

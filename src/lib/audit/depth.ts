@@ -274,12 +274,42 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
   return out;
 }
 
-/** The group a search is shown under: its town, "Near me", the state, or "General". */
+/**
+ * Home buyers ("we buy houses", "sell my house fast", "cash home buyers"): sellers also search
+ * their situation ("sell inherited house", "avoid foreclosure"). The agency's own audits count
+ * these as demand; they name no town, so they are counted from the home town.
+ */
+const HOME_BUYER = /\b(we buy (houses|homes)|buys? (houses|homes)|sell my (house|home)|cash (home|house)s? buyers?|(home|house) buyers?|sell (my )?(house|home) fast)\b/;
+export const SELLER_SITUATIONS = [
+  "sell inherited house",
+  "sell house as is",
+  "sell house in foreclosure",
+  "avoid foreclosure",
+  "sell house during divorce",
+  "sell house with tenants",
+  "sell house that needs repairs",
+  "sell fire damaged house",
+  "sell house behind on mortgage",
+  "cash offer for house",
+  "sell probate house",
+  "sell house with code violations",
+] as const;
+const SITUATION = /\b(inherit\w*|foreclos\w*|divorce|probate|as is|tenants?|needs repairs|fire damage\w*|water damage\w*|behind on (mortgage|payments)|code violations?|tax liens?|bankruptcy|cash offer)\b/;
+
+/** Situation searches worth adding for this business (none unless it buys houses). */
+export function situationSearches(niche: string, services: string[]): string[] {
+  return [niche, ...services].some((x) => HOME_BUYER.test(x.toLowerCase())) ? [...SELLER_SITUATIONS] : [];
+}
+
+/** The group a search is shown under: its town, "Near me", the state, "Seller situations" or "General". */
 export function groupOf(keyword: string, markets: Market[], state: string): string {
   const m = marketOf(keyword, markets);
   if (m) return m.label;
   if (` ${keyword} `.includes(" near me ")) return "Near me";
   if (` ${keyword} `.includes(` ${stateName(state).toLowerCase()} `)) return stateName(state);
+  // Foreclosure, inheritance and probate are about a property on their own; the rest ("as is",
+  // "tenants", "cash offer") only with a house in the search.
+  if (/\b(foreclos\w*|inherit\w*|probate)\b/.test(keyword) || (/\b(house|home|property)\b/.test(keyword) && SITUATION.test(keyword))) return "Seller situations";
   return "General";
 }
 

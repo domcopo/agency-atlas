@@ -28,7 +28,8 @@ export function sumFound(figs: Fig[]): number | null {
 
 /** Local searches/month: "near me" + the home town's plain searches + every market's own searches. */
 export function localDemand(data: AuditData): number | null {
-  return sumFound([data.nearMeSearches, ...(data.homeTownSearches ? [data.homeTownSearches] : []), ...data.demand.map((d) => d.searches)]);
+  const extra = [data.homeTownSearches, data.nearbySearches, data.situationSearches].filter((f): f is NonNullable<typeof f> => !!f);
+  return sumFound([data.nearMeSearches, ...extra, ...data.demand.map((d) => d.searches)]);
 }
 
 /** Cost per click weighted by search volume (keywords missing either figure are skipped). */

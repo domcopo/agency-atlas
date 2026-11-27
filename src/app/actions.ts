@@ -3695,7 +3695,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.intake!;
       // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
       // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
-      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 20).map((t) => t.label), others: statePlaces(intake.state) };
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 40).map((t) => t.label), others: statePlaces(intake.state) };
       const plan = planSeoRun(intake, audit.sections, area);
       budgetUsd = plan.estimateUsd;
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;

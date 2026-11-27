@@ -435,6 +435,8 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
 
   const nearMeSearches = fig(c, r.nearMeSearches, "Near-me searches", [0, 10_000_000]);
   const homeTownSearches = r.homeTownSearches === undefined ? undefined : fig(c, r.homeTownSearches, "Home-town searches", [0, 10_000_000]);
+  const nearbySearches = r.nearbySearches === undefined ? undefined : fig(c, r.nearbySearches, "Nearby-town searches", [0, 10_000_000]);
+  const situationSearches = r.situationSearches === undefined ? undefined : fig(c, r.situationSearches, "Seller-situation searches", [0, 10_000_000]);
   // D1 homepage check (optional): plain text only, short, no contact details.
   // A line that fails the text rules is left out (with a warning) rather than sinking the audit.
   const ins = obj(r.inspection) ?? {};
@@ -459,6 +461,8 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     demand,
     nearMeSearches,
     ...(homeTownSearches ? { homeTownSearches } : {}),
+    ...(nearbySearches ? { nearbySearches } : {}),
+    ...(situationSearches ? { situationSearches } : {}),
     keywords,
     visitsScope: r.visitsScope === "national" ? "national" : "local",
     organicDepth: 100,
