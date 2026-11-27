@@ -2834,8 +2834,8 @@ select test.expect($$select * from public.role_guide_parts$$, -1, 'signed out ca
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7cf. Work hub (0038): only the owner and managers set "Done when"; developers read it on
---      their own items. Dismissed suggestions: owner/managers only, add-only, stamped by
+-- 7cf. Work hub (0038, 0039): only the owner and managers set "Done when"; developers read it on
+--      their own items (also through my_work after 0039). Dismissed suggestions: owner/managers only, add-only, stamped by
 --      the database, one per client + rule + reason. Two-factor everywhere.
 -- ---------------------------------------------------------------------------
 begin;
@@ -2870,6 +2870,33 @@ select test.expect($$select * from public.actions where id = '00000000-0000-0000
 select test.expect($$update public.actions set done_when = 'whenever' where id = '00000000-0000-0000-0000-00000000ae01'$$, -1, 'a developer cannot change Done when');
 select test.expect($$select * from public.work_suggestion_dismissals$$, 0, 'a developer cannot read dismissals');
 select test.expect($$insert into public.work_suggestion_dismissals (client_id, rule, reason) values ('00000000-0000-0000-0000-0000000000c1', 'risk', 'x (test)')$$, -1, 'a developer cannot dismiss suggestions');
+commit;
+
+-- 0039: developers see Done when through my_work, on their own items only.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a2","aal":"aal2"}';
+select test.expect($$update public.actions set done_when = 'Results reviewed with the client (test)' where id = '00000000-0000-0000-0000-00000000ac01'$$, 1, 'manager sets Done when on an item that is not the developer''s');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal2"}';
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000ae01' and done_when like 'Form sends%'$$, 1, 'my_work shows a developer Done when on their own work order');
+select test.expect($$select * from public.my_work where done_when is not null$$, 1, 'my_work shows only the developer''s own Done when');
+select test.expect($$select * from public.my_work where id = '00000000-0000-0000-0000-00000000ac01'$$, 0, 'my_work never shows someone else''s item or its Done when');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a5","aal":"aal2"}';
+select test.expect($$select * from public.my_work where done_when is not null$$, 0, 'another developer sees no one else''s Done when');
+commit;
+
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a3","aal":"aal1"}';
+select test.expect($$select * from public.my_work where done_when is not null$$, 0, 'no Done when from my_work without two-factor');
 commit;
 
 begin;

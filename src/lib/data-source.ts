@@ -1140,7 +1140,8 @@ export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
     const db = await createDatabaseClient();
     const base = "id, kind, title, notes, priority, status, due_on, done_at, created_at, client_slug, client_name";
     const read = (cols: string) => db.from("my_work").select(cols).order("due_on", { ascending: true, nullsFirst: false });
-    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, internal`);
+    let { data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, internal, done_when`);
+    if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}, internal`)); // before 0039
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}, ${V2_COLS}`)); // before 0022
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}, ${STEPS_DONE_COL}`)); // before 0017
     if (error) ({ data, error } = await read(`${base}, ${PROMISE_COLS}, steps, source_link, source_note, est_minutes, ${REVIEW_COLS}`)); // before 0016
@@ -1168,6 +1169,8 @@ export const getDeveloperActions = cache(async (): Promise<ClientAction[]> => {
       internal: r.internal === true,
       blockedReason: (r.blocked_reason as string | null) ?? null,
       promisedOn: (r.promised_on as string | null) ?? null,
+      // "Done when" (0039 adds it to my_work); read only, the owner or a manager writes it.
+      doneWhen: typeof r.done_when === "string" ? r.done_when : null,
     }));
   }
   return mine;
