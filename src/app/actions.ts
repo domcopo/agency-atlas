@@ -22,6 +22,7 @@ import { asGuideRole, canEditGuide, GUIDE_LIMITS } from "@/lib/role-guides";
 import { asIdeaStatus, checkGoal, checkIdea, IDEA_RULES } from "@/lib/ideas";
 import { matchClient } from "@/lib/billing";
 import {
+  getAuditResultsBlock,
   getAiStatus,
   getAuditSettings,
   getAtlasQuestions,
@@ -92,8 +93,10 @@ import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readMaps, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
+import { heatmapBlock, heatmapId, heatPendingOf, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
@@ -3573,7 +3576,7 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
     if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
     const plan = planSeoRun(audit.intake, audit.sections);
     estimate = plan.estimateUsd;
-    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", "Checking and saving"])];
+    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", ...(wantsHeatMap(audit) ? [HEAT_STEP] : []), "Checking and saving"])];
   }
 
   const db = await createDatabaseClient();
@@ -3605,7 +3608,8 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
 
 async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels: string[]) {
   const db = await createDatabaseClient();
-  const deadline = Date.now() + RUN_DEADLINE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + RUN_DEADLINE_MS;
   const state = new Map(stepLabels.map((l) => [l, "waiting" as "waiting" | "working" | "done" | "skipped"]));
   const answers = new Map<string, DfsAnswer>();
   const problems: string[] = [];
@@ -3613,6 +3617,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let calls = 0;
   let aiUsd: number | null = null;
   let wordsNote: string | null = null;
+  let heatNote: string | null = null;
   // What this run may spend in total (its estimate, set aside before it started). A failed
   // lookup is retried once only while the spend stays inside it.
   let budgetUsd = 0;
@@ -3699,10 +3704,20 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const area = { nearby: nearbyTowns(intake.state, intake.hqTown, RUN_RULES.nearbyTowns, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).map((t) => t.label), others: statePlaces(intake.state) };
       const plan = planSeoRun(intake, audit.sections, area);
       budgetUsd = plan.estimateUsd;
+      // LeadSnap heat map: started as soon as the business's Google listing is known (it takes
+      // LeadSnap a few minutes), collected after the notes.
+      const heatTerm = mapTermOf(intake);
+      const heatOn = wantsHeatMap(audit);
+      let heatStart: Promise<HeatStart> | null = null;
+      const startHeat = (answer: DfsAnswer | undefined) => {
+        const place = heatOn && !heatStart ? readPlace(answer, intake.domain) : null;
+        if (place) heatStart = startLeadSnapHeat(place, heatTerm);
+      };
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
       if (answers.size === 0) return await finish("failed", keptNote());
+      startHeat(answers.get("maps:area"));
       const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
@@ -3714,6 +3729,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
+      startHeat(answers.get(`maps:${intake.domain}`));
       const rankedVolume = plan.rankedVolume(answers, sites.map((x) => x.domain), universe);
       if (rankedVolume) await runLookups([rankedVolume]);
       // Without the search counts or any site's rankings the pages would be mostly "not found":
@@ -3734,6 +3750,18 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         } else wordsNote = `Claude's notes weren't written (${result.message})`;
       }
       state.set("Writing the notes", "done");
+      if (heatOn) {
+        state.set(HEAT_STEP, "working");
+        await saveSteps();
+        const got = heatStart ? await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, startedAt + LEADSNAP_RULES.waitUntilMs) : { problem: "the business's Google listing wasn't found in Maps." };
+        if ("heat" in got) {
+          block = withHeatmap(block, got.heat);
+          state.set(HEAT_STEP, "done");
+        } else if ("pending" in got) {
+          block = { ...block, leadsnapPending: { id: got.pending, term: heatTerm } };
+          heatNote = "The LeadSnap heat map is still being made: tap “Get heat map” in a few minutes.";
+        } else heatNote = `No heat map: ${got.problem}`;
+      }
       state.set("Checking and saving", "working");
       const settings = await getAuditSettings();
       const config = buildAuditConfig(intake, settings.agency, audit.createdAt.slice(0, 10));
@@ -3747,10 +3775,98 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
+    const notes = [wordsNote, heatNote].filter(Boolean).join(" ") || null;
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${notes ? ` ${notes}` : ""}` : notes);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
   }
+}
+
+// ---------------------------------------------------------------------------
+// LeadSnap heat maps (approved 2026-11-27): one 7×7 Google Maps grid per run, through the
+// heat-map-only module (src/lib/audit/sources/leadsnap.ts). Uses LeadSnap credits; a heat map
+// of the same listing and search from the last 7 days is reused instead.
+// ---------------------------------------------------------------------------
+
+const HEAT_STEP = "Heat map (LeadSnap)";
+
+function wantsHeatMap(audit: SavedAudit): boolean {
+  return audit.kind !== "ads" && !!audit.intake?.modules.leadsnap && audit.sections.includes("heatmap") && isLeadSnapConfigured();
+}
+
+type HeatStart = { id: number } | { problem: string };
+
+async function startLeadSnapHeat(place: { placeId: string; lat: number; lng: number }, term: string): Promise<HeatStart> {
+  try {
+    const recent = reusableHeatmap(await listRecentHeatmaps(place.placeId, term), new Date());
+    if (recent) return { id: recent };
+    const id = heatmapId(await createHeatmap({ placeId: place.placeId, keyword: term, lat: place.lat, lng: place.lng, size: LEADSNAP_RULES.gridSize, spacingMiles: LEADSNAP_RULES.spacingMiles, points: planGrid(place.lat, place.lng) }));
+    return id ? { id } : { problem: "LeadSnap didn't say which heat map it started." };
+  } catch (e) {
+    return { problem: e instanceof LeadSnapError ? e.message : "LeadSnap couldn't start the heat map." };
+  }
+}
+
+type HeatGot = { heat: Record<string, unknown> } | { pending: number } | { problem: string };
+
+/** Looks every few seconds until the heat map is done or `until` (a time) passes. */
+async function collectLeadSnapHeat(start: HeatStart, term: string, retrieved: string, until: number): Promise<HeatGot> {
+  if ("problem" in start) return start;
+  for (;;) {
+    try {
+      const read = readHeatmap(await getHeatmap(start.id));
+      if (!read) return { problem: "LeadSnap's heat map couldn't be read." };
+      if (read.status === "failed") return { problem: "LeadSnap couldn't finish the heat map." };
+      if (read.status === "ready") {
+        let leaders: ReturnType<typeof readLeaders> = [];
+        try {
+          leaders = readLeaders(await getHeatmapCompetitors(start.id), read.placeId);
+        } catch {
+          // The grid still counts without the list of leaders.
+        }
+        return { heat: heatmapBlock(read, term, retrieved, leaders) };
+      }
+    } catch (e) {
+      if (!(e instanceof LeadSnapError && e.retryable)) return { problem: e instanceof LeadSnapError ? e.message : "LeadSnap's heat map couldn't be read." };
+    }
+    if (Date.now() + LEADSNAP_RULES.pollEveryMs > until) return { pending: start.id };
+    await new Promise((r) => setTimeout(r, LEADSNAP_RULES.pollEveryMs));
+  }
+}
+
+export type HeatFetchState = { error?: string; ok?: boolean; waiting?: boolean } | undefined;
+
+/** "Get heat map": collects a LeadSnap heat map that wasn't finished when the run ended. */
+export async function fetchAuditHeatmap(_prev: HeatFetchState, form: FormData): Promise<HeatFetchState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can do that." };
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return { error: "Unknown audit." };
+  const audit = await getSavedAudit(id);
+  if (!audit?.intake || audit.kind === "ads") return { error: "Couldn't find that audit." };
+  if (!isLead(me.role) && (audit.createdBy !== me.userId || audit.archived)) return { error: "You can do this only for your own audits that aren't archived." };
+  if (!isLeadSnapConfigured()) return { error: "LeadSnap isn't connected (the token isn't set on the server)." };
+  const block = await getAuditResultsBlock(id);
+  const pending = heatPendingOf(block);
+  if (!block || !pending) return { error: "There's no heat map waiting for this audit. Run the audit again to make one." };
+  const got = await collectLeadSnapHeat({ id: pending.id }, pending.term, nyDate(new Date()), 0);
+  if ("pending" in got) return { waiting: true };
+  if ("problem" in got) return { error: `No heat map: ${got.problem}` };
+  const next = withHeatmap(block as Record<string, unknown>, got.heat);
+  const settings = await getAuditSettings();
+  const config = buildAuditConfig(audit.intake, settings.agency, audit.createdAt.slice(0, 10));
+  const checked = parseSeoResults(next, { intake: audit.intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today: nyDate(new Date()) });
+  if (!checked.ok) return { error: `The heat map didn't pass the checks: ${checked.errors[0] ?? "unknown"}` };
+  const db = await createDatabaseClient();
+  try {
+    await saveRunResults(db, id, next, { competitors: checked.competitors }, checked.summary.retrieved);
+  } catch {
+    return { error: "Couldn't save the heat map to the audit." };
+  }
+  revalidatePath(`/audits/${id}`);
+  revalidatePath(`/audit/${id}`);
+  return { ok: true };
 }
 
 async function saveRunResults(db: Awaited<ReturnType<typeof createDatabaseClient>>, auditId: string, block: Record<string, unknown>, config: Record<string, unknown>, retrieved: string) {

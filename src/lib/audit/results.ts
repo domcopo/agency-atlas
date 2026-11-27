@@ -405,7 +405,19 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
         }),
       );
       const spacing = typeof o.spacingMiles === "number" && o.spacingMiles > 0 && o.spacingMiles <= 20 ? o.spacingMiles : 1;
-      grids.push({ term, size, spacingMiles: spacing, kind: "maps", ranks, source: gs, retrieved: gd });
+      // Who holds the top 3 most often across the grid (names only, at most 3).
+      const leaders = list(o.leaders)
+        .slice(0, 3)
+        .map((l) => {
+          const lo = obj(l) ?? {};
+          const name = text(c, lo.name, `Heat map "${term}" leader`, 60);
+          const top3 = lo.top3;
+          const points = lo.points;
+          const ok = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= size * size;
+          return name && ok(top3) && ok(points) && top3 <= points ? { name, top3, points } : null;
+        })
+        .filter((l): l is { name: string; top3: number; points: number } => l !== null);
+      grids.push({ term, size, spacingMiles: spacing, kind: "maps", ranks, ...(leaders.length ? { leaders } : {}), source: gs, retrieved: gd });
     } else c.errors.push(`Heat map ${i + 1}: kind must be "pack" or "maps".`);
   }
 

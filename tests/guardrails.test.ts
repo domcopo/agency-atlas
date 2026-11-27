@@ -62,7 +62,10 @@ describe("Phase 1 guardrails", () => {
   // also make calls; it is checked line by line in "DataForSEO read-only lookups" below.
   const DFS_MODULE = "src/lib/audit/sources/dataforseo.ts";
 
-  it("makes no network calls from app code (except the read-only GoHighLevel and DataForSEO modules)", () => {
+  // Approved exception (owner, 2026-11-27): the LeadSnap heat-map module; checked in "LeadSnap heat maps only" below.
+  const LS_MODULE = "src/lib/audit/sources/leadsnap.ts";
+
+  it("makes no network calls from app code (except the read-only GoHighLevel and DataForSEO modules and the LeadSnap heat-map module)", () => {
     const hits = findMatches([
       /\bfetch\s*\(/,
       /XMLHttpRequest/,
@@ -71,7 +74,7 @@ describe("Phase 1 guardrails", () => {
       /sendBeacon/,
       /\baxios\b/,
     ]);
-    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`) && !h.startsWith(`${DFS_MODULE}:`))).toEqual([]);
+    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`) && !h.startsWith(`${DFS_MODULE}:`) && !h.startsWith(`${LS_MODULE}:`))).toEqual([]);
   });
 
   it("contains no write-style HTTP methods (DataForSEO's read-only POST is the one approved exception)", () => {
@@ -1221,5 +1224,53 @@ describe("DataForSEO read-only lookups (approved 2026-11-25, docs/AUDIT_RUN_PLAN
     expect(users.every((f) => ["src/app/actions.ts", "src/app/(app)/audits/[id]/page.tsx", "src/lib/audit/run.ts"].includes(f))).toBe(true);
     const words = readFileSync(join(ROOT, "src/lib/audit/words.ts"), "utf8");
     expect(words).not.toMatch(/\btools\s*:|tool_choice|fetch\(|dfsLookup|sources\/dataforseo/);
+  });
+});
+
+describe("LeadSnap heat maps only (approved 2026-11-27)", () => {
+  const LS_MODULE = "src/lib/audit/sources/leadsnap.ts";
+  const ls = readFileSync(join(ROOT, LS_MODULE), "utf8");
+
+  it("only the LeadSnap module reads its token or names its host", () => {
+    expect(contents.filter(({ text }) => /process\.env\.LEADSNAP_/.test(text)).map(({ file }) => file)).toEqual([LS_MODULE]);
+    expect(findMatches([/app\.leadsnap\.com/i]).map((h) => h.split(":")[0])).toEqual([LS_MODULE]);
+    expect(findMatches([/NEXT_PUBLIC_LEADSNAP/])).toEqual([]);
+  });
+
+  it("one call, one fixed host, never follows a redirect", () => {
+    expect(ls.match(/\bfetch\s*\(/g)?.length).toBe(1);
+    expect(new Set([...ls.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]))).toEqual(new Set(["https://app.leadsnap.com"]));
+    expect(ls).toMatch(/redirect:\s*"error"/);
+    expect(ls).toMatch(/if \(!ALLOWED\.some\(/);
+    expect(ls).not.toMatch(/["'`](PUT|PATCH|DELETE)["'`]/);
+  });
+
+  it("the allowed list is heat maps only: list, create, read, competitors", () => {
+    const allowed = ls.slice(ls.indexOf("const ALLOWED"), ls.indexOf("];", ls.indexOf("const ALLOWED")));
+    const rows = [...allowed.matchAll(/\["(GET|POST)",\s*\/(.+?)\/\]/g)].map((m) => `${m[1]} ${m[2]}`);
+    expect(rows).toEqual([
+      "GET ^\\/public\\/api\\/v1\\/heatmaps$",
+      "POST ^\\/public\\/api\\/v1\\/heatmaps$",
+      "GET ^\\/public\\/api\\/v1\\/heatmaps\\/\\d{1,12}$",
+      "GET ^\\/public\\/api\\/v1\\/heatmaps\\/\\d{1,12}\\/competitors$",
+    ]);
+    // Nothing else in LeadSnap's API is ever named (posts, reviews, listings, contacts, calls…).
+    expect(ls).not.toMatch(/\/(contacts|phone-calls|posts|reviews|review-settings|locations|companies|citations|form-submissions|schedules|gsc)\b/);
+  });
+
+  it("the token is never logged or returned", () => {
+    expect(ls).not.toMatch(/console\.(log|warn|error)/);
+    // The token is returned once, by the private reader, and only ever used in the Authorization header.
+    expect(ls.match(/return\s+t\b/g)?.length).toBe(1);
+    expect(ls.slice(ls.indexOf("function token()"), ls.indexOf("function token()") + 250)).toMatch(/return\s+t;/);
+    expect(ls).not.toMatch(/export\s+(const|function)\s+token\b/);
+    expect(ls.match(/\btoken\(\)/g)?.length).toBe(3); // defined, isLeadSnapConfigured, call
+  });
+
+  it("only the audit run and the audit page use the module", () => {
+    const users = contents.filter(({ text }) => /sources\/leadsnap"/.test(text)).map(({ file }) => file).sort();
+    expect(users).toEqual(["src/app/(app)/audits/[id]/page.tsx", "src/app/actions.ts"]);
+    // The words step never sees or calls it.
+    expect(readFileSync(join(ROOT, "src/lib/audit/words.ts"), "utf8")).not.toMatch(/leadsnap/i);
   });
 });

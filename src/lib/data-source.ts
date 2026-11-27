@@ -2755,7 +2755,7 @@ export async function getAiBudgetLeft(): Promise<number | null> {
 }
 
 /** The attached results block for one audit (read as the signed-in person), or null. */
-async function getAuditResultsBlock(id: string): Promise<unknown | null> {
+export async function getAuditResultsBlock(id: string): Promise<unknown | null> {
   const db = await createDatabaseClient();
   const { data, error } = await db.from("audits").select("data").eq("id", id).maybeSingle();
   if (error || !data?.data || typeof data.data !== "object") return null;

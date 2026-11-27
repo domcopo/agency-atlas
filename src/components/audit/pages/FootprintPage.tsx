@@ -19,22 +19,41 @@ export function FootprintPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   // Top three competitors by footprint, plus the client (always shown).
   const rows = [...sites.filter((s) => !s.isClient).slice(0, 3), ...sites.filter((s) => s.isClient)];
   const g = data.grids[0];
+  const kinds = new Set(data.grids.map((x) => x.kind ?? "maps"));
+  const mixed = kinds.size > 1;
+  const maps = data.grids.find((x) => (x.kind ?? "maps") === "maps");
+  const fromLeadSnap = maps?.source === "leadsnap";
   const stateName = nameOfState(config.map.state);
   return (
-    <Slide bundle={bundle} page={pageNo ?? 3} pageCount={pageCount} title="Competitor geographic footprint" aside={`${stateName} · ${g?.kind === "pack" ? "local 3-pack by city" : "Maps geo-grid"} + ranking pages`}>
+    <Slide bundle={bundle} page={pageNo ?? 3} pageCount={pageCount} title="Competitor geographic footprint" aside={`${stateName} · ${mixed ? "Maps geo-grid + 3-pack by city" : g?.kind === "pack" ? "local 3-pack by city" : "Maps geo-grid"} + ranking pages`}>
       <div className="audit-row" style={{ flex: 1 }}>
         <div className="audit-card" style={{ flex: 1.3, display: "flex", flexDirection: "column", gap: 10 }}>
           <h3 style={{ margin: 0 }}>
-            {g?.kind === "pack"
-              ? `Google local 3-pack, searched from each city served`
-              : `Google Maps rank at ${g ? g.size * g.size : 0} points (~${g?.spacingMiles ?? 1} mi apart) around ${config.company.hqTown}`}
+            {mixed
+              ? `Google Maps rank around ${config.company.hqTown}${fromLeadSnap ? " (LeadSnap)" : ""}, and the 3-pack by city`
+              : g?.kind === "pack"
+                ? `Google local 3-pack, searched from each city served`
+                : `Google Maps rank at ${g ? g.size * g.size : 0} points (~${g?.spacingMiles ?? 1} mi apart) around ${config.company.hqTown}${fromLeadSnap ? " (LeadSnap)" : ""}`}
           </h3>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${data.grids.length}, 1fr)`, gap: g?.kind === "pack" ? 14 : 18 }}>
             {data.grids.map((gr) => (
               <HeatGrid key={gr.term} grid={gr} />
             ))}
           </div>
-          <HeatLegend kind={g?.kind ?? "maps"} />
+          {[...kinds].map((k) => (
+            <HeatLegend key={k} kind={k} />
+          ))}
+          {maps?.leaders?.length ? (
+            <p style={{ fontSize: 11, color: "var(--a-muted)", margin: 0 }}>
+              Most often in the Maps top 3{mixed ? ` (${maps.size * maps.size} points, ~${maps.spacingMiles} mi apart)` : ""}:{" "}
+              {maps.leaders.map((l, n) => (
+                <span key={l.name}>
+                  {n ? " · " : ""}
+                  <b>{l.name}</b> {l.top3} of {l.points}
+                </span>
+              ))}
+            </p>
+          ) : null}
           {data.narrative.pageNotes.footprint && <div className="audit-callout" style={{ marginTop: "auto" }}><span className="audit-tag info">What the grid shows</span>{data.narrative.pageNotes.footprint}</div>}
         </div>
         <div className="audit-card" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>

@@ -98,6 +98,8 @@ export interface GeoGrid {
   ranks: (number | null)[][];
   /** Optional name for each cell (pack checks: the city). */
   cellLabels?: (string | null)[][];
+  /** Maps grids (LeadSnap): the businesses most often in the top 3 across the grid. */
+  leaders?: { name: string; top3: number; points: number }[];
   source: SourceId;
   retrieved: string;
 }

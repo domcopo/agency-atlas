@@ -391,6 +391,22 @@ export function readProfile(a: DfsAnswer | undefined, domain: string): ProfileRe
   return null;
 }
 
+/**
+ * The business's Google listing (ID and pin) from a Maps search, matched by its website only,
+ * never a look-alike name. LeadSnap's heat map needs both.
+ */
+export function readPlace(a: DfsAnswer | undefined, domain: string): { placeId: string; lat: number; lng: number } | null {
+  for (const it of arr(obj(a?.result[0]).items)) {
+    const o = obj(it);
+    if (siteDomain(o) !== domain) continue;
+    const placeId = typeof o.place_id === "string" && /^[A-Za-z0-9_-]{10,200}$/.test(o.place_id) ? o.place_id : null;
+    const lat = num(o.latitude);
+    const lng = num(o.longitude);
+    if (placeId && lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { placeId, lat, lng };
+  }
+  return null;
+}
+
 export function readSpeed(a: DfsAnswer | undefined): number | null {
   const score = num(obj(obj(obj(a?.result[0]).categories).performance).score);
   return score === null || score < 0 || score > 1 ? null : Math.round(score * 100);

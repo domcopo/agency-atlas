@@ -58,6 +58,7 @@ Internal, mobile-first command center (Next.js 16 + Supabase Pro, hosted on Verc
 | Sales role and screens | `docs/SALES_PLAN.md`, `docs/SALES_SIMPLIFY_PLAN.md` (lead page) |
 | Attach audit results (paste Claude's reply; `ATLAS-RESULTS v1` block checked field by field) | `docs/AUDIT_RESULTS_PLAN.md`, `src/lib/audit/results.ts` |
 | Run audit in Atlas (DataForSEO read-only lookups, AI writes words only, caps, `0035`) | `docs/AUDIT_RUN_PLAN.md`, `src/lib/audit/run.ts`, `src/lib/audit/sources/dataforseo.ts` (approved POST exception) |
+| LeadSnap heat maps in audit runs (7×7 Maps grid, heat-map-only module, 7-day reuse, "Get heat map") | `docs/AUDIT_RUN_PLAN.md` (LeadSnap section), `src/lib/audit/leadsnap.ts`, `src/lib/audit/sources/leadsnap.ts` (approved exception, 2026-11-27) |
 | Audits area (SEO + Google Ads doors), audit builder (checkpoints, saved audits, caps, custom prompt), Google Ads audit (`0029`, `src/lib/audit/ads.ts`), sales leaderboard (`0026` view, `src/lib/leaderboard.ts`) | `docs/AUDITS_HUB_ADS_LEADERBOARD_PLAN.md`, `docs/AUDIT_BUILDER_PLAN.md` (`0023`) |
 | Scout: local prospect finder, walk-ins, shared pool, caps | `docs/SCOUT_PLAN.md` (`0024`), `src/lib/scout.ts` |
 | Client care: plan tiers, Add client, owner-only amounts, VIP/backup, journey (27 touches), status changes, client memory, restart + daily goals, AI next moves/drafts | `docs/CLIENT_CARE_PLAN.md` (`0025`, `0028`, `0031`–`0033`), `src/lib/care.ts`, `src/lib/journey.ts` |

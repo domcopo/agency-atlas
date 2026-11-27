@@ -81,3 +81,12 @@ Status: **E1 approved and built 2026-11-25** on branch `audit-results` (with Att
 - Builder: "Nearby towns" chips (within 30 miles of the home town, closest first, other states included, e.g. "Sharon, PA"); each city shows its miles from home; past 30 miles it says "far from <home>, keep it only if they really serve there"; a name not in the audit's state suggests the same-name town nearby across the line first.
 - Other-state towns are written "Sharon, PA", checked against that state's list on save, and searched from that state on a run (keywords use the plain town name).
 
+
+## LeadSnap heat maps (approved by the owner 2026-11-27)
+
+- What: one Google Maps heat map per SEO run, a 7×7 grid (49 points, 2 miles apart) centred on the business's Google listing, for the audit's main map term (`mapTermOf`). Shown on the Footprint page beside the 3-pack-by-city check, with the 3 businesses most often in the Maps top 3. Source "LeadSnap", dated.
+- When: only if the audit has the "LeadSnap" source on, the heat map page picked, and `LEADSNAP_API_KEY` set in Vercel (Sensitive, Production). The token should have NO extra write permissions.
+- Module: `src/lib/audit/sources/leadsnap.ts` is the only file that talks to LeadSnap. Allowed: list recent heat maps (reuse), create a heat map (POST; spends LeadSnap credits, adds a record in the LeadSnap account), read one, read its competitors. Everything else (posts, reviews, listings, contacts, calls, companies) is refused in code and pinned by `tests/guardrails.test.ts`.
+- Credits: a heat map of the same listing and search from the last 7 days is reused instead of making a new one. LeadSnap credits are not counted in Atlas's dollar caps (their cost per heat map isn't published; LeadSnap refuses a scan when credits run out).
+- Flow: the listing ID and pin come from DataForSEO's Maps answers (matched by website only). The heat map starts as soon as they're known, and the run waits up to 150 s from its start. If LeadSnap isn't done, the block keeps `leadsnapPending` and the audit page shows "Get heat map" (`fetchAuditHeatmap`, no new credits).
+- Reading: `src/lib/audit/leadsnap.ts` (pure, tested in `tests/audit-leadsnap.test.ts`). Each point is placed by its position around the centre; anything not ranked 1–20 is "not in the top 20". Only business names leave the answer (no addresses, phones or websites). The results checker checks the grid and leaders again before saving or drawing.

@@ -282,7 +282,7 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
               <fieldset className="space-y-1.5">
                 <legend className="text-xs text-muted">Data sources</legend>
                 <SourceToggle name="mod_dataforseo" label="DataForSEO" detail="Search volume, rankings, competitors, backlinks." on={i.modules?.dataforseo ?? true} />
-                <SourceToggle name="mod_leadsnap" label="LeadSnap" detail="Maps heat-map grid, when an export is available." on={i.modules?.leadsnap ?? true} />
+                <SourceToggle name="mod_leadsnap" label="LeadSnap" detail="Google Maps heat map (7×7 grid) from your LeadSnap account when the audit runs. Uses LeadSnap credits." on={i.modules?.leadsnap ?? true} />
                 <SourceToggle name="mod_semrush" label="Semrush" detail="Shown side by side with DataForSEO, never merged. Off unless needed." on={i.modules?.semrush ?? false} />
               </fieldset>
               <label className={label}>

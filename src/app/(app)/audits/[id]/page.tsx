@@ -14,6 +14,8 @@ import { unknownPlaces } from "@/lib/audit/places-list";
 import { capsLine } from "@/lib/audit/caps-line";
 import { planSeoRun } from "@/lib/audit/run";
 import { isDataForSeoConfigured } from "@/lib/audit/sources/dataforseo";
+import { heatPendingOf } from "@/lib/audit/leadsnap";
+import { isLeadSnapConfigured } from "@/lib/audit/sources/leadsnap";
 import { CopyButton } from "@/components/cards/CopyButton";
 import { Pill } from "@/components/labels/labels";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
@@ -21,7 +23,7 @@ import { RoleNotice } from "@/components/shell/RoleNotice";
 import { stateName } from "@/lib/audit/geo";
 import { buildAuditPrompt } from "@/lib/audit/prompt";
 import { AUDIT_SECTIONS, deckPages } from "@/lib/audit/sections";
-import { getAuditSettings, getAuditSpend, getLatestAuditRun, getMember, getSavedAudit, usesDatabase } from "@/lib/data-source";
+import { getAuditResultsBlock, getAuditSettings, getAuditSpend, getLatestAuditRun, getMember, getSavedAudit, usesDatabase } from "@/lib/data-source";
 import { formatShortDate } from "@/lib/format";
 import { isLead } from "@/lib/roles";
 
@@ -41,6 +43,8 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
   const runCard = { configured: isDataForSeoConfigured(), ready: runInfo.ready, run: runInfo.run, capsLine: capsLine(settings, spend) };
   if (audit.kind === "ads") return <AdsAuditView audit={audit} settings={settings} canEdit={canEdit} canArchive={isLead(me.role)} runCard={runCard} />;
   const i = audit.intake;
+  const heatPending = audit.hasResults && isLeadSnapConfigured() && !!heatPendingOf(await getAuditResultsBlock(audit.id));
+  const heatOn = !!i?.modules.leadsnap && audit.sections.includes("heatmap") && isLeadSnapConfigured();
   const prompt = i ? buildAuditPrompt(i, audit.sections, { agencyName: settings.agency.agencyName, plans: settings.agency.plans, perAuditUsd: settings.caps.perAuditUsd }) : "";
   const pages = deckPages(audit.sections).length;
   const extras = AUDIT_SECTIONS.filter((s) => s.kind === "prompt" && audit.sections.includes(s.id));
@@ -137,7 +141,7 @@ export default async function SavedAuditPage({ params }: { params: Promise<{ id:
               placeIssues={unknownPlaces(i.state, [i.hqTown, ...i.cities])}
               hasResults={audit.hasResults}
               retrieved={audit.dataRetrieved}
-              run={<RunAudit id={audit.id} {...runCard} estimateUsd={planSeoRun(i, audit.sections).estimateUsd} hasResults={audit.hasResults} compact />}
+              run={<RunAudit id={audit.id} {...runCard} estimateUsd={planSeoRun(i, audit.sections).estimateUsd} hasResults={audit.hasResults} heatMap={heatOn} heatPending={heatPending} compact />}
               advanced={
                 <>
               <div className="glass rounded-3xl p-4">

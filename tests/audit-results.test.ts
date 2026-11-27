@@ -162,6 +162,23 @@ describe("SEO results check", () => {
     expect(html).toContain("Peak Offers takes most Denver searches");
     expect(html).not.toContain("not pulled yet");
   });
+
+  it("a LeadSnap Maps grid with its leaders passes the check and shows beside the 3-pack", () => {
+    const b = seoBlock();
+    const grid = { term: "sell my house fast", kind: "maps", source: "leadsnap", retrieved: "2026-11-24", spacingMiles: 2, ranks: [[1, 4, null], [2, 1, 12], [null, 20, 3]], leaders: [{ name: "Peak Offers (fictional)", top3: 6, points: 9 }, { name: "bad", top3: 12, points: 9 }] };
+    (b.heatmaps as unknown[]).unshift(grid);
+    b.sources.push("leadsnap");
+    const r = seo(b);
+    if (!r.ok) throw new Error(r.errors.join(";"));
+    const maps = r.data.grids.find((g) => g.kind === "maps");
+    expect(maps?.source).toBe("leadsnap");
+    expect(maps?.leaders).toEqual([{ name: "Peak Offers (fictional)", top3: 6, points: 9 }]); // 12 of 9 is impossible: dropped
+    const html = renderToStaticMarkup(createElement(AuditDeck, { bundle: { id: "x", sample: false, config: { ...config, competitors: r.competitors }, data: r.data } }));
+    expect(html).toContain("Google Maps rank around Denver (LeadSnap), and the 3-pack by city");
+    expect(html).toContain("Most often in the Maps top 3");
+    expect(html).toContain("1 term searched from each city served");
+    expect(seoErrors((x) => (x.heatmaps as unknown[]).unshift({ ...grid, ranks: [[0, 1, 1], [1, 1, 1], [1, 1, 1]] }))).toMatch(/Maps rank must be 1–20/);
+  });
 });
 
 describe("Google Ads results check", () => {
