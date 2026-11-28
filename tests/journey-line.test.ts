@@ -15,7 +15,7 @@ import {
   type JourneyState,
   type JourneyStepRow,
 } from "@/lib/journey";
-import { actionCards, auditForClient, CARDS_SHOWN, clusterTiming, dotInitials, lineLayout, parsePipelineFilters, pipelineGroups, placeDots, reachedOut, stageCounts, type LineClient } from "@/lib/journey-line";
+import { actionCards, auditForClient, CARDS_SHOWN, LONG_END, longLineLayout, longMarkFor, longStageCounts, placeLongDots, clusterTiming, dotInitials, lineLayout, parsePipelineFilters, pipelineGroups, placeDots, reachedOut, stageCounts, type LineClient } from "@/lib/journey-line";
 import type { GhlContactTimes } from "@/lib/types";
 
 const ROOT = join(__dirname, "..");
@@ -228,6 +228,48 @@ describe("action cards", () => {
     const quiet = actionCards({ clients: [clients[2]!], journeys, steps: DEFAULT_STEPS, risks: [{ slug: "zz", problem: "x", severity: "high" }], requests: [], today, formatDay: fmt });
     expect(quiet).toEqual([]);
     expect(CARDS_SHOWN).toBe(5);
+  });
+
+  it("with upcoming on, everyone else gets their next touch as Coming up, with the stage", () => {
+    const all = actionCards({ clients, journeys, steps: DEFAULT_STEPS, risks: [], requests: [], today, formatDay: fmt, upcoming: true });
+    expect(all.map((c) => [c.slug, c.kind])).toEqual([
+      ["b", "overdue"],
+      ["d", "reached_out"],
+      ["a", "today"],
+      ["c", "upcoming"],
+    ]);
+    expect(all[3]).toMatchObject({ step: 12, stage: 2, context: expect.stringMatching(/^Due /) });
+    expect(all[2]).toMatchObject({ stage: 0 });
+  });
+});
+
+describe("long-term line", () => {
+  it("adds month marks after the 27 touches, out to 2+ years", () => {
+    const l = longLineLayout(DEFAULT_STEPS);
+    expect(l.ticks).toHaveLength(27);
+    expect(l.marks.map((m) => m.label).slice(0, 2)).toEqual(["Month 4", "Month 5"]);
+    expect(l.marks.at(-1)).toMatchObject({ key: LONG_END, label: "2+ years", stage: 8 });
+    expect(l.segments.map((s) => s.label)).toEqual(["Kickoff", "First results", "Month 2", "Month 3", "90-day wrap", "Months 4–6", "Months 7–12", "Year 2", "2+ years"]);
+    const end = l.segments.at(-1)!;
+    expect(end.from + end.width).toBeCloseTo(100, 1);
+    for (let i = 1; i < l.marks.length; i++) expect(l.marks[i]!.x).toBeGreaterThan(l.marks[i - 1]!.x);
+    expect(l.marks[0]!.x).toBeGreaterThan(l.ticks.at(-1)!.x);
+  });
+
+  it("places Grow clients by months as a client", () => {
+    expect(longMarkFor("2026-09-01", today)).toBe("m4"); // under 4 months: first Grow mark
+    expect(longMarkFor("2026-03-20", today)).toBe("m8");
+    expect(longMarkFor("2025-06-01", today)).toBe("m15"); // 17 months: last mark reached
+    expect(longMarkFor("2024-01-01", today)).toBe(LONG_END);
+    expect(longMarkFor(undefined, today)).toBe("m4");
+  });
+
+  it("keeps first-90-day clients on their touch and moves Grow clients onto month marks", () => {
+    const withStart = clients.map((c) => (c.slug === "d" ? { ...c, startDate: "2025-01-15" } : c));
+    const cl = placeLongDots(withStart, journeys, DEFAULT_STEPS, today);
+    expect(cl.map((c) => c.key)).toEqual(["1", "12", "m21"]);
+    expect(cl[2]!.dots[0]).toMatchObject({ slug: "d", stage: 7 });
+    expect(longStageCounts(cl).map((s) => s.total)).toEqual([2, 0, 1, 0, 0, 0, 0, 1, 0]);
   });
 });
 

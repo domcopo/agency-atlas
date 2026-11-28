@@ -238,3 +238,10 @@ Possible later step (not in this plan): a "heat map / GBP recommendations" recor
 2. **Migration number 0038** (0037 is already used by the audit caps fix)?
 3. **Item 7:** one-time owner action with preview (recommended) or automatic in the migration?
 4. **Survey touch:** keep 26 only (recommended) or mark 25 as survey too?
+
+## Owner changes (2026-11-28)
+
+- Today's goal is a full card again, beside **Client health** (both on the page, not in the side panel). By service is on the page under the cards. The side panel keeps Win back and Owners & next steps.
+- The cards are now **Communications needed**: every client on the journey, one card each. Urgent first (overdue, reached out, due today, at risk, VA request), then everyone else's next touch as **Coming up** (soonest first). Each card shows the stage, the touch, and a "Send:" line (the step's *What to say*). Tapping a card opens the client drawer.
+- The client drawer starts with a **Client profile**: services, plan tiers, main person, backup, client since, journey stage, last team contact, last from the client (GoHighLevel time), and the client memory notes.
+- The full pipeline opens with a bigger **Long-term journey line**: the 27 touches, then Grow carries on by months as a client: Months 4–6, Months 7–12 (monthly marks), Year 2 (months 15/18/21/24), 2+ years. Grow clients sit on the last month mark they've reached (from their client start date). Rules in `longLineLayout`, `longMarkFor`, `placeLongDots` (`src/lib/journey-line.ts`, tested). Pipeline filters apply to it.

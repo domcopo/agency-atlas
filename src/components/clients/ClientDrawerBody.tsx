@@ -6,7 +6,7 @@ import { Check, CircleDashed, Minus, MoveRight } from "lucide-react";
 import Link from "next/link";
 import { JourneyCard } from "@/components/cards/JourneyCard";
 import { getAudits, getCareTouches, getClientCareInfo, getMember } from "@/lib/data-source";
-import { cn, formatDate } from "@/lib/format";
+import { cn, describeTenure, formatDate } from "@/lib/format";
 import { deliverableLabel, JOURNEY_STAGES, missingIntake, type JourneyState, type JourneySteps, type Tick } from "@/lib/journey";
 import { auditForClient } from "@/lib/journey-line";
 import { canCare, isLead } from "@/lib/roles";
@@ -37,12 +37,53 @@ export async function ClientDrawerBody({ client, journey, steps, today, sample }
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-muted">
-        {client.services.join(" + ") || "Services not set"}
-        {client.ownerName ? ` · Main person: ${client.ownerName}` : ""}
-        {client.backupName ? ` · Backup: ${client.backupName}` : ""}
-        {client.vip ? " · VIP" : ""}
-      </p>
+      {/* Client profile: the facts a rep wants before reaching out. */}
+      <section aria-labelledby="profile-h" className="glass rounded-3xl p-4">
+        <h3 id="profile-h" className="text-sm font-semibold">
+          Client profile {client.vip && <span className="ml-1 rounded-full border border-amber/50 px-1.5 text-[10px] font-semibold text-amber">VIP</span>}
+        </h3>
+        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          {(
+            [
+              ["Services", client.services.join(" + ") || "Not set"],
+              ["Plan", client.plans?.length ? client.plans.map((p) => `${p.service}: ${p.name}`).join(" · ") : "No tier set"],
+              ["Main person", client.ownerName ?? "Nobody yet"],
+              ["Backup", client.backupName ?? "None"],
+              ["Client since", `${formatDate(client.startDate)} (${describeTenure(client.startDate, today)})`],
+              ["Journey", journey ? (journey.mode === "grow" ? "Grow (monthly rhythm)" : `${JOURNEY_STAGES[journey.stage]} · ${journey.handled} of 27 touches`) : "Not on the journey"],
+              ["Last team contact", client.lastLogged ? formatDate(client.lastLogged) : "None logged"],
+              ["Last from the client", client.ghl?.lastInboundAt ? `${formatDate(client.ghl.lastInboundAt.slice(0, 10))} (GoHighLevel time)` : "Unknown"],
+            ] as const
+          ).map(([k, v]) => (
+            <div key={k} className="min-w-0">
+              <dt className="text-[11px] font-semibold uppercase tracking-wide text-faint">{k}</dt>
+              <dd className="mt-0.5 break-words text-xs">{v}</dd>
+            </div>
+          ))}
+        </dl>
+        {client.memory && (client.memory.goal || client.memory.tone || client.memory.nextAsk) && (
+          <dl className="mt-3 space-y-1.5 border-t border-line pt-3 text-xs">
+            {client.memory.goal && (
+              <div>
+                <dt className="inline font-semibold text-faint">What they want: </dt>
+                <dd className="inline">{client.memory.goal}</dd>
+              </div>
+            )}
+            {client.memory.tone && (
+              <div>
+                <dt className="inline font-semibold text-faint">How to talk to them: </dt>
+                <dd className="inline">{client.memory.tone}</dd>
+              </div>
+            )}
+            {client.memory.nextAsk && (
+              <div>
+                <dt className="inline font-semibold text-faint">Ask next: </dt>
+                <dd className="inline">{client.memory.nextAsk}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+      </section>
 
       {journey ? (
         <JourneyCard

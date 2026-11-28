@@ -56,7 +56,6 @@ export function CareGoalCard({ points, goal, calls, moved, pct }: { points: numb
   );
 }
 
-/** Today's goal as a small chip next to the page title (the card's numbers, smaller). */
 export function CareGoalChip({ points, goal, calls, pct, href }: { points: number; goal: number; calls: number; pct: number; href?: string }) {
   const label = `Today's goal: ${points} of ${goal} points, ${calls} call${calls === 1 ? "" : "s"} connected`;
   const body = (

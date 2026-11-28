@@ -1,8 +1,8 @@
 // Clients: a calm screen where client care sees who needs a touch today
-// (docs/CLIENTS_JOURNEY_LINE_PLAN.md). Top: title, counts, today's goal, Add client, a slim
-// money strip (amounts owner-only). Then the Journey Line (every client on the 27 touches),
-// the action cards, the client list, and a collapsible side panel with services, health and
-// win-backs. ?view=pipeline opens the full pipeline; ?client=slug opens a client drawer.
+// (docs/CLIENTS_JOURNEY_LINE_PLAN.md). Top: title, counts, Add client, a slim money strip
+// (amounts owner-only), Today's goal beside Client health. Then the Journey Line (every client
+// on the 27 touches), Communications needed (every client's next touch, urgent first), By
+// service, the client list, and a collapsible side panel with win-backs and owners. ?view=pipeline opens the full pipeline; ?client=slug opens a client drawer.
 
 import { RiskAlerts } from "@/components/cards/RiskAlerts";
 import { BellRing, HeartPulse, Layers, ChevronRight, Plus, RotateCcw } from "lucide-react";
@@ -42,10 +42,10 @@ import { OwnerGaps } from "@/components/cards/OwnerGaps";
 import { WinLossSection } from "@/components/cards/WinLossSection";
 import { cn, describeTenure, formatDate, formatShortDate, formatUsdExact } from "@/lib/format";
 import { byImportance } from "@/lib/ops";
-import { CareGoalChip, GrowthLine } from "@/components/cards/CareWidgets";
+import { CareGoalCard, GrowthLine } from "@/components/cards/CareWidgets";
 import { activeByMonth } from "@/lib/care";
 import { deliverableLabel, draftMessage, STATUS_REASONS, touchByStep } from "@/lib/journey";
-import { actionCards, lineLayout, parsePipelineFilters, pipelineGroups, placeDots, stageCounts, type LineClient } from "@/lib/journey-line";
+import { actionCards, filterClients, lineLayout, LONG_STAGES, longLineLayout, longStageCounts, parsePipelineFilters, pipelineGroups, placeDots, placeLongDots, stageCounts, type DotCluster, type LineClient } from "@/lib/journey-line";
 import { journeyRow } from "@/lib/journey-view";
 import { JourneyLine, JourneyLegend } from "@/components/clients/JourneyLine";
 import { ActionCards, type ActionCardView } from "@/components/clients/ActionCards";
@@ -113,6 +113,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
     health: h?.level,
     ghl: c.ghl,
     lastLogged: c.lastLogged,
+    startDate: c.startDate,
   }));
   const layout = lineLayout(steps);
   const clusters = journeys.ready ? placeDots(lineClients, journeys.bySlug, steps, today) : [];
@@ -131,6 +132,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
         requests: requests.map((r) => ({ id: r.id, slug: r.slug, to: r.to, reasonLabel: reasonLabel(r.reason) })),
         today,
         formatDay: formatDate,
+        upcoming: true,
       }).map((card) => {
         const c = bySlug.get(card.slug);
         const t = card.step !== null ? touchByStep(card.step, steps) : undefined;
@@ -138,6 +140,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
           ...card,
           clientDbId: journeys.sample ? null : (c?.dbId ?? null),
           draft: t && c ? draftMessage(t, c.name) : null,
+          say: t?.say ?? null,
           noTexts: Boolean(c?.dbId && careInfo.byClient.get(c.dbId)?.noTexts),
         };
       })
@@ -151,38 +154,54 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
   const pipelineHref = pipelineQuery(filters);
   const clientHref = pipelineOpen ? `${pipelineQuery(filters)}&client=` : "/clients?client=";
 
+  // The bigger long-term line in the full pipeline: the 27 touches, then months as a client
+  // out to 2+ years. Uses the same filters as the lists below it.
+  const dotsFor = (cls: DotCluster[], key: (cl: DotCluster) => string) =>
+    cls.map((cl) => ({
+      key: cl.key,
+      x: cl.x,
+      title: key(cl),
+      dots: cl.dots.map((d) => ({
+        slug: d.slug,
+        name: d.name,
+        initials: d.initials,
+        timing: d.timing,
+        reachedOut: d.reachedOut,
+        dueLabel: `${cl.stage >= 5 ? `${d.touchTitle}, ` : ""}${d.timing === "overdue" ? "since" : "due"} ${formatShortDate(d.due)}`,
+      })),
+    }));
+  const tickInfo = (t: { step: number; stage: number; x: number }) => {
+    const touch = touchByStep(t.step, steps)!;
+    return { ...t, title: touch.title, how: touch.how, channel: touch.channel, day: touch.day, deliverable: deliverableLabel(touch.deliverable) };
+  };
+  const longView = pipelineOpen
+    ? (() => {
+        const l = longLineLayout(steps);
+        const cls = placeLongDots(filterClients(lineClients, filters), journeys.bySlug, steps, today)
+          .map((cl) => (filters.overdueOnly ? { ...cl, dots: cl.dots.filter((d) => d.timing === "overdue") } : cl))
+          .filter((cl) => cl.dots.length > 0);
+        const n = longStageCounts(cls);
+        const markTitle = new Map(l.marks.map((m) => [m.key, m.label]));
+        return {
+          segments: l.segments.map((s) => ({ ...s, ...n[s.stage]! })),
+          ticks: [
+            ...l.ticks.map(tickInfo),
+            ...l.marks.map((m) => ({
+              step: 1000 + m.month,
+              stage: m.stage,
+              x: m.x,
+              mark: true,
+              title: m.month > 24 ? "More than 2 years as a client" : `Month ${m.month} as a client`,
+              how: "Grow: the monthly rhythm (report, check-in, Google profile). Clients sit here by how long they've been a client.",
+            })),
+          ],
+          clusters: dotsFor(cls, (cl) => (markTitle.has(cl.key) ? `${markTitle.get(cl.key)} as a client` : `Touch ${cl.key} · ${cl.dots[0]!.touchTitle}`)),
+        };
+      })()
+    : null;
+
   const sidePanel = (
-    <SidePanel summary={`${current.filter(({ h }) => h?.level === "at_risk").length} at risk${winBack.length ? ` · ${winBack.length} to win back` : ""}`}>
-      <SectionTitle aside={<Layers aria-hidden className="size-4 text-faint" />}>By service</SectionTitle>
-      <div className="grid grid-cols-2 gap-2">
-        {serviceGroups
-          .filter((g) => g.slug !== "none" || g.clients.length > 0)
-          .map((g) => (
-            <Link key={g.slug} href={`/clients/service/${g.slug}`} className="pressable glass flex min-h-11 items-center justify-between gap-2 rounded-2xl p-3">
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">{g.service ?? "Not set"}</span>
-                <span className="block text-[11px] text-muted">
-                  {g.activeCount} active{g.pausedCount ? ` · ${g.pausedCount} paused` : ""}
-                </span>
-                {money && <span className="block text-[11px] text-faint">{formatUsdExact(g.activeMrr)}/mo</span>}
-              </span>
-              <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" />
-            </Link>
-          ))}
-      </div>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">Clients with more than one service show in each group.</p>
-
-      <SectionTitle aside={<HeartPulse aria-hidden className="size-4 text-faint" />}>Client health</SectionTitle>
-      <GlassCard className="grid grid-cols-3 gap-2 text-center">
-        {levels.map((l) => (
-          <div key={l}>
-            <p className={`font-display text-xl font-bold ${healthStyle[l].text}`}>{current.filter(({ h }) => h?.level === l).length}</p>
-            <p className="text-[11px] text-muted">{healthStyle[l].label}</p>
-          </div>
-        ))}
-      </GlassCard>
-      <p className="mt-1.5 px-1 text-[11px] text-faint">Active and paused clients. Use the &ldquo;At risk&rdquo; and &ldquo;Watch&rdquo; filters in the list.</p>
-
+    <SidePanel summary={`${winBack.length} to win back${ops.ready ? ` · ${ops.gaps.noOwner.length} no owner` : ""}`}>
       {winBack.length > 0 && (
         <section id="winback" className="scroll-mt-16">
           <SectionTitle aside={<RotateCcw aria-hidden className="size-4 text-faint" />}>Win back</SectionTitle>
@@ -219,7 +238,6 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
       <PageHeader
         title="Clients"
         subtitle={`${summary.activeCount} active · ${summary.total} total`}
-        badge={goal ? <CareGoalChip {...goal} href={member?.role === "owner" ? "/clients/restart" : undefined} /> : undefined}
         action={
           <span className="flex items-center gap-3">
             <GrowthLine points={growth} />
@@ -276,6 +294,37 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
         </nav>
       )}
 
+
+      {/* Today's goal beside Client health. */}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {goal ? (
+          member?.role === "owner" ? (
+            <Link href="/clients/restart" aria-label="Today's goal (change goals on Restart · place · goals)" className="pressable block">
+              <CareGoalCard {...goal} />
+            </Link>
+          ) : (
+            <CareGoalCard {...goal} />
+          )
+        ) : null}
+        <section aria-labelledby="health-h" className={cn("glass rounded-3xl p-3.5", !goal && "sm:col-span-2")}>
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 id="health-h" className="text-sm font-semibold">
+              Client health
+            </h2>
+            <HeartPulse aria-hidden className="size-4 text-faint" />
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+            {levels.map((l) => (
+              <a key={l} href="#list" className="pressable rounded-2xl border border-line py-2">
+                <p className={`font-display text-xl font-bold ${healthStyle[l].text}`}>{current.filter(({ h }) => h?.level === l).length}</p>
+                <p className="text-[11px] text-muted">{healthStyle[l].label}</p>
+              </a>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-faint">Active and paused clients. Use the &ldquo;At risk&rdquo; and &ldquo;Watch&rdquo; filters in the list.</p>
+        </section>
+      </div>
+
       <div className="lg:flex lg:items-start lg:gap-6">
         <div className="min-w-0 flex-1">
           {journeys.ready ? (
@@ -297,23 +346,8 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
                 </p>
                 <JourneyLine
                   segments={layout.segments.map((s) => ({ ...s, ...counts[s.stage]! }))}
-                  ticks={layout.ticks.map((t) => {
-                    const touch = touchByStep(t.step, steps)!;
-                    return { ...t, title: touch.title, how: touch.how, channel: touch.channel, day: touch.day, deliverable: deliverableLabel(touch.deliverable) };
-                  })}
-                  clusters={clusters.map((cl) => ({
-                    key: cl.key,
-                    x: cl.x,
-                    title: cl.key === "grow" ? "Grow (the ongoing monthly rhythm)" : `Touch ${cl.key} · ${cl.dots[0]!.touchTitle}`,
-                    dots: cl.dots.map((d) => ({
-                      slug: d.slug,
-                      name: d.name,
-                      initials: d.initials,
-                      timing: d.timing,
-                      reachedOut: d.reachedOut,
-                      dueLabel: `${cl.key === "grow" ? `${d.touchTitle}, ` : ""}${d.timing === "overdue" ? "since" : "due"} ${formatShortDate(d.due)}`,
-                    })),
-                  }))}
+                  ticks={layout.ticks.map(tickInfo)}
+                  clusters={dotsFor(clusters, (cl) => (cl.key === "grow" ? "Grow (the ongoing monthly rhythm)" : `Touch ${cl.key} · ${cl.dots[0]!.touchTitle}`))}
                   pipelineHref={pipelineHref}
                   clientHref={clientHref}
                 />
@@ -361,6 +395,29 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
             </>
           )}
 
+
+          <section aria-label="By service" className="mt-2">
+            <SectionTitle aside={<Layers aria-hidden className="size-4 text-faint" />}>By service</SectionTitle>
+            <div className="grid grid-cols-2 gap-2">
+              {serviceGroups
+                .filter((g) => g.slug !== "none" || g.clients.length > 0)
+                .map((g) => (
+                  <Link key={g.slug} href={`/clients/service/${g.slug}`} className="pressable glass flex min-h-11 items-center justify-between gap-2 rounded-2xl p-3">
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold">{g.service ?? "Not set"}</span>
+                      <span className="block text-[11px] text-muted">
+                        {g.activeCount} active{g.pausedCount ? ` · ${g.pausedCount} paused` : ""}
+                      </span>
+                      {money && <span className="block text-[11px] text-faint">{formatUsdExact(g.activeMrr)}/mo</span>}
+                    </span>
+                    <ChevronRight aria-hidden className="size-4 shrink-0 text-faint" />
+                  </Link>
+                ))}
+            </div>
+            <p className="mt-1.5 px-1 text-[11px] text-faint">Clients with more than one service show in each group.</p>
+
+          </section>
+
           {summary.needsCheck > 0 && (
             <p className="mt-4 rounded-2xl border border-amber/30 bg-amber/8 px-3.5 py-2.5 text-xs text-muted">
               <span className="font-semibold text-amber">{summary.needsCheck} records need checking.</span> The two client lists disagreed on these. Look for the ⚠ icon, or tap &ldquo;Needs check&rdquo;.
@@ -387,6 +444,25 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
 
       {pipelineOpen && (
         <PipelineOverlay title="Full pipeline" closeHref="/clients">
+          {longView && (
+            <section aria-labelledby="long-h" className="glass mx-auto mb-4 max-w-[100rem] rounded-3xl px-3 pb-3 pt-3.5 sm:px-4">
+              <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                <h3 id="long-h" className="text-sm font-semibold">
+                  Long-term journey line
+                  {journeys.sample && <span className="ml-2 text-[11px] font-normal text-amber">sample clients (demo)</span>}
+                </h3>
+                <p className="text-[11px] text-faint">First 90 days by touch, then Grow by months as a client: {LONG_STAGES.join(" · ")}</p>
+              </div>
+              <div className="-mx-1 overflow-x-auto px-1 pb-44 lg:overflow-visible lg:pb-0">
+                <div className="min-w-[960px]">
+                  <JourneyLine large segments={longView.segments} ticks={longView.ticks} clusters={longView.clusters} pipelineHref={pipelineHref} clientHref={clientHref} />
+                </div>
+              </div>
+              <div className="mt-2">
+                <JourneyLegend />
+              </div>
+            </section>
+          )}
           <PipelineBody stages={pipelineGroups(lineClients, journeys.bySlug, steps, today, filters)} filters={filters} staff={staff} sample={journeys.sample} />
         </PipelineOverlay>
       )}

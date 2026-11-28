@@ -67,6 +67,8 @@ export interface LineClient {
   ghl?: GhlContactTimes;
   /** Newest contact the team logged in Atlas. */
   lastLogged?: string;
+  /** Day they became a client (places Grow clients on the long-term line). */
+  startDate?: string;
 }
 
 export interface LineDot {
@@ -165,17 +167,120 @@ export function clusterTiming(cl: DotCluster): DotTiming {
 }
 
 // ---------------------------------------------------------------------------
+// Long-term line (full pipeline): the 27 touches, then Grow carries on by months as a client
+// ---------------------------------------------------------------------------
+
+/** Month marks after the first 90 days: monthly to a year, quarterly in year 2, then "2+ years". */
+export const LONG_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18, 21, 24] as const;
+/** Segments after the 90-day wrap. Index 5 is Grow, so stage numbers 5–8 are all Grow. */
+export const LONG_STAGES = ["Months 4–6", "Months 7–12", "Year 2", "2+ years"] as const;
+/** Key of the last mark (past 24 months). */
+export const LONG_END = "m25";
+const LONG_END_SLOTS = 2;
+
+export interface LongMark {
+  key: string;
+  /** Months as a client (25 = "more than 24"). */
+  month: number;
+  stage: number;
+  x: number;
+  label: string;
+}
+
+/** Which long segment a month mark belongs to (5–8). */
+function longStage(month: number): number {
+  return month <= 6 ? 5 : month <= 12 ? 6 : month <= 24 ? 7 : 8;
+}
+
+export function longLineLayout(steps: JourneySteps): { segments: LineSegment[]; ticks: LineTick[]; marks: LongMark[] } {
+  const n = steps.touches.length;
+  const slots = n + LONG_MONTHS.length + LONG_END_SLOTS;
+  const pct = (v: number) => Math.round((v / slots) * 100_000) / 1000;
+  const ticks = steps.touches.map((t, i) => ({ step: t.step, stage: t.stage, x: pct(i + 0.5) }));
+  const marks: LongMark[] = [
+    ...LONG_MONTHS.map((m, i) => ({ key: `m${m}`, month: m, stage: longStage(m), x: pct(n + i + 0.5), label: `Month ${m}` })),
+    { key: LONG_END, month: 25, stage: 8, x: pct(n + LONG_MONTHS.length + LONG_END_SLOTS / 2), label: "2+ years" },
+  ];
+  const first: LineSegment[] = JOURNEY_STAGES.slice(0, GROW_STAGE).map((label, stage) => {
+    const idx = steps.touches.map((t, i) => (t.stage === stage ? i : -1)).filter((i) => i >= 0);
+    const a = idx[0] ?? 0;
+    const b = idx[idx.length - 1] ?? a - 1;
+    return { stage, label, from: pct(a), width: pct(b - a + 1) };
+  });
+  const long: LineSegment[] = LONG_STAGES.map((label, i) => {
+    const stage = GROW_STAGE + i;
+    const idx = LONG_MONTHS.map((m, j) => (longStage(m) === stage ? j : -1)).filter((j) => j >= 0);
+    if (stage === 8) return { stage, label, from: pct(n + LONG_MONTHS.length), width: pct(LONG_END_SLOTS) };
+    return { stage, label, from: pct(n + idx[0]!), width: pct(idx.length) };
+  });
+  return { segments: [...first, ...long], ticks, marks };
+}
+
+/** Whole months between two days (a month = 30.44 days). */
+export function monthsBetween(from: string, to: string): number {
+  return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / (30.44 * 86_400_000));
+}
+
+/** The mark a Grow client sits on: the last mark they have reached (at least month 4). */
+export function longMarkFor(startDate: string | undefined, today: string): string {
+  if (!startDate) return "m4";
+  const months = monthsBetween(startDate, today);
+  if (months > 24) return LONG_END;
+  let key = "m4";
+  for (const m of LONG_MONTHS) if (months >= m) key = `m${m}`;
+  return key;
+}
+
+/** Dots for the long-term line: first-90-day clients on their touch, Grow clients by months as a client. */
+export function placeLongDots(clients: LineClient[], journeys: Map<string, JourneyState>, steps: JourneySteps, today: string): DotCluster[] {
+  const { ticks, marks } = longLineLayout(steps);
+  const markBy = new Map(marks.map((m) => [m.key, m]));
+  const growKeys = new Map(clients.map((c) => [c.slug, longMarkFor(c.startDate, today)]));
+  const base = placeDots(clients, journeys, steps, today);
+  const out: DotCluster[] = [];
+  const longClusters = new Map<string, DotCluster>();
+  for (const cl of base) {
+    if (cl.key !== "grow") {
+      const t = ticks.find((x) => String(x.step) === cl.key);
+      out.push({ ...cl, x: t?.x ?? cl.x });
+      continue;
+    }
+    for (const d of cl.dots) {
+      const m = markBy.get(growKeys.get(d.slug) ?? "m4")!;
+      const c = longClusters.get(m.key) ?? { key: m.key, x: m.x, stage: m.stage, dots: [] };
+      c.dots.push({ ...d, stage: m.stage });
+      longClusters.set(m.key, c);
+    }
+  }
+  return [...out, ...longClusters.values()].sort((a, b) => a.x - b.x);
+}
+
+/** Per segment (stages 0–8 on the long line): clients, overdue, due today. */
+export function longStageCounts(clusters: DotCluster[]): { total: number; overdue: number; today: number }[] {
+  const out = Array.from({ length: GROW_STAGE + LONG_STAGES.length }, () => ({ total: 0, overdue: 0, today: 0 }));
+  for (const cl of clusters)
+    for (const d of cl.dots) {
+      const s = out[cl.stage]!;
+      s.total += 1;
+      if (d.timing === "overdue") s.overdue += 1;
+      if (d.timing === "today") s.today += 1;
+    }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Action cards
 // ---------------------------------------------------------------------------
 
-export type CardKind = "overdue" | "reached_out" | "today" | "risk" | "request";
-const KIND_ORDER: Record<CardKind, number> = { overdue: 0, reached_out: 1, today: 2, risk: 3, request: 4 };
+export type CardKind = "overdue" | "reached_out" | "today" | "risk" | "request" | "upcoming";
+const KIND_ORDER: Record<CardKind, number> = { overdue: 0, reached_out: 1, today: 2, risk: 3, request: 4, upcoming: 5 };
 export const CARD_TAG: Record<CardKind, string> = {
   overdue: "Overdue",
   reached_out: "Reached out",
   today: "Due today",
   risk: "At risk",
   request: "Needs a decision",
+  upcoming: "Coming up",
 };
 
 export interface ActionCard {
@@ -187,6 +292,8 @@ export interface ActionCard {
   also: CardKind[];
   step: number | null;
   touchTitle: string | null;
+  /** Journey stage of the client's next touch (0–4 first 90 days, 5 Grow); null when unknown. */
+  stage: number | null;
   context: string;
   /**
    * The one main button:
@@ -228,6 +335,8 @@ export function actionCards(input: {
   requests: CardRequest[];
   today: string;
   formatDay: (d: string) => string;
+  /** Also list every other client's next touch as "Coming up" (soonest first). */
+  upcoming?: boolean;
 }): ActionCard[] {
   const { journeys, steps, today, formatDay } = input;
   const order = new Map(input.clients.map((c, i) => [c.slug, i]));
@@ -237,7 +346,7 @@ export function actionCards(input: {
     list.push({ kind, due, card });
     byClient.set(slug, list);
   };
-  const base = (c: LineClient) => ({ slug: c.slug, name: c.name, vip: Boolean(c.vip), ownerId: c.ownerId ?? null, ownerName: c.ownerName ?? null });
+  const base = (c: LineClient) => ({ slug: c.slug, name: c.name, vip: Boolean(c.vip), ownerId: c.ownerId ?? null, ownerName: c.ownerName ?? null, stage: journeys.get(c.slug)?.stage ?? null });
 
   for (const c of input.clients) {
     const j = journeys.get(c.slug);
@@ -291,6 +400,25 @@ export function actionCards(input: {
     });
   }
 
+  // Everyone else: their next touch, so the list covers every client on the journey.
+  if (input.upcoming) {
+    for (const c of input.clients) {
+      const n = journeys.get(c.slug)?.next;
+      if (byClient.has(c.slug) || !n) continue;
+      const t = touchByStep(n.step, steps);
+      const channel = t?.channel ?? null;
+      add(c.slug, "upcoming", n.due, {
+        ...base(c),
+        id: `next-${c.slug}`,
+        step: n.step,
+        touchTitle: n.title,
+        context: `Due ${formatDay(n.due)}${t?.how ? ` · ${t.how}` : ""}`,
+        button: channel === "text" || channel === "email" ? "mark_sent" : "log_call",
+        channel,
+      });
+    }
+  }
+
   const cards: (ActionCard & { due: string })[] = [];
   for (const list of byClient.values()) {
     list.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
@@ -302,7 +430,7 @@ export function actionCards(input: {
   cards.sort(
     (a, b) =>
       KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-      (a.kind === "overdue" ? a.due.localeCompare(b.due) : 0) ||
+      (a.kind === "overdue" || a.kind === "upcoming" ? a.due.localeCompare(b.due) : 0) ||
       (order.get(a.slug) ?? 1e9) - (order.get(b.slug) ?? 1e9) ||
       a.name.localeCompare(b.name),
   );
@@ -338,13 +466,18 @@ export interface PipelineStage {
   count: number;
 }
 
-export function pipelineGroups(clients: LineClient[], journeys: Map<string, JourneyState>, steps: JourneySteps, today: string, f: PipelineFilters): PipelineStage[] {
-  const keep = clients.filter(
+/** Clients that match the pipeline's service, main person and health filters. */
+export function filterClients(clients: LineClient[], f: PipelineFilters): LineClient[] {
+  return clients.filter(
     (c) =>
       (!f.service || c.services.includes(f.service)) &&
       (!f.owner || c.ownerId === f.owner || (f.owner === "none" && !c.ownerId)) &&
       (!f.health || c.health === f.health),
   );
+}
+
+export function pipelineGroups(clients: LineClient[], journeys: Map<string, JourneyState>, steps: JourneySteps, today: string, f: PipelineFilters): PipelineStage[] {
+  const keep = filterClients(clients, f);
   const info = new Map(keep.map((c) => [c.slug, c]));
   const stages: PipelineStage[] = JOURNEY_STAGES.map((label, stage) => ({ stage, label, touches: [], count: 0 }));
   for (const cl of placeDots(keep, journeys, steps, today)) {

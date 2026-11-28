@@ -7,8 +7,10 @@ import { cn } from "@/lib/format";
 import type { DotTiming } from "@/lib/journey-line";
 
 /** One colour per stage (labels always sit under each segment). */
-export const STAGE_COLORS = ["bg-sky", "bg-teal", "bg-violet", "bg-due-yellow", "bg-due-orange", "bg-lime"] as const;
-export const STAGE_TEXT = ["text-sky", "text-teal", "text-violet", "text-due-yellow", "text-due-orange", "text-lime"] as const;
+// 0–4 the first 90 days, 5 Grow; 6–8 the long-term line (months 7–12, year 2, 2+ years),
+// fading shades of Grow's colour so it reads as one ongoing stage.
+export const STAGE_COLORS = ["bg-sky", "bg-teal", "bg-violet", "bg-due-yellow", "bg-due-orange", "bg-lime", "bg-lime/75", "bg-lime/55", "bg-lime/40"] as const;
+export const STAGE_TEXT = ["text-sky", "text-teal", "text-violet", "text-due-yellow", "text-due-orange", "text-lime", "text-lime", "text-lime", "text-lime"] as const;
 
 export const TIMING_WORDS: Record<DotTiming, string> = { overdue: "Overdue", today: "Due today", later: "On track" };
 
