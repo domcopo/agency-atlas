@@ -52,16 +52,16 @@ export function placePosition(state: string, name: string): [number, number] | n
  * Towns within NEARBY_MILES of the home town, closest first, across state lines. Counties are
  * left out; a township is left out when the town of the same name is already listed.
  */
-export function nearbyTowns(state: string, home: string, limit = 24): NearbyTown[] {
+export function nearbyTowns(state: string, home: string, limit = 24, radius = NEARBY_MILES): NearbyTown[] {
   const at = placePosition(state, home);
   if (!at) return [];
   const out: (NearbyTown & { name: string })[] = [];
   for (const [st, places] of Object.entries(COORDS)) {
     for (const [name, pos] of Object.entries(places)) {
       if (/ County$/.test(name) || (st === state && name === home)) continue;
-      if (Math.abs(pos[0] - at[0]) > 0.6) continue; // quick skip: more than ~40 miles north/south
+      if (Math.abs(pos[0] - at[0]) > radius / 69 + 0.05) continue; // quick skip: too far north/south (~69 miles a degree)
       const miles = milesBetween(at, pos);
-      if (miles <= NEARBY_MILES) out.push({ name, label: placeLabel(name, st, state), miles: Math.round(miles) });
+      if (miles <= radius) out.push({ name, label: placeLabel(name, st, state), miles: Math.round(miles) });
     }
   }
   const names = new Set(out.map((o) => o.label));
@@ -113,3 +113,45 @@ export function checkPlaces(state: string, home: string, typed: string[]): { hom
   return { home: homeName, checks, nearby };
 }
 
+
+// Town names that are also everyday words in business names ("Steel Valley Homes"): never
+// treated as a town in a web address.
+const NOT_A_TOWN_IN_ADDRESSES = new Set(["valley", "hometown", "homestead", "homeland", "liberty", "freedom", "harmony", "fairview", "summit", "pleasant", "victory", "success", "commerce", "property", "capital", "premier", "eureka", "paradise", "friendship", "progress", "lakeside", "riverside", "hillside", "parkside", "westside", "eastside", "southside", "northside", "midway", "central", "national", "united", "american", "superior", "reliance", "security", "advance", "triumph", "accord", "concord", "economy", "fortune", "golden", "monroe", "lincoln", "franklin", "washington", "jefferson", "madison", "jackson", "clinton", "hamilton", "marion", "warren"]);
+
+let placeIndex: Map<string, [number, number][]> | null = null;
+
+/** Every US place name (6+ letters, counties and "Township" dropped) → its map positions. */
+function placesByKey(): Map<string, [number, number][]> {
+  if (placeIndex) return placeIndex;
+  placeIndex = new Map();
+  for (const places of Object.values(COORDS))
+    for (const [name, pos] of Object.entries(places)) {
+      if (/ County$/.test(name)) continue;
+      const key = name.replace(/ Township$/, "").toLowerCase().replace(/[^a-z]/g, "");
+      if (key.length < 6 || NOT_A_TOWN_IN_ADDRESSES.has(key)) continue;
+      placeIndex.set(key, [...(placeIndex.get(key) ?? []), pos]);
+    }
+  return placeIndex;
+}
+
+/**
+ * The far-away town a web address (or business name) is named after, or null: "homebuyersmetairie.com" →
+ * "metairie" for a Youngstown audit (every Metairie is beyond the audit's radius), while
+ * "youngstownhomebuyer.com" or "warrencashbuyers.com" → null. Only used for sites seen in plain
+ * results; a business with a Maps listing or 3-pack spot nearby is never dropped by its name.
+ */
+export function farTownInDomain(domain: string, state: string, home: string, radiusMiles: number): string | null {
+  const at = placePosition(state, home);
+  if (!at) return null;
+  // A web address loses its ending (".com"); a business name is used whole.
+  const parts = domain.toLowerCase().split(".");
+  const text = (/\s/.test(domain) || parts.length < 2 ? parts : parts.slice(0, -1)).join("").replace(/[^a-z]/g, "");
+  let found: string | null = null;
+  for (const [key, spots] of placesByKey()) {
+    if (!text.includes(key)) continue;
+    // A name with a spot inside the area is local ("warren" OH), whatever else shares it.
+    if (spots.some((p) => milesBetween(at, p) <= radiusMiles)) return null;
+    if (!found || key.length > found.length) found = key;
+  }
+  return found;
+}

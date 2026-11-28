@@ -1,6 +1,7 @@
 // Place names for audits (src/lib/audit/places.ts): one place per entry, counties kept,
 // trailing state dropped. Pure. Place names are real public town names; no business data.
 
+import { farTownInDomain } from "@/lib/audit/places-list";
 import { describe, expect, it } from "vitest";
 import { parseIntake } from "@/lib/audit/intake";
 import { cleanPlaces, splitPlace } from "@/lib/audit/places";
@@ -129,5 +130,24 @@ describe("nearby towns (30 miles) and the builder's place check", () => {
   it("the run looks other-state towns up in their own state and searches the plain name", async () => {
     const { moneyKeywords } = await import("@/lib/audit/run");
     expect(moneyKeywords(["Roofing"], ["Austintown", "Sharon, PA"], "OH").map((k) => k.keyword)).toEqual(["roofing austintown", "roofing sharon", "roofing near me"]);
+  });
+});
+
+describe("far-away towns in web addresses (competitor filter)", () => {
+  // Real public place names; the web addresses are made up.
+  it("names a town beyond the audit's radius, and nothing for local or plain addresses", () => {
+    expect(farTownInDomain("homebuyersmetairie.example", "OH", "Youngstown", 45)).toBe("metairie");
+    expect(farTownInDomain("columbus.webuyhouses.example", "OH", "Youngstown", 45)).toBe("columbus");
+    expect(farTownInDomain("homebuyermilwaukee.example", "OH", "Youngstown", 45)).toBe("milwaukee");
+    for (const d of ["youngstownhomebuyer.example", "boardmancashoffers.example", "sellmyhousefast.example", "webuyhouses.cash", "hometownfixerupper.example", "steelvalleyhomes.example", "kellywarrenrealty.example", "dealrun.ai"])
+      expect(farTownInDomain(d, "OH", "Youngstown", 45), d).toBeNull();
+    // Business names work too (a name keeps its whole text).
+    expect(farTownInDomain("We Buy Houses Kansas City", "OH", "Youngstown", 45)).toBe("kansascity");
+    expect(farTownInDomain("Steel Valley Homes, LLC", "OH", "Youngstown", 45)).toBeNull();
+    expect(farTownInDomain("GCH Home Buyers", "OH", "Youngstown", 45)).toBeNull();
+    // Same address, audit near that town: local.
+    expect(farTownInDomain("columbus.webuyhouses.example", "OH", "Westerville", 45)).toBeNull();
+    // Unknown home town: never guessed.
+    expect(farTownInDomain("homebuyersmetairie.example", "OH", "Nowhere Fictional", 45)).toBeNull();
   });
 });

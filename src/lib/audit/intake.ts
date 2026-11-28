@@ -34,6 +34,12 @@ export interface AuditIntake {
   avgJobConfirmed: boolean;
   /** Share of search visits that become jobs, 0.005–0.10. */
   visitToJobRate: number;
+  /**
+   * Towns within this many miles of the home town count as the market (searches, rankings,
+   * demand). Default 45; wider for businesses that travel far, narrower for walk-in trades.
+   * Absent on audits saved before 2026-11-27 (they get the default).
+   */
+  radiusMiles?: number;
   competitors: IntakeCompetitor[];
   modules: { dataforseo: boolean; leadsnap: boolean; semrush: boolean };
   /** Asked for a Google Ads audit too (its own plan; recorded now, built later). */
@@ -51,9 +57,11 @@ export const INTAKE_LIMITS = {
   avgJobMax: 1_000_000,
   rateMin: 0.005,
   rateMax: 0.1,
+  radiusMin: 10,
+  radiusMax: 100,
 } as const;
 
-export const INTAKE_DEFAULTS = { visitToJobRate: 0.03, ringsMiles: [25, 50], goalMonths: 12 } as const;
+export const INTAKE_DEFAULTS = { visitToJobRate: 0.03, ringsMiles: [25, 50], goalMonths: 12, radiusMiles: 45 } as const;
 
 /** Reused from saved results for this long; after that a refresh is offered (Phase B). */
 export const AUDIT_REUSE_DAYS = 30;
@@ -181,6 +189,8 @@ export function parseIntake(raw: unknown, opts: IntakeOptions = {}): IntakeResul
   const rateRaw = r.visitToJobRate ?? INTAKE_DEFAULTS.visitToJobRate;
   const rateNum = typeof rateRaw === "string" ? Number(rateRaw.replace(/[%\s]/g, "")) / 100 : rateRaw;
   const visitToJobRate = number(rateNum, "Visits that become jobs", INTAKE_LIMITS.rateMin, INTAKE_LIMITS.rateMax);
+  const radiusRaw = r.radiusMiles === undefined || r.radiusMiles === "" ? INTAKE_DEFAULTS.radiusMiles : typeof r.radiusMiles === "string" ? Number(r.radiusMiles.trim()) : r.radiusMiles;
+  const radiusMiles = Math.round(number(radiusRaw, "Market radius (miles)", INTAKE_LIMITS.radiusMin, INTAKE_LIMITS.radiusMax));
 
   const compsRaw = Array.isArray(r.competitors) ? r.competitors : [];
   if (compsRaw.length > INTAKE_LIMITS.competitors) errors.push(`Competitors: at most ${INTAKE_LIMITS.competitors}.`);
@@ -219,6 +229,7 @@ export function parseIntake(raw: unknown, opts: IntakeOptions = {}): IntakeResul
       avgJobUsd,
       avgJobConfirmed,
       visitToJobRate: Math.round(visitToJobRate * 10000) / 10000,
+      radiusMiles,
       competitors,
       modules,
       wantsAds,

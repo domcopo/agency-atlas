@@ -405,7 +405,19 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
         }),
       );
       const spacing = typeof o.spacingMiles === "number" && o.spacingMiles > 0 && o.spacingMiles <= 20 ? o.spacingMiles : 1;
-      grids.push({ term, size, spacingMiles: spacing, kind: "maps", ranks, source: gs, retrieved: gd });
+      // Who holds the top 3 most often across the grid (names only, at most 3).
+      const leaders = list(o.leaders)
+        .slice(0, 3)
+        .map((l) => {
+          const lo = obj(l) ?? {};
+          const name = text(c, lo.name, `Heat map "${term}" leader`, 60);
+          const top3 = lo.top3;
+          const points = lo.points;
+          const ok = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= size * size;
+          return name && ok(top3) && ok(points) && top3 <= points ? { name, top3, points } : null;
+        })
+        .filter((l): l is { name: string; top3: number; points: number } => l !== null);
+      grids.push({ term, size, spacingMiles: spacing, kind: "maps", ranks, ...(leaders.length ? { leaders } : {}), source: gs, retrieved: gd });
     } else c.errors.push(`Heat map ${i + 1}: kind must be "pack" or "maps".`);
   }
 
@@ -434,6 +446,9 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
   };
 
   const nearMeSearches = fig(c, r.nearMeSearches, "Near-me searches", [0, 10_000_000]);
+  const homeTownSearches = r.homeTownSearches === undefined ? undefined : fig(c, r.homeTownSearches, "Home-town searches", [0, 10_000_000]);
+  const nearbySearches = r.nearbySearches === undefined ? undefined : fig(c, r.nearbySearches, "Nearby-town searches", [0, 10_000_000]);
+  const situationSearches = r.situationSearches === undefined ? undefined : fig(c, r.situationSearches, "Seller-situation searches", [0, 10_000_000]);
   // D1 homepage check (optional): plain text only, short, no contact details.
   // A line that fails the text rules is left out (with a warning) rather than sinking the audit.
   const ins = obj(r.inspection) ?? {};
@@ -457,6 +472,10 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     sourcesUsed: sourcesUsed(c, r.sources),
     demand,
     nearMeSearches,
+    ...(homeTownSearches ? { homeTownSearches } : {}),
+    ...(nearbySearches ? { nearbySearches } : {}),
+    ...(typeof r.nearbyMiles === "number" && Number.isInteger(r.nearbyMiles) && r.nearbyMiles >= 1 && r.nearbyMiles <= 200 ? { nearbyMiles: r.nearbyMiles } : {}),
+    ...(situationSearches ? { situationSearches } : {}),
     keywords,
     visitsScope: r.visitsScope === "national" ? "national" : "local",
     organicDepth: 100,

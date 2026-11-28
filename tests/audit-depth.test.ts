@@ -2,7 +2,7 @@
 // model, homepage check. Pure functions; every business and number here is fictional (.example).
 
 import { describe, expect, it } from "vitest";
-import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
+import { auditMarkets, buildUniverse, ctr, DEPTH_RULES, groupOf, isLocal, localPattern, marketOf, modelSite, namesOtherPlace, namesOtherState, nearbyMarkets, onTopic, pathOtherState, searchGroup, variantKey, readInspection, readRanked, readSuggestions, topicOf, topicPattern } from "@/lib/audit/depth";
 import { goalScenario } from "@/lib/audit/compute";
 
 const markets = auditMarkets("Denver", ["Arvada", "Lakewood", "Jefferson County"], "CO");
@@ -14,6 +14,18 @@ describe("markets", () => {
     expect(marketOf("we buy houses fort collins", m)?.label).toBe("Fort Collins");
     expect(marketOf("we buy houses collinsville", m)).toBeNull();
     expect(marketOf("cash buyers jefferson county", markets)?.label).toBe("Jefferson County");
+  });
+
+  it("a bigger place whose name ends in a town's name isn't that town (Winston-Salem isn't Salem)", () => {
+    const oh = auditMarkets("Youngstown", ["Salem", "Canton", "North Canton"], "OH");
+    expect(marketOf("we buy houses winston salem", oh)).toBeNull();
+    expect(isLocal("we buy houses winston salem", oh, "OH")).toBe(false);
+    expect(marketOf("we buy houses new salem", oh)).toBeNull();
+    expect(marketOf("we buy houses salem", oh)?.label).toBe("Salem");
+    expect(marketOf("salem cash home buyers", oh)?.label).toBe("Salem");
+    // A market that is itself the longer name still matches.
+    expect(marketOf("sell house fast north canton", oh)?.label).toBe("North Canton");
+    expect(marketOf("sell house fast canton", oh)?.label).toBe("Canton");
   });
 
   it("local = a town of this audit, the state name, or near me", () => {
@@ -206,5 +218,39 @@ describe("the goal is never below today", () => {
     expect(goalScenario(rows, 66)?.name).toBe("Stronger");
     expect(goalScenario(rows, 100)).toBeNull();
     expect(goalScenario(null, 10)).toBeNull();
+  });
+});
+
+describe("one count per group of word-order variants", () => {
+  it("variants share a key; real differences don't", () => {
+    expect(variantKey("car rental near me")).toBe(variantKey("near me car rental"));
+    expect(variantKey("car rentals in near me")).toBe(variantKey("car rental near me"));
+    expect(variantKey("cheap car rental near me")).not.toBe(variantKey("car rental near me"));
+    expect(variantKey("car rental cleveland")).not.toBe(variantKey("car rental near me"));
+  });
+
+  it("the universe keeps only the first (most searched) of each group", () => {
+    const m = auditMarkets("Cleveland", [], "OH");
+    const sug = ["car rental near me", "near me car rental", "car rental in near me", "cheap car rental near me"].map((keyword, i) => ({ keyword, usVolume: 100 - i, difficulty: null, intent: null }));
+    expect(buildUniverse(["car rental"], m, "OH", sug)).toEqual(["car rental", "car rental cleveland", "car rental near me", "cheap car rental near me"]);
+  });
+
+  it("town pages of another state aren't shown as built for this area", () => {
+    expect(pathOtherState("/united-states/car-rental-lakewood-nj.html", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/newyork/brooklyn", "OH")).toBe(true);
+    expect(pathOtherState("/us/en/location/unitedstates/ohio/cleveland/cle", "OH")).toBe(false);
+    expect(pathOtherState("/car-rental-cleveland-oh.html", "OH")).toBe(false);
+  });
+});
+
+describe("searchGroup: Google's one-search variants (2026-11-25 Denver review)", () => {
+  const m = auditMarkets("Denver", ["Colorado Springs"], "CO");
+  it("a town search drops the state; a state-only search keeps it", () => {
+    expect(searchGroup("sell my house fast denver co", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast denver colorado", m, "CO")).toBe(searchGroup("sell my house fast denver", m, "CO"));
+    expect(searchGroup("sell my house fast colorado", m, "CO")).not.toBe(searchGroup("sell my house fast", m, "CO"));
+    // A town whose name holds the state's name keeps it.
+    expect(searchGroup("we buy houses colorado springs", m, "CO")).not.toBe(searchGroup("we buy houses springs", m, "CO"));
+    expect(searchGroup("we buy houses colorado springs co", m, "CO")).toBe(searchGroup("we buy houses colorado springs", m, "CO"));
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-// Edit one journey step (owner/managers, 0038): words, day, channel, deliverable and the
+// Edit one journey step (owner/managers, 0040): words, day, channel, deliverable and the
 // copy-only draft. The step number and stage stay fixed. Saving changes it for everyone.
 
 import { useActionState } from "react";

@@ -332,7 +332,7 @@ export interface RosterClient {
   backupName?: string;
   /** Day the care plan (onboarding touches) starts counting (0025). */
   careStartedOn?: ISODate;
-  /** Owner's "Place by start date" (0038): touches before this step count as placed. */
+  /** Owner's "Place by start date" (0040): touches before this step count as placed. */
   journeyPlacedStep?: number;
   /** Plan tier per service (0025). Empty before 0025 or when none is set. */
   plans?: ClientPlanRef[];
@@ -650,6 +650,8 @@ export interface AiStatus {
   outputTokens: number;
   requests: number;
   recent: { at: string; feature: string; costUsd: number | null; outcome: string; tokens: number }[];
+  /** This month per AI helper (ai_usage feature name): requests and dollars. */
+  byFeature: Record<string, { requests: number; usd: number }>;
 }
 
 export interface Briefing {
@@ -721,6 +723,8 @@ export interface ClientAction {
   archivedAt?: string | null;
   reassignReason?: string | null;
   reassignRequestedAt?: string | null;
+  /** "Finished when…" (0038); owner and managers set it. */
+  doneWhen?: string | null;
   /** Canceled by the owner (0013): kept, never deleted; hidden from every list and count. */
   canceledAt?: string | null;
   cancelNote?: string | null;

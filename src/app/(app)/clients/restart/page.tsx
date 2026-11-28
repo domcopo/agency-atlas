@@ -25,11 +25,11 @@ export default async function RestartPage({ searchParams }: { searchParams: Prom
   const from = /^\d{4}-\d{2}-\d{2}$/.test(params.from ?? "") && params.from! >= today ? params.from! : today;
   const perDay = Math.min(10, Math.max(1, Number(params.perDay) || RESTART_PER_DAY));
   const [clients, journeys, goals, { ready: stepsReady, steps }] = await Promise.all([getRoster(), getJourneys(), getCareGoals(), getJourneySteps()]);
-  // "Place by start date" (0038): active clients with no journey yet, by how long they've been with us.
+  // "Place by start date" (0040): active clients with no journey yet, by how long they've been with us.
   const unplaced = clients.filter((c) => c.status === "active" && c.dbId && !c.careStartedOn).sort(byImportance);
   const placements = unplaced.map((c) => ({ c, p: placementFor(c.startDate, today, steps) }));
   const toPlace = placements.filter((x) => x.p.kind === "place");
-  const placedMsg = params.placed === "needs0038" ? "Placing needs one setup step first: run 0038_journey_steps.sql." : /^\d+$/.test(params.placed ?? "") ? `${params.placed} client${params.placed === "1" ? "" : "s"} placed on the journey.` : null;
+  const placedMsg = params.placed === "needs0040" ? "Placing needs one setup step first: run 0040_journey_steps.sql." : /^\d+$/.test(params.placed ?? "") ? `${params.placed} client${params.placed === "1" ? "" : "s"} placed on the journey.` : null;
   const active = clients.filter((c) => c.status === "active" && c.dbId).sort(byImportance);
   const plan = restartSchedule(active, from, perDay);
   const days = [...new Set(plan.map((p) => p.start))];
@@ -131,7 +131,7 @@ export default async function RestartPage({ searchParams }: { searchParams: Prom
               <button type="submit" disabled={!stepsReady} className="pressable min-h-12 w-full rounded-2xl bg-violet-deep text-sm font-semibold text-white disabled:opacity-50">
                 Place {toPlace.length} client{toPlace.length === 1 ? "" : "s"}
               </button>
-              {!stepsReady && <p className="mt-1.5 text-[11px] text-amber">Needs one setup step first: run 0038_journey_steps.sql in Supabase.</p>}
+              {!stepsReady && <p className="mt-1.5 text-[11px] text-amber">Needs one setup step first: run 0040_journey_steps.sql in Supabase.</p>}
             </form>
           )}
         </>

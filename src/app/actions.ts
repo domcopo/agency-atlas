@@ -22,6 +22,7 @@ import { asGuideRole, canEditGuide, GUIDE_LIMITS } from "@/lib/role-guides";
 import { asIdeaStatus, checkGoal, checkIdea, IDEA_RULES } from "@/lib/ideas";
 import { matchClient } from "@/lib/billing";
 import {
+  getAuditResultsBlock,
   getAiStatus,
   getAuditSettings,
   getAtlasQuestions,
@@ -78,6 +79,7 @@ import { AGENCY_SLUG } from "@/lib/agency";
 import { isPdf, MAX_PDF_BYTES, MAX_UPLOAD_TOTAL_BYTES } from "@/lib/uploads";
 import { checkDraftDue, cleanLinks, contactDetailsIn, hoursToMinutes, personLoads } from "@/lib/work-orders";
 import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
+import { SUGGESTION_RULES } from "@/lib/work-hub";
 import { asTouchKind, checkTouchNote, nyDay, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { canCare, isLead } from "@/lib/roles";
 import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, parseJourneyStep, placementFor, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
@@ -87,16 +89,19 @@ import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, u
 import { parseAuditConfig } from "@/lib/audit/config";
 import { cleanCity, cleanDomain, cleanKeyword, cleanNiche, cleanPosition } from "@/lib/watch/lists";
 import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue, WATCH_RESULTS_MAX_BYTES } from "@/lib/watch/rounds";
-import { buildAuditConfig, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
+import { buildAuditConfig, INTAKE_DEFAULTS, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { checkPlaces, farTownInDomain, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, planAdsRun, planSeoRun, readBidders, readMaps, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
+import { heatCentre, heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
+import { readAllRows } from "@/lib/paging";
 
 const SERVICES = ["SEO", "Ads", "Website"] as const;
 
@@ -592,19 +597,24 @@ export async function addSuggestedAction(form: FormData) {
 /** Done / reopen / reschedule / assign / status / priority on one action. */
 export async function updateAction(form: FormData) {
   await notWhilePreviewing();
+  await applyUpdate(form);
+}
+
+/** Every status, date, owner, priority and detail change. Returns a problem in plain words, or null when saved. */
+async function applyUpdate(form: FormData): Promise<string | null | undefined> {
   const me = await getCurrentMember();
-  if (!me) return;
+  if (!me) return "Please sign in again.";
   const id = text(form, "actionId", 40);
   const op = text(form, "op", 12);
-  if (!isUuid(id)) return;
+  if (!isUuid(id)) return "Couldn't save. Reload and try again.";
   // Developers may only change the status of their own items, and say why it's blocked (the database enforces this too).
-  if (me.role === "developer" && op !== "done" && op !== "status") return;
+  if (me.role === "developer" && op !== "done" && op !== "status") return "Ask a manager to change this.";
   // Salespeople: their lead follow-ups' status and dates only (the database allows lead follow-ups only).
   const SALES_OPS = ["done", "reopen", "reschedule", "status", "priority"];
   if (me.role === "sales" && !SALES_OPS.includes(op)) return;
   const db = await createDatabaseClient();
   const { data: current } = await db.from("actions").select("id, client_id, lead_ghl_id, kind, title, status").eq("id", id).maybeSingle();
-  if (!current) return; // not found, or not allowed to see it
+  if (!current) return "That item isn't there any more."; // not found, or not allowed to see it
   const a = current as { id: string; client_id: string | null; lead_ghl_id: string | null; kind: "follow_up" | "issue" | "work_order"; title: string; status: string };
   const manager = me.role === "owner" || me.role === "manager";
   // A developer's "done" on a work order or issue means "ready for review" (0011): a manager approves it.
@@ -621,24 +631,24 @@ export async function updateAction(form: FormData) {
     summary = `Done: ${a.title}`;
     kind = "action_done";
   } else if (op === "approve") {
-    if (!manager || a.status !== "review") return;
+    if (!manager || a.status !== "review") return "Only a manager can review this, while it's in review.";
     patch = { status: "done", done_at: new Date().toISOString(), review_note: null };
     summary = `Approved as done: ${a.title}`;
     kind = "action_done";
   } else if (op === "sendback") {
-    if (!manager || a.status !== "review") return;
+    if (!manager || a.status !== "review") return "Only a manager can review this, while it's in review.";
     const note = text(form, "note", 200);
     patch = { status: "open", done_at: null, review_note: note || null };
     summary = `Sent back${note ? ` (${note})` : ""}: ${a.title}`;
   } else if (op === "cancel") {
     // Owner only (0013; the database refuses anyone else too). Kept, never deleted.
-    if (me.role !== "owner" || a.status === "canceled") return;
+    if (me.role !== "owner" || a.status === "canceled") return "Only the owner can cancel work.";
     const note = text(form, "note", 200);
     patch = { status: "canceled", cancel_note: note || null };
     summary = `Canceled${note ? ` (${note})` : ""}: ${a.title}`;
     kind = "action_status"; // the history table's existing kinds; the summary says "Canceled"
   } else if (op === "restore") {
-    if (me.role !== "owner" || a.status !== "canceled") return;
+    if (me.role !== "owner" || a.status !== "canceled") return "Only the owner can restore canceled work.";
     patch = { status: "open", done_at: null };
     summary = `Restored: ${a.title}`;
     kind = "action_reopened";
@@ -655,20 +665,20 @@ export async function updateAction(form: FormData) {
       return d.toISOString().slice(0, 10);
     };
     const due = preset === "tomorrow" ? shift(1) : preset === "week" ? shift(7) : anyDate(text(form, "due", 10));
-    if (!due) return;
+    if (!due) return "That date doesn't look right.";
     patch = { due_on: due };
     summary = `Rescheduled to ${due}: ${a.title}`;
     kind = "action_rescheduled";
   } else if (op === "assign") {
     const ownerId = text(form, "ownerId", 40);
     const name = ownerId ? await staffExists(db, ownerId) : null;
-    if (ownerId && !name) return;
+    if (ownerId && !name) return "That person isn't on the team.";
     patch = { owner_staff_id: ownerId || null };
     summary = name ? `Assigned to ${name}: ${a.title}` : `Unassigned: ${a.title}`;
     kind = "action_assigned";
   } else if (op === "status") {
     const picked = oneOf(STATUSES, text(form, "status", 12));
-    if (!picked) return;
+    if (!picked) return "Pick a status.";
     const status = picked === "done" && devToReview ? "review" : picked;
     patch = status === "done" ? { status, done_at: new Date().toISOString() } : { status, done_at: null };
     // Blocked: keep a short reason. Other statuses clear it.
@@ -677,18 +687,18 @@ export async function updateAction(form: FormData) {
     summary = `${status === "in_progress" ? "In progress" : status === "waiting" ? "Waiting on client" : status === "blocked" ? "Blocked" : status === "review" ? "Ready for review" : status === "done" ? "Done" : "Open"}: ${a.title}`;
     kind = status === "done" ? "action_done" : "action_status";
   } else if (op === "promise") {
-    if (me.role === "developer") return;
+    if (me.role === "developer") return "Ask a manager to change this.";
     const raw = text(form, "promised", 10);
     const promised = raw ? anyDate(raw) : null;
-    if (raw && !promised) return;
+    if (raw && !promised) return "That date doesn't look right.";
     patch = { promised_on: promised };
     summary = promised ? `Promised to client by ${promised}: ${a.title}` : `Promise date removed: ${a.title}`;
     kind = "action_rescheduled";
   } else if (op === "details") {
-    if (me.role === "developer") return;
+    if (me.role === "developer") return "Ask a manager to change this.";
     const linkRaw = text(form, "link", 500);
     const link = httpsLink(linkRaw);
-    if (linkRaw && !link) return;
+    if (linkRaw && !link) return "Links must start with https:// (no logins inside them).";
     const estRaw = Number(text(form, "est", 5));
     patch = {
       steps: cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : ""),
@@ -697,13 +707,38 @@ export async function updateAction(form: FormData) {
       est_minutes: (EST_CHOICES as number[]).includes(estRaw) ? estRaw : null,
     };
     summary = `Details updated: ${a.title}`;
+  } else if (op === "est" || op === "steps" || op === "ghl") {
+    // One detail at a time (the Work hub drawer saves each field on its own).
+    if (me.role === "developer") return "Ask a manager to change this.";
+    if (op === "est") {
+      const raw = text(form, "est", 5);
+      const est = Number(raw);
+      if (raw && !(EST_CHOICES as number[]).includes(est)) return "Pick a time from the list.";
+      patch = { est_minutes: raw ? est : null };
+    } else if (op === "steps") {
+      patch = { steps: cleanSteps(typeof form.get("steps") === "string" ? String(form.get("steps")).slice(0, 4000) : "") };
+    } else {
+      const linkRaw = text(form, "link", 500);
+      const link = httpsLink(linkRaw);
+      if (linkRaw && !link) return "Links must start with https:// (no logins inside them).";
+      patch = { source_link: link, source_note: text(form, "linkNote", 200) || null };
+    }
+    summary = `Details updated: ${a.title}`;
+  } else if (op === "done_when") {
+    // "Done when" (0038): owner and managers only; the database refuses everyone else too.
+    if (me.role !== "owner" && me.role !== "manager") return "Ask a manager to change this.";
+    const doneWhen = text(form, "doneWhen", 500);
+    const contact = contactDetailsIn(doneWhen);
+    if (contact.length) return `That looks like ${contact.join(" and ")}. Keep contact details in the client record.`;
+    patch = { done_when: doneWhen || null };
+    summary = `Done when updated: ${a.title}`;
   } else if (op === "priority") {
     const priority = oneOf(PRIORITIES, text(form, "priority", 10));
-    if (!priority) return;
+    if (!priority) return "Pick a priority.";
     patch = { priority };
     summary = `Priority ${priority}: ${a.title}`;
   }
-  if (!patch) return;
+  if (!patch) return "Couldn't save. Reload and try again.";
   let { error } = await db.from("actions").update(patch).eq("id", id);
   // Before 0011 there's no "review" status (a check rule refuses it): the old way, straight to done.
   if (error?.code === "23514" && patch.status === "review") {
@@ -718,12 +753,50 @@ export async function updateAction(form: FormData) {
     void _skip;
     ({ error } = await db.from("actions").update(rest).eq("id", id));
   }
+  if (error && MISSING_COLUMN.has(error.code ?? "") && "done_when" in patch) return "Needs one setup step (0038 SQL).";
   if (error) {
     console.warn(`Action update refused: ${error.code}`);
-    return;
+    return "Couldn't save. You may not be allowed to change this.";
   }
   if (me.role !== "sales") await logActivity(db, { client_id: a.client_id, lead_ghl_id: a.lead_ghl_id, action_id: a.id, kind, summary });
   refreshOps(text(form, "slug", 90));
+  return null;
+}
+
+/**
+ * The same change as updateAction, but says whether it worked, so a field can show
+ * "Saved" or the problem (the Work hub's drawer saves fields on its own; WORK_HUB_PLAN.md).
+ */
+export async function saveActionField(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const problem = await applyUpdate(form);
+  // null = saved; a message = why not; nothing = refused without a reason (salespeople outside their lead work).
+  return problem === null ? { ok: true } : { error: problem ?? "You can't change this." };
+}
+
+/**
+ * Dismiss one Work hub suggestion (0038, owner and managers). It stays hidden while its
+ * reason is the same; the database stamps who and when, and allows no edits or deletes.
+ */
+export async function dismissSuggestion(_prev: { error?: string; ok?: boolean } | undefined, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (me.role !== "owner" && me.role !== "manager")) return { error: "Only the owner or a manager can dismiss suggestions." };
+  const slug = text(form, "slug", 90);
+  const rule = oneOf(SUGGESTION_RULES, text(form, "rule", 12));
+  const reason = text(form, "reason", 300);
+  if (!rule || !reason) return { error: "Couldn't dismiss this one. Reload and try again." };
+  const client = (await getRoster()).find((c) => c.id === slug);
+  if (!client?.dbId) return { error: "Only suggestions for a client can be dismissed." };
+  const db = await createDatabaseClient();
+  const { error } = await db.from("work_suggestion_dismissals").insert({ client_id: client.dbId, rule, reason });
+  if (error && error.code !== "23505") {
+    if (MISSING_TABLE.has(error.code ?? "")) return { error: "Dismiss needs one setup step (0038 SQL)." };
+    console.warn(`Dismiss refused: ${error.code}`);
+    return { error: "Couldn't dismiss it. You may not be allowed to." };
+  }
+  refreshOps();
+  return { ok: true };
 }
 
 /**
@@ -1545,7 +1618,7 @@ export async function saveCareTarget(form: FormData) {
 }
 
 // ---------------------------------------------------------------------------
-// Journey steps editor + place by start date (0038, docs/CLIENTS_JOURNEY_LINE_PLAN.md)
+// Journey steps editor + place by start date (0040, docs/CLIENTS_JOURNEY_LINE_PLAN.md)
 // ---------------------------------------------------------------------------
 
 /** Like text(), but keeps line breaks (drafts are several lines). */
@@ -1560,7 +1633,7 @@ export async function saveJourneyStep(_prev: JourneyFormState, form: FormData): 
   const me = await getCurrentMember();
   if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can edit the journey steps." };
   const current = await getJourneySteps();
-  if (!current.ready) return { error: "Editing the steps needs one setup step first (0038 SQL). Ask the owner." };
+  if (!current.ready) return { error: "Editing the steps needs one setup step first (0040 SQL). Ask the owner." };
   const parsed = parseJourneyStep(
     {
       step: text(form, "step", 4),
@@ -1601,7 +1674,7 @@ export async function placeClientsByStart() {
   const me = await getCurrentMember();
   if (!me || me.role !== "owner") return;
   const [{ ready, steps }, roster] = await Promise.all([getJourneySteps(), getRoster()]);
-  if (!ready) redirect("/clients/restart?placed=needs0038");
+  if (!ready) redirect("/clients/restart?placed=needs0040");
   const day = localToday();
   const db = await createDatabaseClient();
   let placed = 0;
@@ -2190,12 +2263,16 @@ export async function refreshLeads(): Promise<{ error?: string; message?: string
   await notWhilePreviewing();
   const me = await getCurrentMember();
   if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can refresh leads." };
-  const r = await runLeadRefresh(me.role);
+  const r = await runLeadRefresh(me.role, await createDatabaseClient());
   revalidatePath("/", "layout");
   return r;
 }
 
-/** Called when someone opens Sales: refreshes in the background if the copy is over an hour old. */
+/**
+ * Called when someone opens Home or Sales: if the copy is over an hour old, refreshes it in the
+ * background AFTER the page is sent (like autoSyncGhl), so nobody waits for GoHighLevel.
+ * The next visit shows the result.
+ */
 export async function autoRefreshLeads(): Promise<void> {
   await notWhilePreviewing(); // callers catch this; a preview never refreshes anything
   const me = await getCurrentMember();
@@ -2207,13 +2284,18 @@ export async function autoRefreshLeads(): Promise<void> {
   ]);
   if (last.error) return; // before 0020
   const newest = [last.data?.[0]?.ran_at, sync.data?.[0]?.ran_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
-  if (!refreshDue(newest, new Date())) return;
-  await runLeadRefresh(me.role).catch(() => undefined);
+  if (!refreshDue(newest, new Date()) || !isGhlConfigured()) return;
+  // Sign-in and role are read now; after() can't read cookies from a page.
+  const role = me.role;
+  after(async () => {
+    const result = await runLeadRefresh(role, db).catch(() => ({ error: "stopped" }));
+    if (result.error) console.warn("Background lead refresh skipped; the Refresh button still works.");
+  });
 }
 
-async function runLeadRefresh(role: string): Promise<{ error?: string; message?: string }> {
+/** Reads the sales pipelines from GoHighLevel and saves copies. No cookies, so it can run after a page is sent. */
+async function runLeadRefresh(role: string, db: Db): Promise<{ error?: string; message?: string }> {
   if (!isGhlConfigured()) return { error: "GoHighLevel isn't connected yet." };
-  const db = await createDatabaseClient();
   const [pl, last] = await Promise.all([
     db.from("sales_pipelines").select("pipeline_id").eq("active", true),
     db.from("lead_refreshes").select("ran_at").order("ran_at", { ascending: false }).limit(1),
@@ -2238,7 +2320,10 @@ async function runLeadRefresh(role: string): Promise<{ error?: string; message?:
     // Salespeople only ever see OPEN leads, so the database lets them save open leads only
     // (tested in section 7q). Leads that closed in GoHighLevel are updated by the next
     // owner or manager refresh, or the owner's Sync.
-    const { data: seen } = await db.from("ghl_opportunities").select("ghl_id").in("pipeline_id", ids).limit(5000);
+    const { data: seen } = await readAllRows(
+      (from, to, withCount) => db.from("ghl_opportunities").select("ghl_id", { count: withCount ? "exact" : undefined }).in("pipeline_id", ids).order("ghl_id").range(from, to),
+      5000,
+    );
     const visible = new Set((seen ?? []).map((r) => r.ghl_id as string));
     const open = opportunities.filter((o) => o.status === "open");
     const saved =
@@ -2286,7 +2371,10 @@ export async function saveSalesPipeline(_prev: { error?: string; ok?: boolean } 
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { error: "Unknown pipeline." };
   const db = await createDatabaseClient();
   // The name and stages must come from our own copy, not from the form.
-  const { data } = await db.from("ghl_opportunities").select("pipeline_name, stage_name").eq("pipeline_id", id).limit(5000);
+  const { data } = await readAllRows(
+    (from, to, withCount) => db.from("ghl_opportunities").select("pipeline_name, stage_name", { count: withCount ? "exact" : undefined }).eq("pipeline_id", id).order("ghl_id").range(from, to),
+    5000,
+  );
   if (!data?.length) return { error: "That pipeline isn't in the last sync." };
   const stages = new Set(data.map((r) => r.stage_name as string | null).filter((x): x is string => Boolean(x)));
   const hot = form.getAll("hot").filter((v): v is string => typeof v === "string" && stages.has(v)).slice(0, 30);
@@ -3396,6 +3484,7 @@ export async function saveAudit(_prev: AuditFormState, form: FormData): Promise<
     avgJobUsd: text(form, "avgJobUsd", 20),
     avgJobConfirmed: form.get("avgJobConfirmed") === "on",
     visitToJobRate: text(form, "visitToJobRate", 10),
+    radiusMiles: text(form, "radiusMiles", 4),
     competitors,
     modules: { dataforseo: form.get("mod_dataforseo") === "on", leadsnap: form.get("mod_leadsnap") === "on", semrush: form.get("mod_semrush") === "on" },
     wantsAds: form.get("wantsAds") === "on",
@@ -3564,7 +3653,7 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
     if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
     const plan = planSeoRun(audit.intake, audit.sections);
     estimate = plan.estimateUsd;
-    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", "Checking and saving"])];
+    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", ...(wantsHeatMap(audit) ? [HEAT_STEP] : []), "Checking and saving"])];
   }
 
   const db = await createDatabaseClient();
@@ -3596,7 +3685,8 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
 
 async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels: string[]) {
   const db = await createDatabaseClient();
-  const deadline = Date.now() + RUN_DEADLINE_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + RUN_DEADLINE_MS;
   const state = new Map(stepLabels.map((l) => [l, "waiting" as "waiting" | "working" | "done" | "skipped"]));
   const answers = new Map<string, DfsAnswer>();
   const problems: string[] = [];
@@ -3604,6 +3694,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let calls = 0;
   let aiUsd: number | null = null;
   let wordsNote: string | null = null;
+  let heatNote: string | null = null;
   // What this run may spend in total (its estimate, set aside before it started). A failed
   // lookup is retried once only while the spend stays inside it.
   let budgetUsd = 0;
@@ -3616,6 +3707,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       .update({ status, error: error ? error.slice(0, 300) : null, actual_usd: Math.min(50, Math.round(costUsd * 10000) / 10000), ai_usd: aiUsd, steps: [...state].map(([label, s]) => ({ label, state: s })), finished_at: new Date().toISOString() })
       .eq("id", runId);
   };
+  /** Why a run stopped without saving: the audit keeps its last results. */
+  const keptNote = () => `Nothing was saved, so the last results stay. ${problems[0] ?? "The main lookups didn't answer."} Check the DataForSEO credit and try again.`;
   /** Runs lookups a few at a time; a failed lookup leaves its numbers "not found". */
   const runLookups = async (list: Lookup[]) => {
     const byStep = new Map<string, Lookup[]>();
@@ -3628,7 +3721,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         if (Date.now() > deadline) break;
         await Promise.all(
           group.slice(i, i + 6).map(async (l) => {
-            for (let attempt = 0; attempt < 2; attempt++) {
+            for (let attempt = 0; attempt < RUN_RULES.lookupTries; attempt++) {
               calls++;
               try {
                 const a = await dfsLookup(l.path, l.task);
@@ -3636,10 +3729,11 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
                 costUsd += a.costUsd ?? DFS_PRICE[l.path];
                 return;
               } catch (e) {
-                costUsd += DFS_PRICE[l.path];
-                // Their side hiccuped (e.g. 40101): one more try after a short pause, if the budget allows.
-                if (attempt === 0 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
-                  await new Promise((r) => setTimeout(r, 1500));
+                // Refused or failed lookups aren't billed; only a timeout might be.
+                if (!(e instanceof DfsError) || e.mayBeCharged) costUsd += DFS_PRICE[l.path];
+                // Their side hiccuped (e.g. 40101): try again after a growing pause, if the budget allows.
+                if (attempt < RUN_RULES.lookupTries - 1 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, RUN_RULES.retryPauseMs[attempt] ?? 5000));
                   continue;
                 }
                 if (problems.length < 3) problems.push(`${l.step}: ${e instanceof DfsError ? e.message : "a lookup failed."}`);
@@ -3663,6 +3757,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const plan = planAdsRun(intake, sections);
       budgetUsd = plan.estimateUsd;
       await runLookups(plan.first);
+      if (answers.size === 0) return await finish("failed", keptNote());
       const serps = adsMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
       const extra: Lookup[] = [];
       if (sections.includes("ads_spend")) {
@@ -3683,12 +3778,28 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.intake!;
       // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
       // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
-      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, 20).map((t) => t.label), others: statePlaces(intake.state) };
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, RUN_RULES.nearbyTowns, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).map((t) => t.label), others: statePlaces(intake.state) };
       const plan = planSeoRun(intake, audit.sections, area);
       budgetUsd = plan.estimateUsd;
+      // LeadSnap heat map: started as soon as the business's Google listing is known (it takes
+      // LeadSnap a few minutes), collected after the notes.
+      const heatTerm = mapTermOf(intake);
+      const heatOn = wantsHeatMap(audit);
+      let heatStart: Promise<HeatStart> | null = null;
+      const startHeat = (answer: DfsAnswer | undefined) => {
+        const place = heatOn && !heatStart ? readPlace(answer, intake.domain) : null;
+        if (place) heatStart = startLeadSnapHeat({ placeId: place.placeId, ...heatCentre(place, placePosition(intake.state, intake.hqTown)) }, heatTerm);
+      };
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
+      if (answers.size === 0) return await finish("failed", keptNote());
+      // Competitors are picked from Google's live results: if one of those didn't come back, the
+      // pick would fall to weaker, often out-of-area sites (a Youngstown audit got a Milwaukee one).
+      // Keep the last good pages instead.
+      const missingWho = intake.competitors.length ? null : whoRanksMissing(intake, answers);
+      if (missingWho) return await finish("failed", `Google's results for “${missingWho}” didn't come back from DataForSEO${problems.length ? ` (${problems.join(" ")})` : ""}, so competitors couldn't be picked fairly. Nothing was saved, so the last results stay. Try again in a few minutes.`);
+      startHeat(answers.get("maps:area"));
       const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
       const serps = seoMoneyTerms(intake).map((_, i) => readSerp(answers.get(`serp:${i}`)));
@@ -3696,17 +3807,33 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area"))).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area")), (d, name) => [d, name].some((x) => !!x && farTownInDomain(x, intake.state, intake.hqTown, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles) !== null)).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
+      startHeat(answers.get(`maps:${intake.domain}`));
+      const rankedVolume = plan.rankedVolume(answers, sites.map((x) => x.domain), universe);
+      if (rankedVolume) await runLookups([rankedVolume]);
+      // Without the search counts or any site's rankings the pages would be mostly "not found":
+      // keep the last good results instead of replacing them (a run with no credit wiped one).
+      if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());
       let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
+      // A heat map that's already done (a reused one usually is) goes in before the notes, so
+      // they can talk about it; otherwise it's collected after them, as before.
+      let heatGot: HeatGot | null = null;
+      if (heatOn && heatStart) {
+        const early = await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, Date.now());
+        if ("heat" in early) {
+          block = withHeatmap(block, early.heat);
+          heatGot = early;
+        } else if ("problem" in early) heatGot = early;
+      }
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");
       await saveSteps();
       const left = isAiConfigured() ? await getAiBudgetLeft() : null;
       if (left !== null && left > 0.05 && Date.now() < deadline) {
-        const input = wordsInput(block, intake.company, intake.niche);
+        const input = wordsInput(block, intake.company, intake.niche, { averageJobUsd: intake.avgJobUsd, averageJobConfirmed: intake.avgJobConfirmed, visitsThatBecomeJobsPercent: Math.round(intake.visitToJobRate * 1000) / 10 });
         const result = await askAi({ task: AUDIT_WORDS_TASK, data: input.data, schema: AUDIT_WORDS_SCHEMA, maxOutputTokens: 8000, remainingUsd: left }); // thinking counts toward this, so leave room
         await logAiUsage(db, "audit_words", result);
         if (result.ok) {
@@ -3715,6 +3842,18 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         } else wordsNote = `Claude's notes weren't written (${result.message})`;
       }
       state.set("Writing the notes", "done");
+      if (heatOn) {
+        state.set(HEAT_STEP, "working");
+        await saveSteps();
+        const got = heatGot ?? (heatStart ? await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, startedAt + LEADSNAP_RULES.waitUntilMs) : { problem: "the business's Google listing wasn't found in Maps." });
+        if ("heat" in got) {
+          if (got !== heatGot) block = withHeatmap(block, got.heat);
+          state.set(HEAT_STEP, "done");
+        } else if ("pending" in got) {
+          block = { ...block, leadsnapPending: { id: got.pending, term: heatTerm } };
+          heatNote = "The LeadSnap heat map is still being made: tap “Get heat map” in a few minutes.";
+        } else heatNote = `No heat map: ${got.problem}`;
+      }
       state.set("Checking and saving", "working");
       const settings = await getAuditSettings();
       const config = buildAuditConfig(intake, settings.agency, audit.createdAt.slice(0, 10));
@@ -3728,10 +3867,99 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${wordsNote ? ` ${wordsNote}` : ""}` : wordsNote);
+    const notes = [wordsNote, heatNote].filter(Boolean).join(" ") || null;
+    await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${notes ? ` ${notes}` : ""}` : notes);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
   }
+}
+
+// ---------------------------------------------------------------------------
+// LeadSnap heat maps (approved 2026-11-27): one 7×7 Google Maps grid per run, through the
+// heat-map-only module (src/lib/audit/sources/leadsnap.ts). Uses LeadSnap credits; a heat map
+// of the same listing and search from the last 7 days is reused instead.
+// ---------------------------------------------------------------------------
+
+const HEAT_STEP = "Heat map (LeadSnap)";
+
+function wantsHeatMap(audit: SavedAudit): boolean {
+  return audit.kind !== "ads" && !!audit.intake?.modules.leadsnap && audit.sections.includes("heatmap") && isLeadSnapConfigured();
+}
+
+type HeatStart = { id: number } | { problem: string };
+
+async function startLeadSnapHeat(place: { placeId: string; lat: number; lng: number }, term: string): Promise<HeatStart> {
+  try {
+    const recent = reusableHeatmap(await listRecentHeatmaps(place.placeId, term), new Date(), place);
+    if (recent) return { id: recent };
+    const id = heatmapId(await createHeatmap({ placeId: place.placeId, keyword: term, lat: place.lat, lng: place.lng, size: LEADSNAP_RULES.gridSize, spacingMiles: LEADSNAP_RULES.spacingMiles, points: planGrid(place.lat, place.lng) }));
+    return id ? { id } : { problem: "LeadSnap didn't say which heat map it started." };
+  } catch (e) {
+    return { problem: e instanceof LeadSnapError ? e.message : "LeadSnap couldn't start the heat map." };
+  }
+}
+
+type HeatGot = { heat: Record<string, unknown> } | { pending: number } | { problem: string };
+
+/** Looks every few seconds until the heat map is done or `until` (a time) passes. */
+async function collectLeadSnapHeat(start: HeatStart, term: string, retrieved: string, until: number): Promise<HeatGot> {
+  if ("problem" in start) return start;
+  for (;;) {
+    try {
+      const body = await getHeatmap(start.id);
+      const read = readHeatmap(body);
+      if (!read) return { problem: `LeadSnap's heat map couldn't be read (${heatShape(body)}).` };
+      if (read.status === "failed") return { problem: "LeadSnap couldn't finish the heat map." };
+      if (read.status === "ready") {
+        let leaders: ReturnType<typeof readLeaders> = [];
+        try {
+          leaders = readLeaders(await getHeatmapCompetitors(start.id), read.placeId);
+        } catch {
+          // The grid still counts without the list of leaders.
+        }
+        return { heat: heatmapBlock(read, term, retrieved, leaders) };
+      }
+    } catch (e) {
+      if (!(e instanceof LeadSnapError && e.retryable)) return { problem: e instanceof LeadSnapError ? e.message : "LeadSnap's heat map couldn't be read." };
+    }
+    if (Date.now() + LEADSNAP_RULES.pollEveryMs > until) return { pending: start.id };
+    await new Promise((r) => setTimeout(r, LEADSNAP_RULES.pollEveryMs));
+  }
+}
+
+export type HeatFetchState = { error?: string; ok?: boolean; waiting?: boolean } | undefined;
+
+/** "Get heat map": collects a LeadSnap heat map that wasn't finished when the run ended. */
+export async function fetchAuditHeatmap(_prev: HeatFetchState, form: FormData): Promise<HeatFetchState> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || (!isLead(me.role) && me.role !== "sales")) return { error: "Only the owner, managers and salespeople can do that." };
+  const id = text(form, "id", 40);
+  if (!isUuid(id)) return { error: "Unknown audit." };
+  const audit = await getSavedAudit(id);
+  if (!audit?.intake || audit.kind === "ads") return { error: "Couldn't find that audit." };
+  if (!isLead(me.role) && (audit.createdBy !== me.userId || audit.archived)) return { error: "You can do this only for your own audits that aren't archived." };
+  if (!isLeadSnapConfigured()) return { error: "LeadSnap isn't connected (the token isn't set on the server)." };
+  const block = await getAuditResultsBlock(id);
+  const pending = heatPendingOf(block);
+  if (!block || !pending) return { error: "There's no heat map waiting for this audit. Run the audit again to make one." };
+  const got = await collectLeadSnapHeat({ id: pending.id }, pending.term, nyDate(new Date()), 0);
+  if ("pending" in got) return { waiting: true };
+  if ("problem" in got) return { error: `No heat map: ${got.problem}` };
+  const next = withHeatmap(block as Record<string, unknown>, got.heat);
+  const settings = await getAuditSettings();
+  const config = buildAuditConfig(audit.intake, settings.agency, audit.createdAt.slice(0, 10));
+  const checked = parseSeoResults(next, { intake: audit.intake, markets: config.markets.map((m) => ({ id: m.id, name: m.name })), today: nyDate(new Date()) });
+  if (!checked.ok) return { error: `The heat map didn't pass the checks: ${checked.errors[0] ?? "unknown"}` };
+  const db = await createDatabaseClient();
+  try {
+    await saveRunResults(db, id, next, { competitors: checked.competitors }, checked.summary.retrieved);
+  } catch {
+    return { error: "Couldn't save the heat map to the audit." };
+  }
+  revalidatePath(`/audits/${id}`);
+  revalidatePath(`/audit/${id}`);
+  return { ok: true };
 }
 
 async function saveRunResults(db: Awaited<ReturnType<typeof createDatabaseClient>>, auditId: string, block: Record<string, unknown>, config: Record<string, unknown>, retrieved: string) {

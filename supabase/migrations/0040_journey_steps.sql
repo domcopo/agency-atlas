@@ -1,5 +1,5 @@
 -- Agency Atlas: editable journey steps + placing clients by start date (approved 2026-11-25,
--- docs/CLIENTS_JOURNEY_LINE_PLAN.md). Numbered 0038 (0037 = audit spend settle).
+-- docs/CLIENTS_JOURNEY_LINE_PLAN.md). Numbered 0040 (0037 audit spend settle, 0038 Work hub and 0039 my_work were taken first; written as 0038, renumbered 2026-11-28).
 --
 -- Run ONCE in the Supabase SQL Editor, AFTER the app code for it is deployed. Before running
 -- it, check that today's daily backup exists (Supabase > Database > Backups). Undo is at the end.

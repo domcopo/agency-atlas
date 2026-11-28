@@ -10,9 +10,15 @@
 export const AUDIT_WORDS_TASK = `You write the short words for a local SEO audit of a prospect, for a marketing agency.
 You are given finished numbers only. Rules:
 - Use ONLY the numbers given. Never add, estimate or guess a number, a price or a fact that isn't in the data.
-- Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...). No websites, emails or phone numbers.
+- Refer to businesses only by their codes as given (BUSINESS, COMPETITOR 1, ...), each code written in full every time ("COMPETITOR 1, COMPETITOR 2 and COMPETITOR 3", never "COMPETITORS 1, 2 and 3" or "COMPETITOR 2 to 5"). No websites, emails or phone numbers.
 - Plain, confident English a business owner understands. No hype, no guarantees.
-- If the data is thin, say less.`;
+- If the data is thin, say less.
+- If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.
+- A local 3-pack position of 0 means the pack was shown and other businesses held its 3 spots; null means not checked. Never say no business is in the pack.
+- If maps_grid is given, it is where BUSINESS ranks in the Google Maps app at points around the home town. Mention it in the footprint note, especially when it differs from the 3-pack (in the pack but not in the Maps top 20 is worth saying plainly).`;
+
+// The slides give each note about 300 characters; longer answers are cut at a sentence (fit).
+const NOTE = "One or two short sentences, under 250 characters in all.";
 
 export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -25,11 +31,11 @@ export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
       additionalProperties: false,
       required: ["rankings", "footprint", "competitors", "keywords", "revenue"],
       properties: {
-        rankings: { type: "string" },
-        footprint: { type: "string" },
-        competitors: { type: "string" },
-        keywords: { type: "string" },
-        revenue: { type: "string" },
+        rankings: { type: "string", description: NOTE },
+        footprint: { type: "string", description: NOTE },
+        competitors: { type: "string", description: NOTE },
+        keywords: { type: "string", description: NOTE },
+        revenue: { type: "string", description: NOTE },
       },
     },
     // No maxItems: structured outputs refuse array-length rules (a 400). The counts are asked for
@@ -55,7 +61,22 @@ export interface WordsInput {
 }
 
 /** The coded, numbers-only view of a results block that Claude gets. */
-export function wordsInput(block: Obj, company: string, niche: string): WordsInput {
+/** The revenue page's inputs, so the notes describe that model instead of saying it is missing. */
+export interface RevenueInputs {
+  averageJobUsd: number;
+  averageJobConfirmed: boolean;
+  visitsThatBecomeJobsPercent: number;
+}
+
+export function wordsInput(block: Obj, company: string, niche: string, model?: RevenueInputs): WordsInput {
+  const revenue = model
+    ? {
+        how: "The revenue page shows a model: modeled visits x the share that become jobs x the average job. It is a model, not reported revenue.",
+        average_job_usd: model.averageJobUsd,
+        average_job_from: model.averageJobConfirmed ? "the business owner" : "an assumption",
+        visits_that_become_jobs_percent: model.visitsThatBecomeJobsPercent,
+      }
+    : null;
   const sites = arr(block.sites).map(obj);
   const comps = arr(block.competitors).map(obj);
   const code = new Map<string, string>();
@@ -80,6 +101,11 @@ export function wordsInput(block: Obj, company: string, niche: string): WordsInp
       kind_of_business: niche,
       demand_by_city: arr(block.demand).map(obj).map((d) => ({ city: d.city, searches_per_month: val(d.searches) })),
       near_me_searches_per_month: val(block.nearMeSearches),
+      home_town_plain_searches_per_month: val(block.homeTownSearches),
+      nearby_towns_searches_per_month: val(block.nearbySearches),
+      nearby_towns_radius_miles: typeof block.nearbyMiles === "number" ? block.nearbyMiles : null,
+      seller_situation_searches_per_month: val(block.situationSearches),
+      ...(revenue ? { revenue_model: revenue } : {}),
       money_keywords: arr(block.keywords)
         .map(obj)
         .filter((k) => k.money === true)
@@ -102,8 +128,43 @@ export function wordsInput(block: Obj, company: string, niche: string): WordsInp
         ? { business_homepage_check: { has_title: !!ins.title, has_h1: !!ins.h1, title_or_h1_names_home_town: ins.namesHomeTown ?? null, problems: arr(ins.issues).filter((x) => typeof x === "string") } }
         : {}),
       local_3pack_by_city: arr(block.heatmaps).map(obj).flatMap((h) => arr(h.cities).map(obj).map((c) => ({ city: c.city, business_position: c.position }))),
+      ...mapsGrid(block),
     },
   };
+}
+
+/** The Google Maps grid as counts only (no names, no places): where BUSINESS ranks around the home town. */
+function mapsGrid(block: Obj): { maps_grid?: Obj } {
+  const h = arr(block.heatmaps).map(obj).find((x) => x.kind === "maps" && Array.isArray(x.ranks));
+  if (!h) return {};
+  const cells = arr(h.ranks).flatMap((row) => arr(row)).map((r) => (typeof r === "number" ? r : null));
+  if (!cells.length) return {};
+  const ranked = cells.filter((r): r is number => r !== null);
+  return {
+    maps_grid: {
+      search: typeof h.term === "string" ? h.term : null,
+      points_checked: cells.length,
+      miles_between_points: typeof h.spacingMiles === "number" ? h.spacingMiles : null,
+      points_business_in_top_3: ranked.filter((r) => r <= 3).length,
+      points_business_in_top_10: ranked.filter((r) => r <= 10).length,
+      points_business_not_in_top_20: cells.length - ranked.length,
+      other_businesses_often_in_top_3: arr(h.leaders).length,
+    },
+  };
+}
+
+/**
+ * Text cut to fit a space without ending mid-sentence: the last full sentence that fits (even a short one: a whole sentence reads better than a cut one), or
+ * (one long sentence) the last whole word with "…". Names are put back before this, so a
+ * long name never pushes a note past its space.
+ */
+export function fit(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const end = Math.max(...[". ", "! ", "? "].map((e) => cut.lastIndexOf(e)));
+  if (end > 0) return cut.slice(0, end + 1);
+  const word = cut.slice(0, max - 1).replace(/\s+\S*$/, "").replace(/[\s,;:–—-]+$/, "");
+  return `${word}…`;
 }
 
 /** Claude's answer → the words fields of the results block, with names put back. */
@@ -111,10 +172,13 @@ export function applyWords(block: Obj, answer: unknown, codes: [string, string][
   const a = obj(answer);
   const named = (t: unknown, max: number) => {
     if (typeof t !== "string") return "";
-    let s = t;
+    // A shortened list ("COMPETITORS 2, 3 and 5", "COMPETITOR 1, 2 and 3") is written out in
+    // full first, so no bare numbers are left where names belong (a Denver audit read
+    // "held by Need To Sell My House Fast in Denver, 2 and 1").
+    let s = t.replace(/COMPETITORS?\s+(\d+)((?:\s*(?:,\s*(?:and\s+|&\s*)?|and\s+|&\s*)\d+\b)+)/g, (_, first: string, rest: string) => `COMPETITOR ${first}${rest.replace(/(\d+)/g, "COMPETITOR $1")}`);
     // Longest codes first, so "COMPETITOR 10" isn't half-replaced by "COMPETITOR 1".
     for (const [c, n] of [...codes].sort((x, y) => y[0].length - x[0].length)) s = s.split(c).join(n);
-    return s.slice(0, max);
+    return fit(s.trim(), max);
   };
   const notes = obj(a.pageNotes);
   return {

@@ -1,5 +1,5 @@
 // Clients page Journey Line, action cards, placement by start date, and editable steps
-// (docs/CLIENTS_JOURNEY_LINE_PLAN.md, 0038). All names here are fictional.
+// (docs/CLIENTS_JOURNEY_LINE_PLAN.md, 0040). All names here are fictional.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -35,9 +35,9 @@ const ghl = (over: Partial<GhlContactTimes>): GhlContactTimes => ({
   ...over,
 });
 
-describe("deliverables and editable steps (0038)", () => {
+describe("deliverables and editable steps (0040)", () => {
   it("the deliverable list matches the database check", () => {
-    const sql = read("supabase/migrations/0038_journey_steps.sql");
+    const sql = read("supabase/migrations/0040_journey_steps.sql");
     const m = sql.match(/deliverable in \(([^)]*)\)/);
     expect(m).not.toBeNull();
     const inDb = [...m![1]!.matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
@@ -45,7 +45,7 @@ describe("deliverables and editable steps (0038)", () => {
   });
 
   it("seeds exactly today's 27 touches and 3 Grow steps, with the approved deliverables", () => {
-    const sql = read("supabase/migrations/0038_journey_steps.sql");
+    const sql = read("supabase/migrations/0040_journey_steps.sql");
     const rows = [...sql.matchAll(/^ {2}\((\d+), (\d), (\d+), '((?:[^']|'')*)'.*'([a-z_]+)'\)[,;]$/gm)];
     expect(rows).toHaveLength(30);
     for (const r of rows) {

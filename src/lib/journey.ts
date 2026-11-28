@@ -1,6 +1,6 @@
 // The client journey (docs/CLIENT_CARE_PLAN.md, Step 1B): the owner's 27-touch plan for the
 // first 90 days, grouped into 6 stages, then an ongoing "Grow" rhythm. Pure, tested in
-// tests/journey.test.ts. The wording here is the starting copy: after 0038 the owner and
+// tests/journey.test.ts. The wording here is the starting copy: after 0040 the owner and
 // managers edit it in Clients → Journey steps (journey_steps), and stepsFromConfig()
 // merges their edits over these defaults. Step numbers and stages never change.
 //
@@ -25,13 +25,13 @@ export interface JourneyTouch {
   ask?: string;
   /** Copy-only draft. [Business] is filled in; [First name] / [Your name] are for the rep. */
   template?: string;
-  /** What this touch delivers (0038). "none" = a conversation only. */
+  /** What this touch delivers (0040). "none" = a conversation only. */
   deliverable: Deliverable;
 }
 
 /**
- * Deliverable types (0038). Keep the keys in step with the journey_steps check in
- * 0038_journey_steps.sql (a test compares them).
+ * Deliverable types (0040). Keep the keys in step with the journey_steps check in
+ * 0040_journey_steps.sql (a test compares them).
  */
 export const JOURNEY_DELIVERABLES = [
   ["none", "No deliverable"],
@@ -55,7 +55,7 @@ export function deliverableLabel(d: Deliverable): string {
   return JOURNEY_DELIVERABLES.find(([k]) => k === d)?.[1] ?? "No deliverable";
 }
 
-/** The starting deliverables (owner-approved 2026-11-25); the same values seed 0038. */
+/** The starting deliverables (owner-approved 2026-11-25); the same values seed 0040. */
 const DEFAULT_DELIVERABLES: Partial<Record<number, Deliverable>> = {
   1: "baseline_audit",
   3: "pages_update",
@@ -145,7 +145,7 @@ export function touchByStep(step: number, steps: JourneySteps = DEFAULT_STEPS): 
   return steps.touches.find((t) => t.step === step) ?? steps.grow.find((t) => t.step === step);
 }
 
-/** A journey_steps row as read from the database (0038). */
+/** A journey_steps row as read from the database (0040). */
 export interface JourneyStepRow {
   step: number;
   day: number;
@@ -265,7 +265,7 @@ export interface JourneyPlanRhythm {
   competitorReviewMonths: number;
 }
 
-/** "placed" = before the touch the owner placed this client on (0038): not done, never overdue. */
+/** "placed" = before the touch the owner placed this client on (0040): not done, never overdue. */
 export type Tick = "done" | "skipped" | "placed" | "next" | "todo";
 
 export interface JourneyState {
@@ -298,7 +298,7 @@ export function journeyState(input: {
   plan?: JourneyPlanRhythm | null;
   lastContact?: string | null;
   today: string;
-  /** Owner's placement by start date (0038): touches before this step count as placed. */
+  /** Owner's placement by start date (0040): touches before this step count as placed. */
   placedStep?: number | null;
   steps?: JourneySteps;
 }): JourneyState {
@@ -475,7 +475,7 @@ export function restartSchedule<T extends { id: string }>(clients: T[], from: st
 }
 
 // ---------------------------------------------------------------------------
-// Place by start date (0038, owner, one time): existing clients go to the touch that fits
+// Place by start date (0040, owner, one time): existing clients go to the touch that fits
 // how long they've been with us, instead of everyone starting in Grow.
 // ---------------------------------------------------------------------------
 

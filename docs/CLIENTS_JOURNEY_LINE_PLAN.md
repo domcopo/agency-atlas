@@ -2,6 +2,8 @@
 
 Status: **approved and built 2026-11-25** (not committed until the owner asks). Branch `claude/clients-journey-line-66423a`. `0038_journey_steps.sql` is written and break-in tested on a throwaway local database; **the owner runs it** after deploying this code.
 
+**Migration renumbered to `0040_journey_steps.sql` (2026-11-28):** while this was being built, 0038 (Work hub, already run) and 0039 (my_work Done when) were merged to `main` from another session. Wherever this doc says 0038 for journey steps, read 0040.
+
 Owner's answers: build it; migration **0038**; item 7 as a **one-time owner action with a preview**; survey on **touch 26 only** (25 stays the 90-day headline).
 
 Changes from the plan while building (small, for a calmer screen):

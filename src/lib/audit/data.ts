@@ -98,6 +98,8 @@ export interface GeoGrid {
   ranks: (number | null)[][];
   /** Optional name for each cell (pack checks: the city). */
   cellLabels?: (string | null)[][];
+  /** Maps grids (LeadSnap): the businesses most often in the top 3 across the grid. */
+  leaders?: { name: string; top3: number; points: number }[];
   source: SourceId;
   retrieved: string;
 }
@@ -133,6 +135,14 @@ export interface AuditData {
   demand: DemandRow[];
   /** "Near me" style searches not tied to a town. */
   nearMeSearches: Fig;
+  /** Searches from the home town that name no place ("we buy houses"); absent on older results. */
+  homeTownSearches?: Fig;
+  /** Searches naming towns within ~30 miles that aren't the audit's own markets; absent on older results. */
+  nearbySearches?: Fig;
+  /** The market radius those towns were picked with (miles). */
+  nearbyMiles?: number;
+  /** Seller-situation searches from the home town ("sell inherited house"); home buyers only. */
+  situationSearches?: Fig;
   keywords: KeywordRow[];
   /** "national" = visit estimates are each site's US-wide total, so they are not drawn next to the local model. */
   visitsScope?: "local" | "national";

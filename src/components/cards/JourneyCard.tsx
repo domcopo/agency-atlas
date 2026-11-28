@@ -28,7 +28,7 @@ export function JourneyCard({
   noTexts?: boolean;
   /** Week-1 intake items still missing (shown in the first two stages). */
   missing?: string[];
-  /** The owner's edited steps (0038); the wording in code before that. */
+  /** The owner's edited steps (0040); the wording in code before that. */
   steps?: JourneySteps;
 }) {
   const next = journey.next ? touchByStep(journey.next.step, steps) : undefined;

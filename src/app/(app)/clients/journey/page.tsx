@@ -1,4 +1,4 @@
-// Journey steps (owner and managers, 0038): edit the 27 first-90-day touches and the Grow
+// Journey steps (owner and managers, 0040): edit the 27 first-90-day touches and the Grow
 // rhythm without code: words, day, channel, deliverable, copy-only draft. Step numbers and
 // stages are fixed so saved history and daily points keep working.
 
@@ -27,7 +27,7 @@ export default async function JourneyStepsPage() {
         <p className="glass mb-4 rounded-3xl px-4 py-3 text-sm text-muted">
           {usesDatabase() ? (
             <>
-              Editing needs one setup step first: run <span className="font-mono text-xs">0038_journey_steps.sql</span> in Supabase. Until then the steps below come from the app and can&apos;t be saved.
+              Editing needs one setup step first: run <span className="font-mono text-xs">0040_journey_steps.sql</span> in Supabase. Until then the steps below come from the app and can&apos;t be saved.
             </>
           ) : (
             "Demo: these are the starting steps. Saving needs the database."

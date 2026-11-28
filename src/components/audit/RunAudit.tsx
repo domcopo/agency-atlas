@@ -9,6 +9,10 @@ import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useEffect, type FormEvent } from "react";
 import { startAuditRun } from "@/app/actions";
 import type { AuditRunView } from "@/lib/data-source";
+import { LEADSNAP_RULES } from "@/lib/audit/leadsnap";
+import { FetchHeatMap } from "./FetchHeatMap";
+
+const LEADSNAP_POINTS = LEADSNAP_RULES.gridSize * LEADSNAP_RULES.gridSize;
 
 export interface RunAuditProps {
   id: string;
@@ -22,11 +26,15 @@ export interface RunAuditProps {
   hasResults: boolean;
   /** Inside the steps card: no heading or frame of its own. */
   compact?: boolean;
+  /** true = the run also asks LeadSnap for a heat map (uses LeadSnap credits). */
+  heatMap?: boolean;
+  /** true = the last run ended before LeadSnap finished: show "Get heat map". */
+  heatPending?: boolean;
 }
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
-export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, hasResults, compact = false }: RunAuditProps) {
+export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, hasResults, compact = false, heatMap = false, heatPending = false }: RunAuditProps) {
   const [state, action, pending] = useActionState(startAuditRun, undefined);
   const router = useRouter();
   const running = (run?.status === "running" && !run.stale) || (pending && !state);
@@ -45,6 +53,7 @@ export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, ha
   };
 
   return (
+    <>
     <form onSubmit={submit} className={compact ? "space-y-3" : "glass space-y-3 rounded-3xl p-4"}>
       <input type="hidden" name="id" value={id} />
       {compact ? (
@@ -66,6 +75,9 @@ export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, ha
             Costs up to <span className="font-semibold">{usd(estimateUsd)}</span> of DataForSEO (usually less), plus a few cents of AI for the notes.
             {capsLine ? <span className="text-muted"> {capsLine}</span> : null}
           </p>
+          {heatMap && (
+            <p className="text-[11px] text-faint">Also makes one LeadSnap heat map ({LEADSNAP_POINTS} points, uses LeadSnap credits). One made for the same listing and search in the last 7 days is reused instead.</p>
+          )}
           <button type="submit" disabled={running} className="pressable inline-flex min-h-12 w-full items-center justify-center gap-1.5 rounded-xl bg-violet-deep text-sm font-semibold text-white disabled:opacity-60">
             {running ? <Loader2 aria-hidden className="size-4 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden className="size-4" />}
             {running ? "Running…" : hasResults ? `Run again (up to ${usd(estimateUsd)})` : `Run audit (up to ${usd(estimateUsd)})`}
@@ -98,5 +110,7 @@ export function RunAudit({ id, configured, ready, estimateUsd, capsLine, run, ha
         </div>
       )}
     </form>
+    {heatPending && !running && <FetchHeatMap id={id} />}
+    </>
   );
 }

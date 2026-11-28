@@ -5,6 +5,7 @@ import { shortLabels } from "@/lib/audit/format";
 import { CompetitorTable } from "../CompetitorTable";
 import { PositionMatrix } from "../PositionMatrix";
 import { Slide } from "../Slide";
+import type { AuditData } from "@/lib/audit/data";
 
 export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
@@ -27,14 +28,21 @@ export function CompetitorsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
         <CompetitorTable rows={rows} showSemrush={config.modules.semrush} local={data.visitsScope === "local"} />
         <p className="audit-note">
           Pack: — = checked, not in the local 3-pack. Visits are search-only estimates, not total website traffic.
-          {data.visitsScope === "local" ? " Local = searches naming this area's towns, the state or \"near me\"; visits = each ranking × the state's monthly searches × the usual click share for that position (a model). Positioned for = monthly searches on terms where it holds a top-10 spot. Traffic value = what those visits would cost as Google Ads at today's cost per click (a model, not revenue). Brand searches are US-wide." : ""}{" "}
+          {data.visitsScope === "local" ? " Local visits = each local ranking × its monthly searches × the usual click share for that spot (a model). Positioned for = searches where it holds a top-10 spot. Traffic value = those visits priced as Google Ads clicks (a model, not revenue). Brand searches are US-wide." : ""}{" "}
           {data.narrative.pageNotes.competitors ?? ""}
         </p>
       </div>
       <div className="audit-card" style={{ flex: 1, overflow: "hidden" }}>
         <h3>Keyword ranking matrix (Google organic position)</h3>
-        <PositionMatrix keywords={data.keywords.filter((k) => k.money).slice(0, 4)} columns={cols} showVolume={false} />
+        <PositionMatrix keywords={matrixRows(data.keywords)} columns={cols} showVolume={false} />
       </div>
     </Slide>
   );
+}
+
+/** Up to 3 money searches for the matrix (a 4th row is cut off under a long note), ones where someone ranks first (rows of dashes say little). */
+function matrixRows(keywords: AuditData["keywords"]): AuditData["keywords"] {
+  const rows = keywords.filter((k) => k.money && k.positionsChecked !== false);
+  const someone = (k: AuditData["keywords"][number]) => Object.values(k.positions).some((p) => typeof p === "number" && p > 0);
+  return [...rows.filter(someone), ...rows.filter((k) => !someone(k))].slice(0, 3);
 }

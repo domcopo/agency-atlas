@@ -72,14 +72,18 @@
   gap: 12px;
 }
 .audit-footer b { color: var(--a-ink); letter-spacing: 0.08em; }
+.audit-footer-brand { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.audit-footer-brand .audit-logo { position: static; mix-blend-mode: multiply; }
+.audit-slide > .audit-logo { position: absolute; top: 34px; right: 48px; mix-blend-mode: multiply; }
 
 .audit-sample-chip {
   position: absolute;
-  top: 16px;
+  top: 8px;
   right: 48px;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.12em;
+  z-index: 1;
   color: #8a5a00;
   background: #fff3cf;
   border: 1px solid #f2d27a;

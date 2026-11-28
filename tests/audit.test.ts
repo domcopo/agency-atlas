@@ -361,3 +361,30 @@ describe("audit page 1: modeled revenue per site and the client's goal", () => {
     expect(render(bundle())[0]).not.toContain("Modeled revenue/mo");
   });
 });
+
+describe("summary: organic keywords card", () => {
+  it("never compares the business with itself; when it has the most keywords it says it leads", () => {
+    const d = clone(sampleAuditData);
+    const own = d.sites.find((s) => s.domain === sampleAuditConfig.company.domain)!;
+    own.organicKeywords = { ...own.organicKeywords, value: 99_999 };
+    const html = render(bundle(sampleAuditConfig, d))[0]!;
+    expect(html).toContain("Organic keywords vs top competitor");
+    expect(html).toContain(`${sampleAuditConfig.company.name} leads; next is`);
+    expect(html).not.toContain(`${sampleAuditConfig.company.name} vs ${sampleAuditConfig.company.domain}`);
+    // The usual case is unchanged.
+    expect(render(bundle())[0]).toContain("Organic keywords vs leader");
+  });
+});
+
+describe("leaderboard order", () => {
+  const row = (domain: string, visits: number, isClient = false) => ({ domain, name: domain, isClient, visits, semrushVisits: null, trafficValueUsd: null, revenueMo: null });
+  const cells = (html: string) => [...html.matchAll(/<tr[^>]*><td>([^<]*)<\/td><td>([^<]*)<\/td>/g)].map((m) => `${m[1]} ${m[2]}`);
+
+  it("the business at #1 is shown first; otherwise it is pinned under the competitors", async () => {
+    const { Leaderboard } = await import("@/components/audit/Leaderboard");
+    const top = renderToStaticMarkup(createElement(Leaderboard, { rows: [row("you.example", 12, true), row("a.example", 6), row("b.example", 0)], showSemrush: false }));
+    expect(cells(top)).toEqual(["#1 you.example", "2 a.example", "3 b.example"]);
+    const second = renderToStaticMarkup(createElement(Leaderboard, { rows: [row("a.example", 18), row("you.example", 12, true), row("b.example", 0)], showSemrush: false }));
+    expect(cells(second)).toEqual(["1 a.example", "2 b.example", "#2 you.example"]);
+  });
+});

@@ -207,6 +207,11 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
                   <input name="visitToJobRate" inputMode="decimal" defaultValue={((i.visitToJobRate ?? INTAKE_DEFAULTS.visitToJobRate) * 100).toString()} className={field} />
                 </label>
               </div>
+              <label className={label}>
+                Market radius (miles)
+                <input name="radiusMiles" inputMode="numeric" defaultValue={(i.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).toString()} className={field} />
+                <span className="text-[11px] text-faint">Towns this close to the home town count as the market. 45 is the default; go wider for businesses that travel far, narrower for walk-in shops ({INTAKE_LIMITS.radiusMin}–{INTAKE_LIMITS.radiusMax}).</span>
+              </label>
               <label className="flex min-h-11 items-center gap-3 text-sm">
                 <input type="checkbox" name="avgJobConfirmed" defaultChecked={i.avgJobConfirmed ?? false} className="size-5 accent-violet" />
                 <span>
@@ -277,7 +282,7 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
               <fieldset className="space-y-1.5">
                 <legend className="text-xs text-muted">Data sources</legend>
                 <SourceToggle name="mod_dataforseo" label="DataForSEO" detail="Search volume, rankings, competitors, backlinks." on={i.modules?.dataforseo ?? true} />
-                <SourceToggle name="mod_leadsnap" label="LeadSnap" detail="Maps heat-map grid, when an export is available." on={i.modules?.leadsnap ?? true} />
+                <SourceToggle name="mod_leadsnap" label="LeadSnap" detail="Google Maps heat map (7×7 grid) from your LeadSnap account when the audit runs. Uses LeadSnap credits." on={i.modules?.leadsnap ?? true} />
                 <SourceToggle name="mod_semrush" label="Semrush" detail="Shown side by side with DataForSEO, never merged. Off unless needed." on={i.modules?.semrush ?? false} />
               </fieldset>
               <label className={label}>

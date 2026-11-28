@@ -1,37 +1,45 @@
-import { Award, Crown, Headset, MessageSquareText, Wrench } from "lucide-react";
+// Work. Developers (and the owner or a manager previewing one) get their own work-first
+// screen, unchanged. The owner and managers get the Work hub (docs/WORK_HUB_PLAN.md):
+// one page for all work, with chips, filters, saved views, a compact grouped list, and
+// List | Board | Team views. The old Work orders page (/work/orders) redirects here.
+
+import { Award } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
+import { PriorityList } from "@/components/cards/ActionRow";
+import { CopyButton } from "@/components/cards/CopyButton";
+import { DeveloperContacts } from "@/components/cards/DeveloperContacts";
+import { DeveloperWork } from "@/components/cards/DeveloperWork";
 import { GlassCard } from "@/components/cards/GlassCard";
-import { WorkOrderCard, priorityStyle } from "@/components/cards/WorkOrderCard";
+import { WorkOrderBoard, type BoardCard } from "@/components/cards/WorkOrderBoard";
+import { WorkOrderCard } from "@/components/cards/WorkOrderCard";
 import { Pill, Provenance } from "@/components/labels/labels";
 import { CARD_GRID, Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getCompletions, getDeveloperViewer, getDeveloperWork, getMember, getMyClientContacts, getStepsReady, getOps, getSampleDevelopers, getTeam, getToday, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
-import { MyWork } from "@/components/cards/MyWork";
-import { TaskBoard } from "@/components/cards/TaskBoard";
-import { Fold } from "@/components/shell/Fold";
-import { boardColumns, myWork, promiseMissed, suggestWorkOrders, teamLoad, workloadRows, workOrderGroups } from "@/lib/ops";
-import { DeveloperContacts } from "@/components/cards/DeveloperContacts";
-import { DeveloperWork } from "@/components/cards/DeveloperWork";
-import { startPreview } from "@/app/actions";
-import { canPreview } from "@/lib/preview";
-import { ClipboardList } from "lucide-react";
-import Link from "next/link";
-import { PriorityList } from "@/components/cards/ActionRow";
-import { cn } from "@/lib/format";
-import { isLead } from "@/lib/roles";
 import { RoleNotice } from "@/components/shell/RoleNotice";
-import type { TeamRole, WorkPriority } from "@/lib/types";
+import { FilterBar } from "@/components/work/FilterBar";
+import { StatChips, WorkHeader } from "@/components/work/WorkHeader";
+import { WorkList } from "@/components/work/WorkList";
+import { WorkDrawer } from "@/components/work/WorkDrawer";
+import { WorkMore } from "@/components/work/WorkMore";
+import { SmartAddPopup, SuggestionsPopup } from "@/components/work/WorkPopups";
+import { TeamView } from "@/components/work/TeamView";
+import { HubShortcuts, ShortcutHint, ShortcutsPopup } from "@/components/work/HubShortcuts";
+import { UndoToast } from "@/components/work/UndoToast";
+import { clientLabel } from "@/lib/agency";
+import { getAiStatus, getDeveloperViewer, getDeveloperWork, getMember, getMyClientContacts, getOps, getSampleDevelopers, getStepsReady, getSuggestionDismissals, getTeam, getToday, getWorkOrderDrafts, getWorkOrders, getWorkRules, showsSamples, usesDatabase } from "@/lib/data-source";
+import { cn } from "@/lib/format";
+import { draftAdded, promiseMissed, suggestWorkOrders, workloadRows, workOrderGroups, workOrdersAsText } from "@/lib/ops";
+import { canPreview } from "@/lib/preview";
+import { isLead } from "@/lib/roles";
+import type { ClientAction } from "@/lib/types";
+import { chipCounts, doneThisWeek, dueHint, groupForList, hubHref, HUB_TYPES, initials, inScope, matchesChip, parseHubFilters, savedViews, teamLoad, withoutDismissed, type HubParams } from "@/lib/work-hub";
 
 export const metadata: Metadata = { title: "Work" };
 
-const roleInfo: Record<TeamRole, { label: string; icon: typeof Crown; color: string }> = {
-  founder: { label: "Founder · final decisions", icon: Crown, color: "text-rose bg-rose/12" },
-  client_comms: { label: "Client communication & work orders", icon: MessageSquareText, color: "text-amber bg-amber/12" },
-  client_manager: { label: "Client manager & calls", icon: Headset, color: "text-violet bg-violet/12" },
-  seo_developer: { label: "SEO developer", icon: Wrench, color: "text-teal bg-teal/12" },
-};
+type Search = HubParams & { new?: string; suggest?: string; founder?: string; keys?: string };
 
-export default async function WorkPage({ searchParams }: { searchParams: Promise<{ who?: string }> }) {
+export default async function WorkPage({ searchParams }: { searchParams: Promise<Search> }) {
   const today = getToday();
   const samples = showsSamples();
   const member = usesDatabase() ? await getMember() : null;
@@ -66,330 +74,361 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       </>
     );
   }
-  // Salespeople don't use Work (the database returns them no client work either).
+  // Salespeople and VAs don't use Work (the database returns them no client work either).
   if (usesDatabase() && !isLead(member?.role)) return <RoleNotice title="Work" />;
-  const ops = await getOps();
-  const teamMembers = (await getTeam()).members;
-  const staffList = teamMembers.map((m) => ({ id: m.id, name: m.name }));
-  // Opens to your own list when your login is linked to your team profile.
-  const whoRaw = (await searchParams).who ?? member?.staffId ?? "all";
-  const who = whoRaw === "none" || staffList.some((m) => m.id === whoRaw) ? whoRaw : "all";
-  const buckets = myWork(ops.priorities, who === "all" ? undefined : who === "none" ? null : who);
-  const completions = await getCompletions();
-  const load = teamLoad(staffList, ops.clients, ops.actions, ops.today, completions);
-  // Promises to clients and blocked items, for the chosen person (missed promises first).
-  const inView = (ownerId: string | null | undefined) => who === "all" || (who === "none" ? !ownerId : ownerId === who);
+
+  const [ops, team] = await Promise.all([getOps(), getTeam()]);
+  const staff = team.members.map((m) => ({ id: m.id, name: m.name }));
+  const manager = Boolean(member && isLead(member.role));
+  const isOwner = member?.role === "owner";
+  const sp = await searchParams;
+  const f = parseHubFilters(sp, { staffIds: staff.map((m) => m.id), clientSlugs: ops.clients.map((c) => c.id) });
+  const leadName = (a: ClientAction) => (a.leadGhlId ? ops.leadNames.get(a.leadGhlId) : undefined);
+
+  // The items in view (person, client, type, priority, search), then the chip on top.
+  const scope = inScope(ops.actions, f, leadName);
+  const counts = chipCounts(scope, ops.today);
+  const listed = f.chip ? scope.filter((a) => matchesChip(a, f.chip!, ops.today)) : scope;
+  const groups = groupForList(listed, ops.today);
+  const done = f.chip ? [] : doneThisWeek(scope, ops.today);
+  const openCount = Object.values(groups).reduce((n, g) => n + g.length, 0);
+  const filtered = Boolean(f.q || f.chip || f.who !== undefined || f.client || f.type || f.prio);
+
+  const filterClients = ops.clients.filter((c) => c.status !== "canceled").sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ slug: c.id, name: c.name }));
+  const formClients = ops.clients.filter((c) => c.dbId && c.status !== "canceled").sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ slug: c.id, name: c.name }));
+  const workload = workloadRows({ actions: ops.actions, staff, today: ops.today });
+  const suggestions = manager && ops.orders ? suggestWorkOrders({ clients: ops.clients, risks: ops.risks, actions: [...ops.actions, ...ops.canceled], team: team.members, workload, today: ops.today }) : [];
+  // Suggestions panel (Phase 3): rule suggestions + the saved AI drafts not yet added,
+  // minus the ones dismissed for the same reason (0038; nothing is hidden before it's run).
+  const [ai, savedDrafts, dismissals] = manager
+    ? await Promise.all([getAiStatus(), getWorkOrderDrafts(), getSuggestionDismissals()])
+    : [null, null, { ready: false, keys: new Set<string>() }];
+  const aiLine = {
+    ready: Boolean(ai && ai.configured && ai.tablesReady && ai.level !== "blocked"),
+    budget: ai?.tablesReady ? `$${ai.spentUsd.toFixed(2)} of $${ai.budgetUsd.toFixed(2)} used this month` : "not set up",
+  };
+  const ruleSuggestions = withoutDismissed(suggestions, (s) => s.rule, dismissals.keys);
+  const draftsLeft = (savedDrafts?.content.orders ?? []).filter((d) => !draftAdded(d, ops.actions));
+  const draftOrders = withoutDismissed(draftsLeft, () => "ai", dismissals.keys);
+  const hiddenSuggestions = suggestions.length - ruleSuggestions.length + draftsLeft.length - draftOrders.length;
+  const suggestTotal = ruleSuggestions.length + draftOrders.length;
+
+  // Promises to clients and blocked items in view (missed promises first): a small strip.
+  const inView = new Set(scope.map((a) => a.id));
   const promiseItems = ops.priorities
-    .filter((p) => p.action && inView(p.action.ownerId) && (p.action.status === "blocked" || p.action.promisedOn))
+    .filter((p) => p.action && inView.has(p.action.id) && p.action.status !== "done" && (p.action.status === "blocked" || p.action.promisedOn))
     .sort((x, y) => Number(promiseMissed(y.action!, ops.today)) - Number(promiseMissed(x.action!, ops.today)) || (x.action!.promisedOn ?? "9999").localeCompare(y.action!.promisedOn ?? "9999"));
   const missedCount = promiseItems.filter((p) => promiseMissed(p.action!, ops.today)).length;
   const blockedCount = promiseItems.filter((p) => p.action!.status === "blocked").length;
-  const workOrderCount = workOrderGroups({ actions: ops.actions, staff: staffList, today: ops.today }).reduce(
-    (t, g) => ({ open: t.open + g.stats.open, overdue: t.overdue + g.stats.overdue, review: t.review + g.stats.inReview }),
-    { open: 0, overdue: 0, review: 0 },
+  // Rule-based client reminders (contact a client, your follow-up note): not saved items.
+  const reminders = f.type || f.q || f.chip
+    ? []
+    : ops.priorities.filter((p) => !p.action && !p.id.startsWith("g_") && (f.who === undefined || (p.ownerId ?? null) === f.who) && (!f.client || p.clientSlug === f.client));
+
+  const withParam = (href: string, param: string, anchor: string) => `${href}${href.includes("?") ? "&" : "?"}${param}=1#${anchor}`;
+  const views = savedViews(member?.staffId);
+  // The drawer (?open=<id>): any item the list knows about, including done and canceled ones.
+  const openItem = f.open ? [...ops.actions, ...ops.canceled].find((a) => a.id === f.open) : undefined;
+  const openHref = (id: string) => hubHref(f, { open: id });
+  const shared = { today: ops.today, staff, canEdit: manager, canUseAi: manager && ops.orders, canCancel: isOwner && ops.cancel, openHref, openId: openItem?.id };
+
+  // Board: work orders only (open, plus done in the last 7 days), same filters and chip.
+  const weekAgo = new Date(Date.parse(`${ops.today}T00:00:00Z`) - 7 * 86_400_000).toISOString();
+  const boardCards: BoardCard[] = (f.chip ? listed : scope)
+    .filter((a) => a.kind === "work_order" && (a.status !== "done" || (a.doneAt ?? "") >= weekAgo))
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      client: a.client?.name ?? (a.internal ? clientLabel(a) : null),
+      owner: a.ownerName,
+      ownerInitials: a.ownerName ? initials(a.ownerName) : null,
+      status: a.status === "canceled" ? "done" : a.status,
+      due: a.status === "done" ? { text: `Done ${a.doneAt ? a.doneAt.slice(5, 10).replace("-", "/") : ""}`.trim(), tone: "none" as const } : dueHint(a.dueOn, ops.today),
+      urgent: a.priority === "critical",
+      blockedReason: a.blockedReason ?? null,
+      href: openHref(a.id),
+    }));
+  // Team view (Phase 4): the founder isn't counted as available unless switched on (?founder=1).
+  const includeFounder = sp.founder === "1";
+  const load = teamLoad({ actions: ops.actions, team: team.members, today: ops.today, includeFounder });
+  const withFounder = (on: boolean) => `${hubHref(f)}${on ? `${hubHref(f).includes("?") ? "&" : "?"}founder=1` : ""}`;
+  const copyText = workOrdersAsText(workOrderGroups({ actions: listed, staff, today: ops.today, show: "all" }), ops.today);
+
+  return (
+    <>
+      {openItem && (
+        <WorkDrawer
+          item={openItem}
+          closeHref={hubHref(f, { open: undefined })}
+          viewer={{ developer: false, manager, owner: isOwner, preview: false }}
+          staff={staff}
+          today={ops.today}
+          leadName={leadName(openItem)}
+          doneWhenReady={ops.doneWhen}
+        />
+      )}
+      {manager && ops.ready && (
+        <>
+          <SmartAddPopup clients={formClients} staff={staff} today={ops.today} myStaffId={member?.staffId ?? null} ai={aiLine} cancelReady={ops.cancel} ordersReady={ops.orders} defaultOpen={sp.new === "1"} />
+          {ops.orders && (
+            <SuggestionsPopup
+              rules={ruleSuggestions}
+              drafts={savedDrafts ? { createdAt: savedDrafts.createdAt, headline: savedDrafts.content.headline, orders: draftOrders } : null}
+              clients={formClients}
+              staff={staff}
+              today={ops.today}
+              ai={aiLine}
+              dismissReady={dismissals.ready}
+              hiddenCount={hiddenSuggestions}
+              isOwner={isOwner}
+              defaultOpen={sp.suggest === "1"}
+            />
+          )}
+        </>
+      )}
+      {ops.ready && <HubShortcuts canAdd={manager && ops.ready} />}
+      {manager && ops.ready && <UndoToast />}
+      {ops.ready && <ShortcutsPopup canAdd={manager} defaultOpen={sp.keys === "1"} />}
+      {/* Computers: leave room for the drawer so the list stays visible beside it. */}
+      <div className={cn(openItem && "lg:mr-[34rem]")}>
+      <WorkHeader f={f} newHref={withParam(hubHref(f), "new", "smart-add")} suggestions={suggestTotal} suggestHref={withParam(hubHref(f), "suggest", "suggestions")} keysHref={withParam(hubHref(f), "keys", "shortcuts")} canAdd={manager && ops.ready} canSuggest={manager && ops.ready && ops.orders} />
+
+      {manager && !ops.orders && (
+        <p className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
+          <span className="font-semibold text-amber">One setup step needed.</span> <span className="text-muted">Run 0010 in Supabase to add work orders with steps, links and AI drafts. Issues already show below.</span>
+        </p>
+      )}
+      {manager && ops.orders && !ops.review && (
+        <p className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
+          <span className="font-semibold text-amber">One setup step needed for reviews.</span> <span className="text-muted">Run 0011 in Supabase so developers send work for review instead of marking it done.</span>
+        </p>
+      )}
+      {manager && ops.orders && ops.review && !ops.cancel && (
+        <p className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-sm">
+          <span className="font-semibold text-amber">One setup step for Cancel and Smart add.</span> <span className="text-muted">Run 0013 in Supabase. Everything else works already.</span>
+        </p>
+      )}
+
+      {samples && (
+        <p className="mt-4 rounded-2xl border border-sky/30 bg-sky/8 p-3 text-sm text-muted">
+          <span className="font-semibold text-ink">This is the demo.</span> The work below is made up, on fictional clients. Development work itself still happens in GoHighLevel.
+        </p>
+      )}
+
+      {!ops.ready ? (
+        <p className="glass mt-4 rounded-2xl px-4 py-3 text-sm text-muted">Work items turn on after the database setup steps. Nothing to show yet.</p>
+      ) : (
+        <>
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatChips f={f} counts={counts} />
+              {f.view === "list" && (
+                <p className="ml-auto flex items-center gap-2 text-sm text-muted">
+                  {openCount} open{filtered ? " match" : ""}
+                  {openCount > 0 && <CopyButton text={copyText} label="Copy this list as text for GoHighLevel" />}
+                </p>
+              )}
+            </div>
+            <FilterBar
+              hidden={{ view: f.view === "list" ? undefined : f.view, q: f.q || undefined, chip: f.chip, open: f.open }}
+              who={f.who === null ? "none" : (f.who ?? "")}
+              client={f.client ?? ""}
+              type={f.type ?? ""}
+              prio={f.prio ?? ""}
+              staff={staff}
+              clients={filterClients}
+              types={HUB_TYPES}
+            >
+              <div className="flex min-h-10 flex-wrap items-center gap-2 sm:ml-auto">
+                <span className="text-xs text-muted">Views:</span>
+                {views.map((v) => {
+                  const href = hubHref({ ...f, q: "", client: undefined, type: undefined, prio: undefined }, v.set);
+                  const on = hubHref(f) === href;
+                  return (
+                    <Link key={v.id} href={href} aria-current={on ? "true" : undefined} className={cn("pressable inline-flex min-h-9 items-center rounded-lg px-3 text-sm font-semibold", on ? "bg-violet/25 text-ink" : "text-muted hover:bg-white/[0.06] hover:text-ink")}>
+                      {v.label}
+                    </Link>
+                  );
+                })}
+                {filtered && (
+                  <Link href={hubHref({ view: f.view, q: "" })} className="pressable inline-flex min-h-9 items-center rounded-lg px-3 text-sm font-semibold text-muted underline-offset-2 hover:text-ink hover:underline">
+                    Clear all
+                  </Link>
+                )}
+              </div>
+            </FilterBar>
+          </div>
+
+          {f.view === "list" && (promiseItems.length > 0 || reminders.length > 0) && (
+          <div className="mt-4 grid items-start gap-2 lg:grid-cols-2">
+          {promiseItems.length > 0 && (
+            <details className="glass group rounded-2xl">
+              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm [&::-webkit-details-marker]:hidden">
+                <span className="font-semibold">Promises &amp; blockers</span>
+                <span className="rounded-full bg-white/[0.07] px-2 py-0.5 text-xs font-semibold text-muted">{promiseItems.length}</span>
+                <span className="hidden truncate text-muted sm:inline">
+                  {promiseItems.filter((p) => p.action!.promisedOn).length} promised to clients · {blockedCount} blocked
+                </span>
+                {missedCount > 0 && <span className="ml-auto shrink-0 font-semibold text-rose">{missedCount} missed</span>}
+              </summary>
+              <div className="px-2 pb-2">
+                <PriorityList items={promiseItems} staff={staff} canEdit={manager} limit={6} empty="Nothing promised or blocked right now." />
+              </div>
+            </details>
+          )}
+          {reminders.length > 0 && (
+            <details className="glass group rounded-2xl">
+              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm [&::-webkit-details-marker]:hidden">
+                <span className="font-semibold">Client reminders</span>
+                <span className="rounded-full bg-white/[0.07] px-2 py-0.5 text-xs font-semibold text-muted">{reminders.length}</span>
+                <span className="hidden truncate text-muted sm:inline" title="From the rules, not saved items">Clients to contact, your follow-up notes</span>
+              </summary>
+              <div className="px-2 pb-2">
+                <PriorityList items={reminders} staff={staff} canEdit={manager} limit={6} empty="No reminders." />
+              </div>
+            </details>
+          )}
+          </div>
+          )}
+
+          {f.view === "list" && (
+            <>
+              <div className="mt-4" />
+              <WorkList
+                groups={groups}
+                done={done}
+                shared={shared}
+                leadName={leadName}
+                empty={
+                  filtered ? (
+                    <>
+                      Nothing matches these filters.{" "}
+                      <Link href={hubHref({ view: "list", q: "" })} className="font-semibold text-ink underline underline-offset-2">
+                        Clear all
+                      </Link>
+                    </>
+                  ) : (
+                    "Nothing open right now."
+                  )
+                }
+              />
+              <div className="mt-2">
+                <ShortcutHint canAdd={manager} />
+              </div>
+              <p className="mt-2 px-1 text-xs text-muted">Saved in this app only; GoHighLevel isn&apos;t changed. Copy gives plain text (titles, steps, due dates, links; no money) to paste into GoHighLevel yourself.</p>
+            </>
+          )}
+
+          {f.view === "board" && (
+            <div className="mt-4">
+              {boardCards.length === 0 && (
+                <p className="glass mb-2 rounded-2xl px-4 py-3 text-sm text-muted">
+                  {filtered ? (
+                    <>
+                      No work orders match these filters.{" "}
+                      <Link href={hubHref({ view: "board", q: "" })} className="font-semibold text-ink underline underline-offset-2">
+                        Clear all
+                      </Link>
+                    </>
+                  ) : (
+                    "No work orders yet. Add one with + New."
+                  )}
+                </p>
+              )}
+              <WorkOrderBoard cards={boardCards} openId={openItem?.id} />
+              <p className="mt-2 px-1 text-xs text-muted">Work orders only (the filters and chips apply). Drag a card on a computer, or use “Move to” on a phone. Done shows the last 7 days.</p>
+              <div className="mt-2">
+                <ShortcutHint canAdd={manager} done={false} />
+              </div>
+            </div>
+          )}
+
+          {f.view === "team" && (
+            <div className="mt-4">
+              <TeamView
+                rows={load.rows}
+                totals={load.totals}
+                personHref={(id) => hubHref(f, { view: "list", who: id })}
+                unassignedHref={hubHref(f, { view: "list", who: null })}
+                founderToggleHref={withFounder(!includeFounder)}
+                includeFounder={includeFounder}
+                hasFounder={team.members.some((m) => m.role === "founder")}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {samples && <SampleOrders today={today} />}
+
+      {ops.ready && (
+        <WorkMore ops={ops} team={team} isOwner={isOwner} canPreview={usesDatabase() && canPreview(member?.role)} />
+      )}
+      </div>
+    </>
   );
-  // Free rule-based suggestions waiting on the Work orders screen (none are added on their own).
-  const suggestedCount = ops.orders
-    ? suggestWorkOrders({ clients: ops.clients, risks: ops.risks, actions: [...ops.actions, ...ops.canceled], team: teamMembers, workload: workloadRows({ actions: ops.actions, staff: staffList, today: ops.today }), today: ops.today }).length
-    : 0;
-  const board = boardColumns(ops.actions, who === "all" ? undefined : who === "none" ? null : who, ops.today);
-  const doneForView = who === "all" ? completions : completions.filter((d) => (d.ownerId ?? "none") === (who === "none" ? "none" : who));
+}
+
+/** The demo only: the made-up work orders and developer load (no database). */
+function SampleOrders({ today }: { today: string }) {
   const orders = getWorkOrders();
   const rules = getWorkRules();
   const devs = getSampleDevelopers();
   const devName = Object.fromEntries(devs.map((d) => [d.id, d.name]));
-  const team = await getTeam();
-  const realTeam = team.source !== "demo";
-  const nameForRole = (role: TeamRole) => team.members.filter((m) => m.role === role).map((m) => m.name).join(" or ");
-
   const open = orders.filter((o) => o.status !== "done");
-  const needsAttention = open.filter((o) => o.priority === "urgent" || o.due < today || o.lastTouched < today);
-  const rest = open.filter((o) => !needsAttention.includes(o));
   const done = orders.filter((o) => o.status === "done");
-  const stats = [
-    { label: "Open", value: open.length, tone: "" },
-    { label: "Urgent", value: open.filter((o) => o.priority === "urgent").length, tone: "text-rose" },
-    { label: "Overdue", value: open.filter((o) => o.due < today).length, tone: "text-rose" },
-    { label: "Not touched today", value: open.filter((o) => o.lastTouched < today).length, tone: "text-amber" },
-  ];
-
   return (
     <>
-      <PageHeader title="Work" subtitle="Oversee work orders and developer load" />
+      <SectionTitle aside={<Provenance kind="sample" />}>Sample work orders</SectionTitle>
+      <ul className={CARD_GRID}>
+        {[...open, ...done].map((o) => (
+          <li key={o.id}>
+            <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
+          </li>
+        ))}
+      </ul>
 
-      {usesDatabase() && canPreview(member?.role) && teamMembers.length > 0 && (
-        <details className="glass mb-3 rounded-2xl px-3 py-2">
-          <summary className="pressable flex min-h-10 cursor-pointer list-none items-center text-sm font-semibold text-violet">Preview as a developer…</summary>
-          <form action={startPreview} className="mt-1 flex gap-2 pb-1">
-            <label className="min-w-0 flex-1">
-              <span className="sr-only">Team member</span>
-              <select name="staffId" required defaultValue="" className="min-h-11 w-full rounded-xl border border-line bg-white/5 px-3 text-sm text-ink">
-                <option value="" disabled>
-                  Pick a person…
-                </option>
-                {[...teamMembers]
-                  .sort((a, b) => Number(b.role === "seo_developer") - Number(a.role === "seo_developer") || a.name.localeCompare(b.name))
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <button type="submit" className="pressable min-h-11 rounded-xl bg-violet-deep px-4 text-sm font-semibold">
-              Preview
-            </button>
-          </form>
-          <p className="pb-1 text-[11px] text-faint">See Home, Work and Kit exactly as that person&apos;s developer login shows them. Look only: nothing can be changed until you exit. Ends after an hour.</p>
-        </details>
-      )}
-
-      {/* Wide screens: the note and the Work orders link side by side. */}
-      <div className="lg:grid lg:grid-cols-2 lg:gap-x-8 xl:gap-x-10">
-      <div className="flex gap-3 rounded-2xl border border-sky/30 bg-sky/8 p-3.5 text-xs text-muted">
-        <Wrench aria-hidden className="mt-0.5 size-4 shrink-0 text-sky" />
-        {samples ? (
-          <p>
-            <span className="font-semibold text-ink">Work still happens in GoHighLevel.</span> This is the demo: the
-            work orders and developer load below are made up, on fictional clients.
-          </p>
-        ) : (
-          <p>
-            <span className="font-semibold text-ink">Everyone&apos;s follow-ups and client issues, in one place.</span>{" "}
-            Pick a person to see their list. Add items from a client&apos;s page. Development work itself still happens
-            in GoHighLevel.
-          </p>
-        )}
-      </div>
-
-      {ops.ready && member && (
-        <Link href="/work/orders" className="pressable glass mt-3 flex min-h-14 lg:mt-0 items-center gap-3 rounded-3xl px-4 py-3 hover:bg-white/[0.05]">
-          <ClipboardList aria-hidden className="size-5 shrink-0 text-violet" />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">Work orders</span>
-            <span className="block truncate text-xs text-muted">
-              {workOrderCount.open} open · {workOrderCount.overdue} overdue
-              {workOrderCount.review ? ` · ${workOrderCount.review} waiting for review` : ""} · workload, quick add, AI drafts
-            </span>
-            {suggestedCount > 0 && <span className="mt-0.5 block text-xs font-semibold text-amber">{suggestedCount} suggested work order{suggestedCount === 1 ? "" : "s"} to look at</span>}
-          </span>
-          <span aria-hidden className="text-faint">›</span>
-        </Link>
-      )}
-      </div>
-
-      {ops.ready && (
-        <Fold
-          label="Promises and blockers"
-          title="Promises & blockers"
-          defaultOpen={missedCount + blockedCount > 0}
-          summary={
-            !ops.promises
-              ? "Turns on after one setup step (0009 SQL)."
-              : promiseItems.length
-                ? `${promiseItems.filter((p) => p.action!.promisedOn).length} promised to clients · ${blockedCount} blocked`
-                : "No promises or blocked items. Add a promise date when you tell a client a date."
-          }
-          badge={missedCount ? <span className="font-semibold text-rose">{missedCount} missed</span> : undefined}
-        >
-          <PriorityList items={promiseItems} staff={staffList} canEdit={Boolean(member)} limit={6} empty="Nothing promised or blocked right now." />
-        </Fold>
-      )}
-
-      {ops.ready && <MyWork who={who} staff={staffList} buckets={buckets} load={load} canEdit={Boolean(member)} done={doneForView} />}
-
-      {ops.ready && (
-        <Fold
-          label="Work board"
-          title="Board"
-          summary={`${board.open.length} open · ${board.in_progress.length} in progress · ${board.waiting.length} waiting`}
-          badge={who === "all" ? "Everyone" : who === "none" ? "No owner" : staffList.find((m) => m.id === who)?.name}
-        >
-          <TaskBoard columns={board} today={ops.today} canEdit={Boolean(member)} leadNames={ops.leadNames} />
-          <p className="mt-1.5 px-1 text-[11px] text-faint">Same items as the list above, by status. Pick a person above to see just theirs. Saved in this app only.</p>
-        </Fold>
-      )}
-
-      {samples && (
-        <>
-          <SectionTitle aside={<Provenance kind="sample" />}>Today at a glance</SectionTitle>
-          <GlassCard className="grid grid-cols-4 gap-1 text-center">
-            {stats.map((s) => (
-              <div key={s.label}>
-                <p className={cn("font-display text-2xl font-bold", s.value > 0 && s.tone)}>{s.value}</p>
-                <p className="text-[10px] leading-tight text-muted">{s.label}</p>
+      <SectionTitle aside={<Provenance kind="sample" />}>Developer load</SectionTitle>
+      <div className={CARD_GRID}>
+        {devs.map((d) => {
+          const seo = d.load?.seoClients ?? 0;
+          const successful = d.load?.successfulThisMonth ?? 0;
+          const bonus = successful >= rules.bonusAfterSuccessfulClients;
+          return (
+            <GlassCard key={d.id} padding="tight" className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{d.name}</p>
+                {bonus ? (
+                  <Pill color="lime">
+                    <Award aria-hidden className="size-3" /> Bonus: ${successful * rules.bonusPerClientUsd}
+                  </Pill>
+                ) : (
+                  <Pill>{rules.bonusAfterSuccessfulClients - successful} more for bonus</Pill>
+                )}
               </div>
-            ))}
-          </GlassCard>
-          <p className="mt-1.5 px-1 text-[11px] text-faint">Goal: every work order touched daily.</p>
-
-          <SectionTitle>Needs attention</SectionTitle>
-          <ul className={CARD_GRID}>
-            {needsAttention.map((o) => (
-              <li key={o.id}>
-                <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
-              </li>
-            ))}
-          </ul>
-
-          {rest.length > 0 && (
-            <>
-              <SectionTitle>On track</SectionTitle>
-              <ul className={CARD_GRID}>
-                {rest.map((o) => (
-                  <li key={o.id}>
-                    <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          <SectionTitle aside={<Provenance kind="sample" />}>Developer load</SectionTitle>
-          <div className={CARD_GRID}>
-            {devs.map((d) => {
-              const seo = d.load?.seoClients ?? 0;
-              const successful = d.load?.successfulThisMonth ?? 0;
-              const bonus = successful >= rules.bonusAfterSuccessfulClients;
-              return (
-                <GlassCard key={d.id} padding="tight" className="space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold">{d.name}</p>
-                    {bonus ? (
-                      <Pill color="lime">
-                        <Award aria-hidden className="size-3" /> Bonus: ${successful * rules.bonusPerClientUsd}
-                      </Pill>
-                    ) : (
-                      <Pill>{rules.bonusAfterSuccessfulClients - successful} more for bonus</Pill>
-                    )}
-                  </div>
-                  <div>
-                    <div className="mb-1 flex justify-between text-[11px] text-muted">
-                      <span>
-                        SEO clients {seo} / {rules.maxSeoClientsPerDeveloper}
-                      </span>
-                      <span>
-                        {d.load?.hoursLogged ?? 0} hrs logged · SEO budget {seo * rules.seoHoursPerClient} hrs
-                      </span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className={cn("h-full rounded-full", seo >= rules.maxSeoClientsPerDeveloper ? "bg-amber" : "bg-teal")}
-                        style={{ width: `${(seo / rules.maxSeoClientsPerDeveloper) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-muted">
-                    {d.openOrders} open work orders
-                    {d.overdue > 0 && <span className="font-semibold text-rose"> · {d.overdue} overdue</span>}
-                    {d.untouchedToday > 0 && <span className="text-amber"> · {d.untouchedToday} not touched today</span>}
-                  </p>
-                </GlassCard>
-              );
-            })}
-          </div>
-          <p className="mt-1.5 px-1 text-[11px] text-faint">
-            Pay and bonus details will be visible to the owner only once sign-in exists (Phase 2).
-          </p>
-        </>
-      )}
-
-      <details className="mt-5 rounded-3xl border border-line lg:mt-7" open={samples}>
-        <summary className="pressable flex min-h-11 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold lg:min-h-14 lg:px-6">
-          Team &amp; rules <span className="text-xs font-normal text-muted">who does what, daily order, priorities</span>
-        </summary>
-        <div className="px-3 pb-4 lg:px-6 lg:pb-6">
-          <SectionTitle aside={<Provenance kind={realTeam ? "real" : "demo"} what="your team" />}>Your team</SectionTitle>
-          <div className={CARD_GRID}>
-            {team.members.map((m) => {
-              const r = roleInfo[m.role];
-              const Icon = r.icon;
-              return (
-                <GlassCard key={m.id} padding="tight" className="flex gap-3">
-                  <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${r.color}`}>
-                    <Icon aria-hidden className="size-4.5" />
+              <div>
+                <div className="mb-1 flex justify-between text-xs text-muted">
+                  <span>
+                    SEO clients {seo} / {rules.maxSeoClientsPerDeveloper}
                   </span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{m.name}</p>
-                    <p className="text-xs text-muted">{r.label}</p>
-                    {m.handles.length > 0 && <p className="mt-1 text-[11px] text-faint">{m.handles.join(" · ")}</p>}
-                  </div>
-                </GlassCard>
-              );
-            })}
-          </div>
-
-          <Columns layout="thirds">
-          <Column>
-          <SectionTitle>Who to go to</SectionTitle>
-          <GlassCard padding="none">
-            <ul className="divide-y divide-line">
-              {rules.escalation.map((e) => (
-                <li key={e.topic} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                  <span className="text-muted">{e.topic}</span>
-                  <span className="shrink-0 font-semibold">{nameForRole(e.to) || roleInfo[e.to].label}</span>
-                </li>
-              ))}
-            </ul>
-          </GlassCard>
-
-          </Column>
-          <Column>
-          <SectionTitle>Daily order for developers</SectionTitle>
-          <GlassCard padding="none">
-            <ol className="divide-y divide-line">
-              {rules.dailyOrder.map((s, i) => (
-                <li key={s.step} className="flex gap-3 px-4 py-3">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-violet/20 text-xs font-bold text-violet">
-                    {i + 1}
+                  <span>
+                    {d.load?.hoursLogged ?? 0} hrs logged · SEO budget {seo * rules.seoHoursPerClient} hrs
                   </span>
-                  <div>
-                    <p className="text-sm font-semibold">{s.step}</p>
-                    <p className="text-xs text-muted">{s.detail}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <p className="border-t border-line px-4 py-2 text-[11px] text-faint">
-              Each SEO client = {rules.seoHoursPerClient} hrs/month, up to {rules.maxSeoClientsPerDeveloper} per developer
-              ({rules.seoShare}% SEO / {rules.miscShare}% misc). ${rules.bonusPerClientUsd} bonus per client after{" "}
-              {rules.bonusAfterSuccessfulClients} successful monthly clients.
-            </p>
-          </GlassCard>
-
-          </Column>
-          <Column>
-          <SectionTitle>Priority levels</SectionTitle>
-          <div className="space-y-2">
-            {(["urgent", "high", "normal", "low"] as WorkPriority[]).map((p) => (
-              <div key={p} className="flex items-center gap-3 rounded-2xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-sm">
-                <Pill color={priorityStyle[p].color}>{priorityStyle[p].label}</Pill>
-                <span className="text-muted">
-                  {p === "urgent" && "Critical issues, down websites, client impacting. Do first."}
-                  {p === "high" && "Time-sensitive requests. Do next."}
-                  {p === "normal" && "Standard requests and tweaks. Do after high."}
-                  {p === "low" && "Non-urgent tasks. Do when available."}
-                </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                  <div className={cn("h-full rounded-full", seo >= rules.maxSeoClientsPerDeveloper ? "bg-amber" : "bg-teal")} style={{ width: `${(seo / rules.maxSeoClientsPerDeveloper) * 100}%` }} />
+                </div>
               </div>
-            ))}
-          </div>
-          </Column>
-          </Columns>
-        </div>
-      </details>
-
-      {done.length > 0 && (
-        <>
-          <SectionTitle>Recently done</SectionTitle>
-          <ul className={CARD_GRID}>
-            {done.map((o) => (
-              <li key={o.id}>
-                <WorkOrderCard order={o} today={today} assigneeName={devName[o.assignee] ?? "Unassigned"} />
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+              <p className="text-xs text-muted">
+                {d.openOrders} open work orders
+                {d.overdue > 0 && <span className="font-semibold text-rose"> · {d.overdue} overdue</span>}
+                {d.untouchedToday > 0 && <span className="text-amber"> · {d.untouchedToday} not touched today</span>}
+              </p>
+            </GlassCard>
+          );
+        })}
+      </div>
+      <p className="mt-2 px-1 text-xs text-muted">Pay and bonus details are visible to the owner only.</p>
     </>
   );
 }

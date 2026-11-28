@@ -33,8 +33,12 @@ const ALLOWED = [
 export type DfsPath = (typeof ALLOWED)[number];
 
 export class DfsError extends Error {
-  /** true when trying once more may work (their server hiccuped, timed out or was busy). */
-  constructor(message: string, readonly retryable = false) {
+  /**
+   * retryable: trying once more may work (their server hiccuped, timed out or was busy).
+   * mayBeCharged: only a lookup that got no answer at all (timeout) might still be billed;
+   * DataForSEO doesn't charge for a refused request or a failed task.
+   */
+  constructor(message: string, readonly retryable = false, readonly mayBeCharged = false) {
     super(message);
   }
 }
@@ -77,7 +81,7 @@ export async function dfsLookup(path: DfsPath, task: Record<string, unknown>): P
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch {
-    throw new DfsError("Couldn't reach DataForSEO (no answer in 30 seconds). Try again in a minute.", true);
+    throw new DfsError("Couldn't reach DataForSEO (no answer in 30 seconds). Try again in a minute.", true, true);
   }
   if (!res.ok) {
     throw new DfsError(res.status === 401 ? "DataForSEO refused the login. Check it in Vercel's settings." : res.status === 402 ? "DataForSEO says the account is out of credit." : res.status === 429 ? "DataForSEO says too many requests. Wait a minute." : `DataForSEO returned an error (${res.status}).`, res.status >= 500 || res.status === 429);
