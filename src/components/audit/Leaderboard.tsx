@@ -1,7 +1,8 @@
 // Search-visit leaderboard: who gets the most estimated visits from Google.
 // When Semrush ran too, its estimate sits beside DataForSEO's (never merged).
 // Optional: a modeled revenue column (visits × visit-to-job rate × job value). Competitors are
-// numbered 1-5; the client sits below them with its overall place, then the dashed goal row.
+// numbered 1-5; the client sits below them with its overall place (or first, when it is #1),
+// then the dashed goal row.
 
 import type { LeaderRow } from "@/lib/audit/compute";
 import { fmtNum, fmtUsd } from "@/lib/audit/format";
@@ -19,7 +20,10 @@ export function Leaderboard({ rows, showSemrush, goal }: { rows: LeaderRow[]; sh
   // Like the agency's own audits: competitors ranked #1-5, then the business pinned below with
   // its real place among everyone, then the goal (never mixed into the ranking).
   const measuredRank = new Map(rows.filter((r) => r.visits !== null).map((r, i) => [r.domain, i + 1]));
-  const all: Row[] = [...rows.filter((r) => !r.isClient), ...rows.filter((r) => r.isClient)];
+  // When the business itself gets the most visits it is shown first, as #1 (pinning a #1 below
+  // five lower rows read as if it were last); the competitors then count on from #2.
+  const clientFirst = rows.some((r) => r.isClient && measuredRank.get(r.domain) === 1);
+  const all: Row[] = clientFirst ? [...rows.filter((r) => r.isClient), ...rows.filter((r) => !r.isClient)] : [...rows.filter((r) => !r.isClient), ...rows.filter((r) => r.isClient)];
   if (goal) all.push({ ...goal, goal: true });
   const max = Math.max(1, ...all.map((r) => r.visits ?? 0));
   const showValue = rows.some((r) => r.trafficValueUsd !== null);
@@ -63,7 +67,7 @@ export function Leaderboard({ rows, showSemrush, goal }: { rows: LeaderRow[]; sh
           const youAt = measuredRank.get(r.domain);
           return (
             <tr key={r.domain} className={r.isClient ? "you" : undefined}>
-              <td>{r.isClient ? (youAt ? `#${youAt}` : "–") : measured ? place : "–"}</td>
+              <td>{r.isClient ? (youAt ? `#${youAt}` : "–") : measured ? place + (clientFirst ? 1 : 0) : "–"}</td>
               <td>{r.name}</td>
               <td>
                 <div className={`audit-bar${r.isClient ? " you" : ""}`}>

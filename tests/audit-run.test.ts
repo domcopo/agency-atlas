@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse } from "@/lib/audit/run";
+import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse, whoRanksMissing } from "@/lib/audit/run";
 import { modelSite } from "@/lib/audit/depth";
 import { nearbyTowns } from "@/lib/audit/places-list";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -262,10 +262,11 @@ describe("Google Ads: answers → block → checker", () => {
 
 describe("run audit wiring", () => {
   const read = (p: string) => readFileSync(p, "utf8");
-  it("retries a lookup once only when DataForSEO's side failed and the set-aside budget allows; competitors also come from the town searches", () => {
+  it("retries a lookup (up to RUN_RULES.lookupTries) only when DataForSEO's side failed and the set-aside budget allows; competitors also come from the town searches", () => {
     const a = read("src/app/actions.ts");
     const fn = a.slice(a.indexOf("async function runAuditInBackground"));
-    expect(fn).toMatch(/attempt < 2/);
+    expect(fn).toMatch(/attempt < RUN_RULES\.lookupTries;/);
+    expect(fn).toMatch(/attempt < RUN_RULES\.lookupTries - 1 && e instanceof DfsError && e\.retryable/);
     expect(fn).toMatch(/e\.retryable && costUsd \+ DFS_PRICE\[l\.path\] <= budgetUsd/);
     expect(fn).toMatch(/findCompetitors\(\[\.\.\.serps, \.\.\.packSerps\]/);
     expect(fn).toMatch(/Claude's notes weren't written/);
@@ -587,5 +588,28 @@ describe("audit words fit their space", () => {
     const filled = applyWords({}, { headline: "", pageNotes: { rankings: long }, fixes: [], scorecard: [] }, [["COMPETITOR 1", "Rival Roofing (fictional)"]]) as { pageNotes: Record<string, string> };
     expect(filled.pageNotes.rankings!.length).toBeLessThanOrEqual(300);
     expect(filled.pageNotes.rankings!.endsWith("leads.")).toBe(true);
+  });
+});
+
+describe("a run never picks competitors from half of Google's answers", () => {
+  const intake = { services: ["sell my house fast"], hqTown: "Youngstown", niche: "we buy houses" };
+  const all = () => new Map<string, unknown>([...seoMoneyTerms(intake).map((_, i) => [`serp:${i}`, {}] as const), ["maps:area", {}]]);
+
+  it("names the first live search that didn't come back, or null when all did", () => {
+    expect(whoRanksMissing(intake, all())).toBeNull();
+    const noSerp = all();
+    noSerp.delete("serp:0");
+    expect(whoRanksMissing(intake, noSerp)).toBe(seoMoneyTerms(intake)[0]);
+    const noMaps = all();
+    noMaps.delete("maps:area");
+    expect(whoRanksMissing(intake, noMaps)).toBe(`${mapTermOf(intake)} (Google Maps)`);
+  });
+
+  it("the run stops (keeping the last pages) when one is missing and competitors weren't typed in; DataForSEO hiccups get 3 tries", () => {
+    const src = readFileSync("src/app/actions.ts", "utf8");
+    expect(src).toMatch(/const missingWho = intake\.competitors\.length \? null : whoRanksMissing\(intake, answers\);\s+if \(missingWho\) return await finish\("failed"/);
+    expect(src.indexOf("whoRanksMissing(intake, answers)")).toBeLessThan(src.indexOf("findCompetitors([...serps, ...packSerps]"));
+    expect(RUN_RULES.lookupTries).toBe(3);
+    expect(RUN_RULES.retryPauseMs.length).toBe(RUN_RULES.lookupTries - 1);
   });
 });

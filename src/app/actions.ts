@@ -93,7 +93,7 @@ import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
 import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
-import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, type Lookup } from "@/lib/audit/run";
+import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { heatmapBlock, heatmapId, heatPendingOf, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
@@ -3644,7 +3644,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
         if (Date.now() > deadline) break;
         await Promise.all(
           group.slice(i, i + 6).map(async (l) => {
-            for (let attempt = 0; attempt < 2; attempt++) {
+            for (let attempt = 0; attempt < RUN_RULES.lookupTries; attempt++) {
               calls++;
               try {
                 const a = await dfsLookup(l.path, l.task);
@@ -3654,9 +3654,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
               } catch (e) {
                 // Refused or failed lookups aren't billed; only a timeout might be.
                 if (!(e instanceof DfsError) || e.mayBeCharged) costUsd += DFS_PRICE[l.path];
-                // Their side hiccuped (e.g. 40101): one more try after a short pause, if the budget allows.
-                if (attempt === 0 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
-                  await new Promise((r) => setTimeout(r, 1500));
+                // Their side hiccuped (e.g. 40101): try again after a growing pause, if the budget allows.
+                if (attempt < RUN_RULES.lookupTries - 1 && e instanceof DfsError && e.retryable && costUsd + DFS_PRICE[l.path] <= budgetUsd && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, RUN_RULES.retryPauseMs[attempt] ?? 5000));
                   continue;
                 }
                 if (problems.length < 3) problems.push(`${l.step}: ${e instanceof DfsError ? e.message : "a lookup failed."}`);
@@ -3717,6 +3717,11 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
       await runLookups(plan.first);
       if (answers.size === 0) return await finish("failed", keptNote());
+      // Competitors are picked from Google's live results: if one of those didn't come back, the
+      // pick would fall to weaker, often out-of-area sites (a Youngstown audit got a Milwaukee one).
+      // Keep the last good pages instead.
+      const missingWho = intake.competitors.length ? null : whoRanksMissing(intake, answers);
+      if (missingWho) return await finish("failed", `Google's results for “${missingWho}” didn't come back from DataForSEO, so competitors couldn't be picked fairly. Nothing was saved, so the last results stay. Try again in a few minutes.`);
       startHeat(answers.get("maps:area"));
       const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
