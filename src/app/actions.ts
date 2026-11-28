@@ -91,11 +91,11 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_DEFAULTS, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { checkPlaces, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
-import { heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { heatCentre, heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
@@ -3711,7 +3711,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       let heatStart: Promise<HeatStart> | null = null;
       const startHeat = (answer: DfsAnswer | undefined) => {
         const place = heatOn && !heatStart ? readPlace(answer, intake.domain) : null;
-        if (place) heatStart = startLeadSnapHeat(place, heatTerm);
+        if (place) heatStart = startLeadSnapHeat({ placeId: place.placeId, ...heatCentre(place, placePosition(intake.state, intake.hqTown)) }, heatTerm);
       };
       // 1) Find the searches (suggestions) and check Google live; 2) count them for the state;
       // 3) each site's local rankings, profile and (for the business) a homepage check; 4) brand searches.
@@ -3803,7 +3803,7 @@ type HeatStart = { id: number } | { problem: string };
 
 async function startLeadSnapHeat(place: { placeId: string; lat: number; lng: number }, term: string): Promise<HeatStart> {
   try {
-    const recent = reusableHeatmap(await listRecentHeatmaps(place.placeId, term), new Date());
+    const recent = reusableHeatmap(await listRecentHeatmaps(place.placeId, term), new Date(), place);
     if (recent) return { id: recent };
     const id = heatmapId(await createHeatmap({ placeId: place.placeId, keyword: term, lat: place.lat, lng: place.lng, size: LEADSNAP_RULES.gridSize, spacingMiles: LEADSNAP_RULES.spacingMiles, points: planGrid(place.lat, place.lng) }));
     return id ? { id } : { problem: "LeadSnap didn't say which heat map it started." };

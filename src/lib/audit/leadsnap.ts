@@ -3,6 +3,8 @@
 // src/lib/audit/sources/leadsnap.ts). Nothing is guessed: a point LeadSnap didn't rank stays
 // "not in the top 20", a heat map that isn't finished is never drawn.
 
+import { milesBetween } from "./places";
+
 export const LEADSNAP_RULES = {
   /** 7×7 = 49 points, 2 miles apart: a 12-mile square around the business. */
   gridSize: 7,
@@ -14,6 +16,14 @@ export const LEADSNAP_RULES = {
   pollEveryMs: 10_000,
   /** Businesses shown under the grid as the ones most often in the top 3. */
   leaders: 3,
+  /**
+   * A listing farther than this from the home town has a rough map spot (a service-area
+   * business with its address hidden: Google put one Youngstown buyer near Mount Vernon,
+   * ~100 miles away), so the grid is centred on the home town instead.
+   */
+  maxListingMiles: 15,
+  /** A recent heat map is reused only when its centre is this close to the one we'd use. */
+  reuseWithinMiles: 1,
 } as const;
 
 type Obj = Record<string, unknown>;
@@ -40,6 +50,12 @@ export function planGrid(lat: number, lng: number, size: number = LEADSNAP_RULES
   return out;
 }
 
+/** Where the grid goes: the listing's map spot, unless it's far from the home town (see maxListingMiles). */
+export function heatCentre(listing: { lat: number; lng: number }, home: readonly [number, number] | null): { lat: number; lng: number; movedToHome: boolean } {
+  if (!home || milesBetween([listing.lat, listing.lng], home) <= LEADSNAP_RULES.maxListingMiles) return { lat: listing.lat, lng: listing.lng, movedToHome: false };
+  return { lat: home[0], lng: home[1], movedToHome: true };
+}
+
 /** A heat map record, wherever LeadSnap put it ({...}, [{...}] or {data: ...}). */
 function record(body: unknown): Obj | null {
   const o = obj(body);
@@ -56,8 +72,8 @@ export function heatmapId(body: unknown): number | null {
   return id && Number.isInteger(id) && id > 0 ? id : null;
 }
 
-/** A reusable heat map from the "recent" list: same size, not failed, made in the last 7 days. */
-export function reusableHeatmap(body: unknown, now: Date): number | null {
+/** A reusable heat map from the "recent" list: same size and centre, not failed, made in the last 7 days. */
+export function reusableHeatmap(body: unknown, now: Date, centre: { lat: number; lng: number }): number | null {
   const rows = arr(obj(body).data).map(obj);
   for (const r of rows) {
     const id = num(r.id);
@@ -66,6 +82,10 @@ export function reusableHeatmap(body: unknown, now: Date): number | null {
     // We send our own 49 points, so LeadSnap may not keep grid_size: 49 points counts as ours.
     const ours = num(r.grid_size) === LEADSNAP_RULES.gridSize || num(r.total_points) === LEADSNAP_RULES.gridSize ** 2;
     if (!id || status === "failed" || !ours) continue;
+    // Same place on the map, or it isn't the same heat map (a missing centre is never reused).
+    const lat = num(r.grid_center_lat);
+    const lng = num(r.grid_center_lng);
+    if (lat === null || lng === null || milesBetween([lat, lng], [centre.lat, centre.lng]) > LEADSNAP_RULES.reuseWithinMiles) continue;
     if (!Number.isFinite(made) || now.getTime() - made > LEADSNAP_RULES.reuseDays * 86_400_000) continue;
     return id;
   }
@@ -104,7 +124,9 @@ function place(points: Obj[], g: Grid): { ranks: (number | null)[][]; fitted: nu
     if (ri < 0 || ri >= g.size || ci < 0 || ci >= g.size || Math.abs(row - ri) > 0.25 || Math.abs(col - ci) > 0.25) continue;
     fitted++;
     const rank = num(p.rank);
-    ranks[ri]![ci] = rank !== null && Number.isInteger(rank) && rank >= 1 && rank <= 20 ? rank : null;
+    // LeadSnap gives 20 for "not in the top 20" (a whole grid of 20s came back for a business
+    // that wasn't in that area at all), so only 1–19 is a rank.
+    ranks[ri]![ci] = rank !== null && Number.isInteger(rank) && rank >= 1 && rank < 20 ? rank : null;
   }
   return { ranks, fitted };
 }

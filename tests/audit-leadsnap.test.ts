@@ -3,7 +3,7 @@
 // Synthetic data only: fictional places, made-up listing IDs.
 
 import { describe, expect, it } from "vitest";
-import { heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { heatCentre, heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { readPlace } from "@/lib/audit/run";
 import { createHeatmap, getHeatmap, LeadSnapError } from "@/lib/audit/sources/leadsnap";
 
@@ -52,9 +52,16 @@ describe("LeadSnap grid", () => {
     expect(read?.placeId).toBe("ChIJfictional_place_0001");
   });
 
-  it("anything that isn't a rank 1–20 is 'not in the top 20', never guessed", () => {
-    const read = readHeatmap(answer([[0, 21, "x" as unknown as number], [5, null, 2.5], [-1, 20, 1]]));
-    expect(read?.ranks).toEqual([[null, null, null], [5, null, null], [null, 20, 1]]);
+  it("anything that isn't a rank 1–19 is 'not in the top 20' (LeadSnap's 20 means not found), never guessed", () => {
+    const read = readHeatmap(answer([[0, 21, "x" as unknown as number], [5, null, 2.5], [-1, 20, 19]]));
+    expect(read?.ranks).toEqual([[null, null, null], [5, null, null], [null, null, 19]]);
+  });
+
+  it("centres the grid on the home town when the listing's map spot is far away (hidden-address listings)", () => {
+    const home = [41.0998, -80.6495] as const; // a fictional audit's home town
+    expect(heatCentre({ lat: 41.12, lng: -80.7 }, home)).toEqual({ lat: 41.12, lng: -80.7, movedToHome: false });
+    expect(heatCentre({ lat: 40.435, lng: -82.499 }, home)).toEqual({ lat: home[0], lng: home[1], movedToHome: true });
+    expect(heatCentre({ lat: 40.435, lng: -82.499 }, null)).toEqual({ lat: 40.435, lng: -82.499, movedToHome: false });
   });
 
   it("converts LeadSnap's metres and drops points off the grid", () => {
@@ -66,7 +73,7 @@ describe("LeadSnap grid", () => {
   });
 
   it("reads our own 7×7 grid when LeadSnap drops its grid size, spacing and centre (we send our own points)", () => {
-    const ranks = Array.from({ length: 7 }, (_, r) => Array.from({ length: 7 }, (_, c) => (r + c) % 4 === 0 ? null : ((r * 7 + c) % 20) + 1));
+    const ranks = Array.from({ length: 7 }, (_, r) => Array.from({ length: 7 }, (_, c) => (r + c) % 4 === 0 ? null : ((r * 7 + c) % 19) + 1));
     const a: Record<string, unknown> = answer(ranks, { grid_size: null, grid_point_distance: null, grid_point_distance_row: null, grid_center_lat: null, grid_center_lng: null });
     const read = readHeatmap(a);
     expect(read?.status).toBe("ready");
@@ -109,15 +116,19 @@ describe("LeadSnap reuse, leaders and the results block", () => {
   const now = new Date("2026-11-27T12:00:00Z");
 
   it("reuses a 7×7 heat map of the same search from the last 7 days, never a failed or older one", () => {
-    const row = (id: number, created: string, extra: Record<string, unknown> = {}) => ({ id, grid_size: 7, status: "completed", created_at: created, ...extra });
-    expect(reusableHeatmap({ data: [row(1, "2026-11-26T10:00:00Z")] }, now)).toBe(1);
-    expect(reusableHeatmap({ data: [row(2, "2026-11-26T10:00:00Z", { status: "failed" }), row(3, "2026-11-25T10:00:00Z", { status: "queue" })] }, now)).toBe(3);
-    expect(reusableHeatmap({ data: [row(4, "2026-11-10T10:00:00Z")] }, now)).toBeNull();
-    expect(reusableHeatmap({ data: [row(5, "2026-11-26T10:00:00Z", { grid_size: 13 })] }, now)).toBeNull();
-    expect(reusableHeatmap({}, now)).toBeNull();
+    const row = (id: number, created: string, extra: Record<string, unknown> = {}) => ({ id, grid_size: 7, status: "completed", created_at: created, grid_center_lat: String(LAT), grid_center_lng: String(LNG), ...extra });
+    const here = { lat: LAT, lng: LNG };
+    expect(reusableHeatmap({ data: [row(1, "2026-11-26T10:00:00Z")] }, now, here)).toBe(1);
+    expect(reusableHeatmap({ data: [row(2, "2026-11-26T10:00:00Z", { status: "failed" }), row(3, "2026-11-25T10:00:00Z", { status: "queue" })] }, now, here)).toBe(3);
+    expect(reusableHeatmap({ data: [row(4, "2026-11-10T10:00:00Z")] }, now, here)).toBeNull();
+    expect(reusableHeatmap({ data: [row(5, "2026-11-26T10:00:00Z", { grid_size: 13 })] }, now, here)).toBeNull();
+    expect(reusableHeatmap({}, now, here)).toBeNull();
     // LeadSnap may not keep grid_size for our own points: 49 points is ours, 169 isn't.
-    expect(reusableHeatmap({ data: [row(6, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 49 })] }, now)).toBe(6);
-    expect(reusableHeatmap({ data: [row(7, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 169 })] }, now)).toBeNull();
+    expect(reusableHeatmap({ data: [row(6, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 49 })] }, now, here)).toBe(6);
+    expect(reusableHeatmap({ data: [row(7, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 169 })] }, now, here)).toBeNull();
+    // A heat map of the same listing centred somewhere else (or with no centre) is never reused.
+    expect(reusableHeatmap({ data: [row(8, "2026-11-26T10:00:00Z", { grid_center_lat: "40.435", grid_center_lng: "-82.499" })] }, now, here)).toBeNull();
+    expect(reusableHeatmap({ data: [row(9, "2026-11-26T10:00:00Z", { grid_center_lat: null })] }, now, here)).toBeNull();
   });
 
   it("leaders: names and top-3 counts only, never the business itself, never contact details", () => {
