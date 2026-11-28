@@ -141,6 +141,10 @@ describe("far-away towns in web addresses (competitor filter)", () => {
     expect(farTownInDomain("homebuyermilwaukee.example", "OH", "Youngstown", 45)).toBe("milwaukee");
     for (const d of ["youngstownhomebuyer.example", "boardmancashoffers.example", "sellmyhousefast.example", "webuyhouses.cash", "hometownfixerupper.example", "steelvalleyhomes.example", "kellywarrenrealty.example", "dealrun.ai"])
       expect(farTownInDomain(d, "OH", "Youngstown", 45), d).toBeNull();
+    // Business names work too (a name keeps its whole text).
+    expect(farTownInDomain("We Buy Houses Kansas City", "OH", "Youngstown", 45)).toBe("kansascity");
+    expect(farTownInDomain("Steel Valley Homes, LLC", "OH", "Youngstown", 45)).toBeNull();
+    expect(farTownInDomain("GCH Home Buyers", "OH", "Youngstown", 45)).toBeNull();
     // Same address, audit near that town: local.
     expect(farTownInDomain("columbus.webuyhouses.example", "OH", "Westerville", 45)).toBeNull();
     // Unknown home town: never guessed.

@@ -135,7 +135,7 @@ function placesByKey(): Map<string, [number, number][]> {
 }
 
 /**
- * The far-away town a web address is named after, or null: "homebuyersmetairie.com" →
+ * The far-away town a web address (or business name) is named after, or null: "homebuyersmetairie.com" →
  * "metairie" for a Youngstown audit (every Metairie is beyond the audit's radius), while
  * "youngstownhomebuyer.com" or "warrencashbuyers.com" → null. Only used for sites seen in plain
  * results; a business with a Maps listing or 3-pack spot nearby is never dropped by its name.
@@ -143,7 +143,9 @@ function placesByKey(): Map<string, [number, number][]> {
 export function farTownInDomain(domain: string, state: string, home: string, radiusMiles: number): string | null {
   const at = placePosition(state, home);
   if (!at) return null;
-  const text = domain.toLowerCase().split(".").slice(0, -1).join("").replace(/[^a-z]/g, "");
+  // A web address loses its ending (".com"); a business name is used whole.
+  const parts = domain.toLowerCase().split(".");
+  const text = (/\s/.test(domain) || parts.length < 2 ? parts : parts.slice(0, -1)).join("").replace(/[^a-z]/g, "");
   let found: string | null = null;
   for (const [key, spots] of placesByKey()) {
     if (!text.includes(key)) continue;

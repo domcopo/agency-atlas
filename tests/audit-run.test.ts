@@ -444,6 +444,21 @@ describe("2026-11-25 review: variants once, plain home-town searches, map-pack v
     expect(input.data.home_town_plain_searches_per_month).toBe(500);
     expect(wordsInput(block, "x", "y").data.revenue_model).toBeUndefined();
   });
+
+  it("the notes writer gets the Maps grid as counts only (no names, no places), and nothing without one", () => {
+    expect(wordsInput(block, "x", "y").data.maps_grid).toBeUndefined();
+    const withGrid = { ...block, heatmaps: [{ term: "we buy houses", kind: "maps", source: "leadsnap", spacingMiles: 2, ranks: [[1, 4, null], [12, null, null], [null, null, 2]], leaders: [{ name: "Rival Buyers (fictional)", top3: 9, points: 9 }] }] };
+    const grid = wordsInput(withGrid, "x", "y").data.maps_grid;
+    expect(grid).toEqual({ search: "we buy houses", points_checked: 9, miles_between_points: 2, points_business_in_top_3: 2, points_business_in_top_10: 3, points_business_not_in_top_20: 5, other_businesses_often_in_top_3: 1 });
+    expect(JSON.stringify(grid)).not.toMatch(/Rival/);
+  });
+
+  it("a heat map that's already done goes in before the notes; otherwise it's collected after them", () => {
+    const src = readFileSync("src/app/actions.ts", "utf8");
+    expect(src.indexOf("const early = await collectLeadSnapHeat(")).toBeGreaterThan(-1);
+    expect(src.indexOf("const early = await collectLeadSnapHeat(")).toBeLessThan(src.indexOf("await askAi({ task: AUDIT_WORDS_TASK"));
+    expect(src).toMatch(/collectLeadSnapHeat\(await heatStart, heatTerm, retrieved, Date\.now\(\)\)/);
+  });
 });
 
 describe("2026-11-27 review: lumped variants once, local rivals first, map term = business type", () => {

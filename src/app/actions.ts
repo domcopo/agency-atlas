@@ -3730,7 +3730,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area")), (d) => farTownInDomain(d, intake.state, intake.hqTown, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles) !== null).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area")), (d, name) => [d, name].some((x) => !!x && farTownInDomain(x, intake.state, intake.hqTown, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles) !== null)).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
@@ -3741,6 +3741,16 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       // keep the last good results instead of replacing them (a run with no credit wiped one).
       if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());
       let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
+      // A heat map that's already done (a reused one usually is) goes in before the notes, so
+      // they can talk about it; otherwise it's collected after them, as before.
+      let heatGot: HeatGot | null = null;
+      if (heatOn && heatStart) {
+        const early = await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, Date.now());
+        if ("heat" in early) {
+          block = withHeatmap(block, early.heat);
+          heatGot = early;
+        } else if ("problem" in early) heatGot = early;
+      }
       // Words: Claude writes from the finished numbers only (no tools, coded names). Optional.
       state.set("Writing the notes", "working");
       await saveSteps();
@@ -3758,9 +3768,9 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (heatOn) {
         state.set(HEAT_STEP, "working");
         await saveSteps();
-        const got = heatStart ? await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, startedAt + LEADSNAP_RULES.waitUntilMs) : { problem: "the business's Google listing wasn't found in Maps." };
+        const got = heatGot ?? (heatStart ? await collectLeadSnapHeat(await heatStart, heatTerm, retrieved, startedAt + LEADSNAP_RULES.waitUntilMs) : { problem: "the business's Google listing wasn't found in Maps." });
         if ("heat" in got) {
-          block = withHeatmap(block, got.heat);
+          if (got !== heatGot) block = withHeatmap(block, got.heat);
           state.set(HEAT_STEP, "done");
         } else if ("pending" in got) {
           block = { ...block, leadsnapPending: { id: got.pending, term: heatTerm } };

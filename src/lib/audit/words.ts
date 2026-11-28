@@ -14,7 +14,8 @@ You are given finished numbers only. Rules:
 - Plain, confident English a business owner understands. No hype, no guarantees.
 - If the data is thin, say less.
 - If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.
-- A local 3-pack position of 0 means the pack was shown and other businesses held its 3 spots; null means not checked. Never say no business is in the pack.`;
+- A local 3-pack position of 0 means the pack was shown and other businesses held its 3 spots; null means not checked. Never say no business is in the pack.
+- If maps_grid is given, it is where BUSINESS ranks in the Google Maps app at points around the home town. Mention it in the footprint note, especially when it differs from the 3-pack (in the pack but not in the Maps top 20 is worth saying plainly).`;
 
 // The slides give each note about 300 characters; longer answers are cut at a sentence (fit).
 const NOTE = "One or two short sentences, under 250 characters in all.";
@@ -127,6 +128,27 @@ export function wordsInput(block: Obj, company: string, niche: string, model?: R
         ? { business_homepage_check: { has_title: !!ins.title, has_h1: !!ins.h1, title_or_h1_names_home_town: ins.namesHomeTown ?? null, problems: arr(ins.issues).filter((x) => typeof x === "string") } }
         : {}),
       local_3pack_by_city: arr(block.heatmaps).map(obj).flatMap((h) => arr(h.cities).map(obj).map((c) => ({ city: c.city, business_position: c.position }))),
+      ...mapsGrid(block),
+    },
+  };
+}
+
+/** The Google Maps grid as counts only (no names, no places): where BUSINESS ranks around the home town. */
+function mapsGrid(block: Obj): { maps_grid?: Obj } {
+  const h = arr(block.heatmaps).map(obj).find((x) => x.kind === "maps" && Array.isArray(x.ranks));
+  if (!h) return {};
+  const cells = arr(h.ranks).flatMap((row) => arr(row)).map((r) => (typeof r === "number" ? r : null));
+  if (!cells.length) return {};
+  const ranked = cells.filter((r): r is number => r !== null);
+  return {
+    maps_grid: {
+      search: typeof h.term === "string" ? h.term : null,
+      points_checked: cells.length,
+      miles_between_points: typeof h.spacingMiles === "number" ? h.spacingMiles : null,
+      points_business_in_top_3: ranked.filter((r) => r <= 3).length,
+      points_business_in_top_10: ranked.filter((r) => r <= 10).length,
+      points_business_not_in_top_20: cells.length - ranked.length,
+      other_businesses_often_in_top_3: arr(h.leaders).length,
     },
   };
 }
