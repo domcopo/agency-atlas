@@ -3,7 +3,7 @@
 // Synthetic data only: fictional places, made-up listing IDs.
 
 import { describe, expect, it } from "vitest";
-import { heatmapBlock, heatmapId, heatPendingOf, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { readPlace } from "@/lib/audit/run";
 import { createHeatmap, getHeatmap, LeadSnapError } from "@/lib/audit/sources/leadsnap";
 
@@ -65,6 +65,29 @@ describe("LeadSnap grid", () => {
     expect(read?.ranks).toEqual([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
   });
 
+  it("reads our own 7×7 grid when LeadSnap drops its grid size, spacing and centre (we send our own points)", () => {
+    const ranks = Array.from({ length: 7 }, (_, r) => Array.from({ length: 7 }, (_, c) => (r + c) % 4 === 0 ? null : ((r * 7 + c) % 20) + 1));
+    const a: Record<string, unknown> = answer(ranks, { grid_size: null, grid_point_distance: null, grid_point_distance_row: null, grid_center_lat: null, grid_center_lng: null });
+    const read = readHeatmap(a);
+    expect(read?.status).toBe("ready");
+    expect(read?.size).toBe(7);
+    expect(read?.spacingMiles).toBe(2);
+    expect(read?.ranks).toEqual(ranks);
+    // Nonsense spacing from LeadSnap loses to our own grid, which fits every point.
+    expect(readHeatmap(answer(ranks, { grid_size: 7, grid_point_distance_row: 900, grid_distance_measure: "m" }))?.ranks).toEqual(ranks);
+    // While it's still being made, no grid is needed.
+    expect(readHeatmap({ id: 5, status: "Pending", points: [] })?.status).toBe("waiting");
+    // Finished, but not one point fits any grid: never drawn.
+    expect(readHeatmap({ id: 6, status: "completed", points: [] })).toBeNull();
+  });
+
+  it("describes an unreadable answer by field names and counts only, never values", () => {
+    const d = heatShape({ id: 6, status: "completed", grid_center_lat: "41.1", business_name: "Rival Roofing (fictional)", points: [{ lat: "41.1", lng: "-80.6", rank: 3 }, { lat: "41.2", lng: "-80.6", rank: null }] });
+    expect(d).toBe("status “completed”, 2 points (1 ranked), grid fields: grid_center_lat");
+    expect(d).not.toMatch(/41|80|Rival/);
+    expect(heatShape("nonsense")).toBe("no heat map in LeadSnap's answer");
+  });
+
   it("an unfinished or failed heat map is never drawn", () => {
     expect(readHeatmap(answer([[1, 1, 1], [1, 1, 1], [1, 1, 1]], { status: "queue", status_code: 0 }))?.status).toBe("waiting");
     expect(readHeatmap(answer([[1, 1, 1], [1, 1, 1], [1, 1, 1]], { status: "in_progress", status_code: 1 }))?.status).toBe("waiting");
@@ -92,6 +115,9 @@ describe("LeadSnap reuse, leaders and the results block", () => {
     expect(reusableHeatmap({ data: [row(4, "2026-11-10T10:00:00Z")] }, now)).toBeNull();
     expect(reusableHeatmap({ data: [row(5, "2026-11-26T10:00:00Z", { grid_size: 13 })] }, now)).toBeNull();
     expect(reusableHeatmap({}, now)).toBeNull();
+    // LeadSnap may not keep grid_size for our own points: 49 points is ours, 169 isn't.
+    expect(reusableHeatmap({ data: [row(6, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 49 })] }, now)).toBe(6);
+    expect(reusableHeatmap({ data: [row(7, "2026-11-26T10:00:00Z", { grid_size: null, total_points: 169 })] }, now)).toBeNull();
   });
 
   it("leaders: names and top-3 counts only, never the business itself, never contact details", () => {

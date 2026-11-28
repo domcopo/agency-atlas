@@ -95,7 +95,7 @@ import { checkPlaces, nearbyTowns, placeBookFor, statePlaces, type NearbyTown, t
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
-import { heatmapBlock, heatmapId, heatPendingOf, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
+import { heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
@@ -3819,8 +3819,9 @@ async function collectLeadSnapHeat(start: HeatStart, term: string, retrieved: st
   if ("problem" in start) return start;
   for (;;) {
     try {
-      const read = readHeatmap(await getHeatmap(start.id));
-      if (!read) return { problem: "LeadSnap's heat map couldn't be read." };
+      const body = await getHeatmap(start.id);
+      const read = readHeatmap(body);
+      if (!read) return { problem: `LeadSnap's heat map couldn't be read (${heatShape(body)}).` };
       if (read.status === "failed") return { problem: "LeadSnap couldn't finish the heat map." };
       if (read.status === "ready") {
         let leaders: ReturnType<typeof readLeaders> = [];

@@ -63,7 +63,9 @@ export function reusableHeatmap(body: unknown, now: Date): number | null {
     const id = num(r.id);
     const status = String(r.status ?? "").toLowerCase();
     const made = typeof r.created_at === "string" ? Date.parse(r.created_at) : NaN;
-    if (!id || status === "failed" || num(r.grid_size) !== LEADSNAP_RULES.gridSize) continue;
+    // We send our own 49 points, so LeadSnap may not keep grid_size: 49 points counts as ours.
+    const ours = num(r.grid_size) === LEADSNAP_RULES.gridSize || num(r.total_points) === LEADSNAP_RULES.gridSize ** 2;
+    if (!id || status === "failed" || !ours) continue;
     if (!Number.isFinite(made) || now.getTime() - made > LEADSNAP_RULES.reuseDays * 86_400_000) continue;
     return id;
   }
@@ -81,40 +83,87 @@ export interface HeatRead {
 
 const toMiles = (v: number, unit: string) => (unit === "km" ? v / 1.609344 : unit === "m" ? v / 1609.344 : v);
 
-/** One heat map → its grid. Each point is placed by its position around the centre. */
-export function readHeatmap(body: unknown): HeatRead | null {
+type Grid = { size: number; spacingMiles: number; lat: number; lng: number };
+
+/** Puts each point in its cell of `g`; returns the ranks and how many points fitted. */
+function place(points: Obj[], g: Grid): { ranks: (number | null)[][]; fitted: number } {
+  const ranks: (number | null)[][] = Array.from({ length: g.size }, () => Array<number | null>(g.size).fill(null));
+  const half = (g.size - 1) / 2;
+  const dLat = g.spacingMiles / MILES_PER_DEGREE_LAT;
+  const dLng = g.spacingMiles / degLng(g.lat);
+  let fitted = 0;
+  for (const p of points) {
+    const lat = num(p.lat);
+    const lng = num(p.lng);
+    if (lat === null || lng === null) continue;
+    const row = half - (lat - g.lat) / dLat;
+    const col = half + (lng - g.lng) / dLng;
+    const ri = Math.round(row);
+    const ci = Math.round(col);
+    // Off the grid, or far from any grid spot: not ours to draw.
+    if (ri < 0 || ri >= g.size || ci < 0 || ci >= g.size || Math.abs(row - ri) > 0.25 || Math.abs(col - ci) > 0.25) continue;
+    fitted++;
+    const rank = num(p.rank);
+    ranks[ri]![ci] = rank !== null && Number.isInteger(rank) && rank >= 1 && rank <= 20 ? rank : null;
+  }
+  return { ranks, fitted };
+}
+
+const okCentre = (lat: number | null, lng: number | null): lat is number => lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+
+/**
+ * One heat map → its grid. Atlas sends its own points (7×7, 2 miles apart), and LeadSnap then
+ * ignores its own grid size and spacing fields, so they may be missing or different. The grid
+ * is the one (LeadSnap's settings or ours; centred on LeadSnap's grid centre, the listing, or
+ * the middle of the points) that places the most points. A finished heat map where no point
+ * fits is never drawn.
+ */
+export function readHeatmap(body: unknown, ours: { size: number; spacingMiles: number } = { size: LEADSNAP_RULES.gridSize, spacingMiles: LEADSNAP_RULES.spacingMiles }): HeatRead | null {
   const r = record(body);
   if (!r) return null;
   const code = num(r.status_code);
   const s = String(r.status ?? "").toLowerCase();
+  if (!s && code === null) return null;
   const status: HeatRead["status"] = s === "failed" || code === 4 ? "failed" : s === "completed" || s === "incomplete" || code === 2 || code === 3 ? "ready" : "waiting";
+  const placeId = str(r.business_place_id, 200) ?? str(obj(r.place).google_place_id, 200);
+  const points = arr(r.points).map(obj);
+
+  // Grid settings: LeadSnap's (when sensible) and our own.
+  const shapes: { size: number; spacingMiles: number }[] = [];
   const size = num(r.grid_size);
-  const lat0 = num(r.grid_center_lat);
-  const lng0 = num(r.grid_center_lng);
   const dist = num(r.grid_point_distance_row) ?? num(r.grid_point_distance);
   const unit = String(r.grid_distance_measure ?? "m").toLowerCase();
-  if (!size || !Number.isInteger(size) || size < 3 || size > 9 || lat0 === null || lng0 === null || !dist || dist <= 0) return null;
-  const spacingMiles = Math.round(toMiles(dist, unit) * 100) / 100;
-  if (!(spacingMiles > 0 && spacingMiles <= 20)) return null;
-  const ranks: (number | null)[][] = Array.from({ length: size }, () => Array<number | null>(size).fill(null));
-  const half = (size - 1) / 2;
-  const dLat = spacingMiles / MILES_PER_DEGREE_LAT;
-  const dLng = spacingMiles / degLng(lat0);
-  for (const p of arr(r.points).map(obj)) {
-    const lat = num(p.lat);
-    const lng = num(p.lng);
-    if (lat === null || lng === null) continue;
-    const row = half - (lat - lat0) / dLat;
-    const col = half + (lng - lng0) / dLng;
-    const ri = Math.round(row);
-    const ci = Math.round(col);
-    // Off the grid, or far from any grid spot: not ours to draw.
-    if (ri < 0 || ri >= size || ci < 0 || ci >= size || Math.abs(row - ri) > 0.25 || Math.abs(col - ci) > 0.25) continue;
-    const rank = num(p.rank);
-    ranks[ri]![ci] = rank !== null && Number.isInteger(rank) && rank >= 1 && rank <= 20 ? rank : null;
+  if (size && Number.isInteger(size) && size >= 3 && size <= 9 && dist && dist > 0) {
+    const spacingMiles = Math.round(toMiles(dist, unit) * 100) / 100;
+    if (spacingMiles > 0 && spacingMiles <= 20) shapes.push({ size, spacingMiles });
   }
-  const placeId = str(r.business_place_id, 200) ?? str(obj(r.place).google_place_id, 200);
-  return { status, size, spacingMiles, ranks, placeId };
+  shapes.push(ours);
+
+  if (status !== "ready") {
+    const g = shapes[0]!;
+    return { status, size: g.size, spacingMiles: g.spacingMiles, ranks: Array.from({ length: g.size }, () => Array<number | null>(g.size).fill(null)), placeId };
+  }
+
+  // Centres: LeadSnap's grid centre, the listing, the middle of the points.
+  const centres: { lat: number; lng: number }[] = [];
+  const cLat = num(r.grid_center_lat);
+  const cLng = num(r.grid_center_lng);
+  if (okCentre(cLat, cLng)) centres.push({ lat: cLat, lng: cLng! });
+  const pLat = num(obj(r.place).latitude);
+  const pLng = num(obj(r.place).longitude);
+  if (okCentre(pLat, pLng)) centres.push({ lat: pLat, lng: pLng! });
+  const coords = points.map((p) => [num(p.lat), num(p.lng)] as const).filter((c): c is readonly [number, number] => okCentre(c[0], c[1]));
+  if (coords.length) centres.push({ lat: coords.reduce((a, c) => a + c[0], 0) / coords.length, lng: coords.reduce((a, c) => a + c[1], 0) / coords.length });
+
+  let best: { g: Grid; ranks: (number | null)[][]; fitted: number } | null = null;
+  for (const shape of shapes)
+    for (const c of centres) {
+      const g = { ...shape, ...c };
+      const got = place(points, g);
+      if (!best || got.fitted > best.fitted) best = { g, ...got };
+    }
+  if (!best || best.fitted === 0) return null;
+  return { status, size: best.g.size, spacingMiles: best.g.spacingMiles, ranks: best.ranks, placeId };
 }
 
 export interface HeatLeader {
@@ -164,4 +213,19 @@ export function heatPendingOf(block: unknown): { id: number; term: string } | nu
   const id = num(p.id);
   const term = str(p.term, 80);
   return id && Number.isInteger(id) && id > 0 && term ? { id, term } : null;
+}
+
+/**
+ * A short description of a heat map answer Atlas couldn't read, for the run's message: its
+ * status, how many points, and which grid fields were filled in. Field names and counts only,
+ * never a value (no names, places or coordinates).
+ */
+export function heatShape(body: unknown): string {
+  const r = record(body);
+  if (!r) return "no heat map in LeadSnap's answer";
+  const status = String(r.status ?? r.status_code ?? "none").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 20);
+  const points = arr(r.points);
+  const ranked = points.filter((p) => num(obj(p).rank) !== null).length;
+  const grid = ["grid_size", "grid_point_distance_row", "grid_point_distance", "grid_center_lat", "grid_center_lng"].filter((k) => r[k] != null && r[k] !== "");
+  return `status “${status}”, ${points.length} points (${ranked} ranked), grid fields: ${grid.length ? grid.join(", ") : "none"}`;
 }
