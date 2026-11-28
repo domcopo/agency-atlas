@@ -98,6 +98,7 @@ import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
 import { heatCentre, heatmapBlock, heatmapId, heatPendingOf, heatShape, LEADSNAP_RULES, planGrid, readHeatmap, readLeaders, reusableHeatmap, withHeatmap } from "@/lib/audit/leadsnap";
 import { createHeatmap, getHeatmap, getHeatmapCompetitors, isLeadSnapConfigured, LeadSnapError, listRecentHeatmaps } from "@/lib/audit/sources/leadsnap";
+import { domainRank, isSemrushConfigured, SEMRUSH_RULES, SemrushError, type SemrushSite } from "@/lib/audit/sources/semrush";
 import { applyWords, AUDIT_WORDS_SCHEMA, AUDIT_WORDS_TASK, wordsInput } from "@/lib/audit/words";
 import { nyDate } from "@/lib/audit/spend";
 import { COOKIE_OPTIONS, createDatabaseClient, getCurrentMember, isDatabaseConfigured } from "@/lib/supabase/server";
@@ -3653,7 +3654,7 @@ export async function startAuditRun(_prev: RunState, form: FormData): Promise<Ru
     if (!audit.intake) return { error: "Fix the audit's saved details first (Edit), then run it." };
     const plan = planSeoRun(audit.intake, audit.sections);
     estimate = plan.estimateUsd;
-    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", "Writing the notes", ...(wantsHeatMap(audit) ? [HEAT_STEP] : []), "Checking and saving"])];
+    steps = [...new Set([...plan.first.map((l) => l.step), "Searches per city", ...(audit.sections.includes("keywords") ? ["Keyword difficulty"] : []), "Competitors", "Google profiles", "Checking their website", "Brand searches", ...(wantsSemrush(audit) ? [SEMRUSH_STEP] : []), "Writing the notes", ...(wantsHeatMap(audit) ? [HEAT_STEP] : []), "Checking and saving"])];
   }
 
   const db = await createDatabaseClient();
@@ -3695,6 +3696,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
   let aiUsd: number | null = null;
   let wordsNote: string | null = null;
   let heatNote: string | null = null;
+  let semrushUnits = 0;
   // What this run may spend in total (its estimate, set aside before it started). A failed
   // lookup is retried once only while the spend stays inside it.
   let budgetUsd = 0;
@@ -3818,7 +3820,18 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       // Without the search counts or any site's rankings the pages would be mostly "not found":
       // keep the last good results instead of replacing them (a run with no credit wiped one).
       if (!answers.has("volume") || !sites.some((x) => answers.has(`ranked:${x.domain}`))) return await finish("failed", keptNote());
-      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area });
+      // Semrush whole-site figures (read-only, capped), shown beside DataForSEO's local model.
+      let semrush: Map<string, SemrushSite> | undefined;
+      if (wantsSemrush(audit)) {
+        state.set(SEMRUSH_STEP, "working");
+        await saveSteps();
+        const got = await semrushSites(sites.map((x) => x.domain));
+        semrush = got.sites;
+        semrushUnits = got.units;
+        if (got.problem && problems.length < 3) problems.push(`${SEMRUSH_STEP}: ${got.problem}`);
+        state.set(SEMRUSH_STEP, "done");
+      }
+      let block = buildSeoBlock(intake, audit.sections, { answers, competitors, retrieved, costUsd, calls, universe, area, semrush });
       // A heat map that's already done (a reused one usually is) goes in before the notes, so
       // they can talk about it; otherwise it's collected after them, as before.
       let heatGot: HeatGot | null = null;
@@ -3868,7 +3881,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       if (!checked.ok) return await finish("failed", `The data didn't pass the checks: ${checked.errors[0] ?? "unknown"}`);
       await saveRunResults(db, audit.id, block, { competitors: checked.competitors }, checked.summary.retrieved);
     }
-    const notes = [wordsNote, heatNote].filter(Boolean).join(" ") || null;
+    const notes = [wordsNote, heatNote, semrushUnits ? `Semrush: ${semrushUnits} API units.` : null].filter(Boolean).join(" ") || null;
     await finish("done", answers.size === 0 ? "No lookup answered. Check the DataForSEO login and credit." : problems.length ? `Done, with gaps: ${problems.join(" ")}${notes ? ` ${notes}` : ""}` : notes);
   } catch (e) {
     await finish("failed", e instanceof Error && e.message.length < 200 ? e.message : "Something went wrong during the run.");
@@ -3882,6 +3895,31 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
 // ---------------------------------------------------------------------------
 
 const HEAT_STEP = "Heat map (LeadSnap)";
+
+// Semrush (approved 2026-11-28, Phase B): each site's whole-site summary through the read-only
+// module (src/lib/audit/sources/semrush.ts), 10 units a site, capped per run.
+const SEMRUSH_STEP = "Semrush (whole site)";
+
+function wantsSemrush(audit: SavedAudit): boolean {
+  return audit.kind !== "ads" && !!audit.intake?.modules.semrush && isSemrushConfigured();
+}
+
+/** Each site's Semrush summary, within the unit cap; a failure leaves the rest of the run alone. */
+async function semrushSites(domains: string[]): Promise<{ sites: Map<string, SemrushSite>; units: number; problem: string | null }> {
+  const sites = new Map<string, SemrushSite>();
+  let units = 0;
+  const allowed = Math.floor(SEMRUSH_RULES.maxUnitsPerRun / SEMRUSH_RULES.unitsPerSite);
+  for (const d of domains.slice(0, allowed)) {
+    try {
+      sites.set(d, await domainRank(d));
+      units += SEMRUSH_RULES.unitsPerSite;
+    } catch (e) {
+      // A refused key or no units: stop asking (each try could cost units); other sites keep theirs.
+      return { sites, units, problem: e instanceof SemrushError ? e.message : "Semrush couldn't be read." };
+    }
+  }
+  return { sites, units, problem: domains.length > allowed ? `only the first ${allowed} sites were looked up (unit cap).` : null };
+}
 
 function wantsHeatMap(audit: SavedAudit): boolean {
   return audit.kind !== "ads" && !!audit.intake?.modules.leadsnap && audit.sections.includes("heatmap") && isLeadSnapConfigured();

@@ -66,12 +66,17 @@ export interface ScenarioRow {
   baseline: boolean;
 }
 
-/** visits = demand × share captured; leads = visits × lead rate; jobs = leads × close rate; revenue = jobs × blended job value. */
-export function revenueScenarios(config: AuditConfig, demand: number | null): ScenarioRow[] | null {
+/**
+ * visits = today's visits + demand × the extra share won through SEO (the owner's playbook:
+ * growth on top of today, so no scenario falls below what the business already gets);
+ * leads = visits × lead rate; jobs = leads × close rate; revenue = jobs × blended job value.
+ * Without today's visits the scenario is the share of demand alone (as before).
+ */
+export function revenueScenarios(config: AuditConfig, demand: number | null, now: number | null = null): ScenarioRow[] | null {
   if (demand === null) return null;
   const job = blendedJobValue(config);
   return config.scenarios.map((s) => {
-    const visits = demand * s.demandCaptured;
+    const visits = (now ?? 0) + demand * s.demandCaptured;
     const leads = visits * config.funnel.leadRate.value;
     const jobs = leads * config.funnel.closeRate.value;
     const revenueMo = jobs * job;

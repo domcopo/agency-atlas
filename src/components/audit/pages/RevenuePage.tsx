@@ -12,9 +12,9 @@ import { Slide } from "../Slide";
 export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
-  const rows = revenueScenarios(config, demand);
   const you = clientSite(config, data);
   const now = you ? totalVisits(you) : null;
+  const rows = revenueScenarios(config, demand, now);
   const target = goalScenario(rows, now);
   const curve = target && now !== null ? growthCurve(now, target.visits) : null;
   const nationalVisits = data.visitsScope === "national";

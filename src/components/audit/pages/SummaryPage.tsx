@@ -12,16 +12,16 @@ import { Slide } from "../Slide";
 export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const { config, data } = bundle;
   const demand = localDemand(data);
-  const scenarios = revenueScenarios(config, demand);
-  const base = scenarios?.find((r) => r.baseline) ?? null;
   const you = clientSite(config, data);
-  const cpc = weightedCpc(data.keywords);
-  const ads = adsEquivalent(base?.visits ?? null, cpc);
   const rank = avgMapsRank(data.grids);
   const pack = packPresence(data.grids);
   const board = leaderboard(config, data);
   const short = config.company.name.replace(/\s*\((sample|fictional)\)$/i, "");
   const nowVisits = you ? totalVisits(you) : null;
+  const scenarios = revenueScenarios(config, demand, nowVisits);
+  const base = scenarios?.find((r) => r.baseline) ?? null;
+  const cpc = weightedCpc(data.keywords);
+  const ads = adsEquivalent(base?.visits ?? null, cpc);
   const nowPlace = board.findIndex((r) => r.isClient) + 1;
   const goalVisits = goalScenario(scenarios, nowVisits)?.visits ?? null;
   const goalPlace = goalVisits === null ? null : board.filter((r) => !r.isClient && (r.visits ?? -1) >= goalVisits).length + 1;
@@ -61,7 +61,7 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
           {
             value: fmtNum(nowVisits),
             label: `${short}'s search visits today`,
-            detail: nowPlace > 0 ? `#${nowPlace} of ${board.length} on the leaderboard below · estimate` : "Estimate from its Google rankings",
+            detail: `${nowPlace > 0 ? `#${nowPlace} of ${board.length} on the leaderboard below · local estimate` : "Local estimate from its Google rankings"}${you?.semrushVisits?.value != null ? ` · Semrush whole site (US): ${fmtNum(you.semrushVisits.value)}/mo` : ""}`,
             color: "#e8426a",
           },
           {

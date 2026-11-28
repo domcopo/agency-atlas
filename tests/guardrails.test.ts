@@ -65,7 +65,10 @@ describe("Phase 1 guardrails", () => {
   // Approved exception (owner, 2026-11-27): the LeadSnap heat-map module; checked in "LeadSnap heat maps only" below.
   const LS_MODULE = "src/lib/audit/sources/leadsnap.ts";
 
-  it("makes no network calls from app code (except the read-only GoHighLevel and DataForSEO modules and the LeadSnap heat-map module)", () => {
+  // Approved exception (owner, 2026-11-28, Phase B): the read-only Semrush module; checked in "Semrush read-only" below.
+  const SR_MODULE = "src/lib/audit/sources/semrush.ts";
+
+  it("makes no network calls from app code (except the read-only GoHighLevel and DataForSEO modules, the LeadSnap heat-map module and the read-only Semrush module)", () => {
     const hits = findMatches([
       /\bfetch\s*\(/,
       /XMLHttpRequest/,
@@ -74,7 +77,7 @@ describe("Phase 1 guardrails", () => {
       /sendBeacon/,
       /\baxios\b/,
     ]);
-    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`) && !h.startsWith(`${DFS_MODULE}:`) && !h.startsWith(`${LS_MODULE}:`))).toEqual([]);
+    expect(hits.filter((h) => !h.startsWith(`${GHL_MODULE}:`) && !h.startsWith(`${DFS_MODULE}:`) && !h.startsWith(`${LS_MODULE}:`) && !h.startsWith(`${SR_MODULE}:`))).toEqual([]);
   });
 
   it("contains no write-style HTTP methods (DataForSEO's read-only POST is the one approved exception)", () => {
@@ -1272,5 +1275,45 @@ describe("LeadSnap heat maps only (approved 2026-11-27)", () => {
     expect(users).toEqual(["src/app/(app)/audits/[id]/page.tsx", "src/app/actions.ts"]);
     // The words step never sees or calls it.
     expect(readFileSync(join(ROOT, "src/lib/audit/words.ts"), "utf8")).not.toMatch(/leadsnap/i);
+  });
+});
+
+describe("Semrush read-only (approved 2026-11-28, Phase B)", () => {
+  const SR_MODULE = "src/lib/audit/sources/semrush.ts";
+  const sr = readFileSync(join(ROOT, SR_MODULE), "utf8");
+
+  it("only the Semrush module reads its key or names its host", () => {
+    expect(contents.filter(({ text }) => /process\.env\.SEMRUSH_/.test(text)).map(({ file }) => file)).toEqual([SR_MODULE]);
+    expect(findMatches([/api\.semrush\.com/i]).map((h) => h.split(":")[0])).toEqual([SR_MODULE]);
+    expect(findMatches([/NEXT_PUBLIC_SEMRUSH/])).toEqual([]);
+  });
+
+  it("one GET call to one fixed host, never follows a redirect", () => {
+    expect(sr.match(/\bfetch\s*\(/g)?.length).toBe(1);
+    expect(new Set([...sr.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((m) => m[0]))).toEqual(new Set(["https://api.semrush.com"]));
+    expect(sr).toMatch(/method:\s*"GET"/);
+    expect(sr).toMatch(/redirect:\s*"error"/);
+    expect(sr).not.toMatch(/["'`](POST|PUT|PATCH|DELETE)["'`]/);
+  });
+
+  it("the allowed list is the whole-site summary only", () => {
+    expect(sr).toMatch(/const ALLOWED_TYPES = new Set\(\["domain_rank"\]\);/);
+    expect(sr).toMatch(/if \(!ALLOWED_TYPES\.has\(type\)\)/);
+    // No Semrush "Projects" or other management APIs are ever named.
+    expect(sr).not.toMatch(/management|\/projects|position_tracking|site_audit/i);
+  });
+
+  it("the key and the address (which carries the key) are never logged or returned", () => {
+    expect(sr).not.toMatch(/console\.(log|warn|error)/);
+    expect(sr).not.toMatch(/export\s+(const|function)\s+key\b/);
+    expect(sr.match(/\bkey\(\)/g)?.length).toBe(3); // defined, isSemrushConfigured, call
+    expect(sr).not.toMatch(/url\.(href|toString)|String\(url\)|\$\{url\}/);
+  });
+
+  it("only the audit run uses the module, with a unit cap", () => {
+    const users = contents.filter(({ text }) => /sources\/semrush"/.test(text)).map(({ file }) => file).sort();
+    expect(users).toEqual(["src/app/actions.ts"]);
+    expect(sr).toMatch(/maxUnitsPerRun: \d+/);
+    expect(readFileSync(join(ROOT, "src/lib/audit/words.ts"), "utf8")).not.toMatch(/semrush\.ts|sources\/semrush/i);
   });
 });

@@ -439,3 +439,16 @@ describe("one-time setup hours (page 8)", () => {
     expect(html).not.toMatch(/NaN|undefined|Infinity/);
   });
 });
+
+describe("scenarios grow on top of today's visits (owner's playbook, 2026-11-28)", () => {
+  it("each scenario = today + its share of demand, so none sits below today", () => {
+    const plain = revenueScenarios(sampleAuditConfig, 1000)!;
+    const onTop = revenueScenarios(sampleAuditConfig, 1000, 25)!;
+    onTop.forEach((r, i) => {
+      expect(r.visits).toBeCloseTo(25 + plain[i]!.visits, 6);
+      expect(r.visits).toBeGreaterThan(25);
+    });
+    // The forecast then climbs for every scenario instead of sitting flat.
+    for (const f of forecastRows(sampleAuditConfig, onTop, 25)!) expect(f.visits[3]!).toBeGreaterThan(25);
+  });
+});

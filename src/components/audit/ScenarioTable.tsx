@@ -9,7 +9,7 @@ export function ScenarioTable({ rows }: { rows: ScenarioRow[] }) {
       <thead>
         <tr>
           <th>Scenario</th>
-          <th className="num">Demand captured</th>
+          <th className="num">Extra demand won</th>
           <th className="num">Visits/mo</th>
           <th className="num">Leads/mo</th>
           <th className="num">Jobs/mo</th>

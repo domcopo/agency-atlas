@@ -60,6 +60,8 @@ export interface SiteMetrics {
   referringDomains: Fig;
   /** Semrush's own visit estimate, shown beside DataForSEO when Semrush is on. */
   semrushVisits?: Fig;
+  /** Keywords the whole site ranks for in Semrush (US, top 100), beside DataForSEO's local count. */
+  semrushKeywords?: Fig;
   /** Market ids where this site holds a page-1 or page-2 ranking page. */
   footprint: string[];
   /** D1 local model: searches where it ranks top 3 / top 10, and the monthly searches on its top-10 terms. */

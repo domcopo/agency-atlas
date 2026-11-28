@@ -346,7 +346,8 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
         .map((city) => marketId(city))
         .filter((id): id is string => !!id),
     };
-    if (o.semrushVisits !== undefined) m.semrushVisits = fig(c, typeof o.semrushVisits === "number" ? { value: o.semrushVisits, source: "semrush" } : o.semrushVisits, `${d} Semrush visits`, [0, 100_000_000]);
+    if (o.semrushVisits !== undefined) m.semrushVisits = fig(c, typeof o.semrushVisits === "number" || o.semrushVisits === null ? { value: o.semrushVisits, source: "semrush" } : o.semrushVisits, `${d} Semrush visits`, [0, 100_000_000]);
+    if (o.semrushKeywords !== undefined) m.semrushKeywords = fig(c, typeof o.semrushKeywords === "number" || o.semrushKeywords === null ? { value: o.semrushKeywords, source: "semrush" } : o.semrushKeywords, `${d} Semrush keywords`, [0, 100_000_000]);
     // D1 local model (optional).
     if (o.top3 !== undefined) m.top3 = fig(c, o.top3, `${d} top-3 searches`, [0, 100_000]);
     if (o.top10 !== undefined) m.top10 = fig(c, o.top10, `${d} top-10 searches`, [0, 100_000]);

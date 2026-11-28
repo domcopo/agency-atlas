@@ -1,6 +1,6 @@
 // Page 8: 12-month roadmap with hours, monthly plans, and the next step.
 
-import { localDemand, revenueScenarios, setupHours } from "@/lib/audit/compute";
+import { clientSite, localDemand, revenueScenarios, setupHours, totalVisits } from "@/lib/audit/compute";
 import type { AuditPageProps } from "../Slide";
 import { fmtUsd } from "@/lib/audit/format";
 import { HoursTable } from "../HoursTable";
@@ -9,7 +9,8 @@ import { Slide } from "../Slide";
 
 export function PlanPage({ bundle, pageNo, pageCount, show }: AuditPageProps) {
   const { config, data } = bundle;
-  const base = revenueScenarios(config, localDemand(data))?.find((r) => r.baseline) ?? null;
+  const you = clientSite(config, data);
+  const base = revenueScenarios(config, localDemand(data), you ? totalVisits(you) : null)?.find((r) => r.baseline) ?? null;
   const rec = config.plans.find((p) => p.recommended);
   const ratio = base && rec && rec.priceUsd > 0 ? Math.round(base.revenueMo / rec.priceUsd) : null;
   const setup = setupHours(config, data);

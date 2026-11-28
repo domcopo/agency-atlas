@@ -53,7 +53,7 @@ export const RUN_RULES = {
   packCities: 12,
   serpDepth: 20,
   /** Big directories are never "competitors". */
-  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com", "yahoo.com", "bing.com", "expedia.com", "kayak.com", "priceline.com", "booking.com", "tripadvisor.com", "orbitz.com", "travelocity.com", "hotwire.com", "cheaptickets.com", "momondo.com", "skyscanner.com", "rentalcars.com", "carrentals.com", "discovercars.com", "easyterra.com", "autoslash.com", "turo.com", "getaround.com", "costcotravel.com", "realestatebees.com", "fastexpert.com", "clever.com", "entrepreneur.com", "inc.com", "medium.com", "nar.realtor"],
+  directories: ["yelp.com", "angi.com", "angieslist.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "facebook.com", "nextdoor.com", "houzz.com", "reddit.com", "google.com", "zillow.com", "realtor.com", "porch.com", "mapquest.com", "manta.com", "instagram.com", "linkedin.com", "youtube.com", "wikipedia.org", "indeed.com", "craigslist.org", "expertise.com", "bark.com", "trustpilot.com", "x.com", "twitter.com", "tiktok.com", "homelight.com", "opendoor.com", "offerpad.com", "redfin.com", "trulia.com", "homes.com", "homeguide.com", "fixr.com", "forbes.com", "bankrate.com", "investopedia.com", "nerdwallet.com", "quora.com", "apartments.com", "biggerpockets.com", "yahoo.com", "bing.com", "expedia.com", "kayak.com", "priceline.com", "booking.com", "tripadvisor.com", "orbitz.com", "travelocity.com", "hotwire.com", "cheaptickets.com", "momondo.com", "skyscanner.com", "rentalcars.com", "carrentals.com", "discovercars.com", "easyterra.com", "autoslash.com", "turo.com", "getaround.com", "costcotravel.com", "realestatebees.com", "fastexpert.com", "clever.com", "entrepreneur.com", "inc.com", "medium.com", "nar.realtor", "dealrun.ai"],
   /** Towns inside the market radius searched per audit (closest first). */
   nearbyTowns: 60,
   /** A lookup DataForSEO fails on its side (e.g. 40101) is tried up to 3 times, pausing 2 s then 5 s. */
@@ -527,6 +527,8 @@ export interface SeoAnswers {
   universe?: string[];
   /** Nearby towns and the state's place names (same as given to planSeoRun / seoUniverse). */
   area?: SeoArea;
+  /** Semrush whole-site summaries (US), by website, when Semrush ran (shown beside, never merged). */
+  semrush?: ReadonlyMap<string, { keywords: number | null; visits: number | null; valueUsd: number | null }>;
 }
 
 /** Seeds + suggestions that name a town, the state or "near me" (the D1 keyword universe). */
@@ -691,6 +693,12 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
       brandSearches: brandFor(names.get(d) ?? d),
     };
     if (m?.pages.length && d !== intake.domain) row.pagesBuilt = m.pages;
+    // Semrush's whole-site figures (US, all keywords), beside DataForSEO's local model.
+    const sem = run.semrush?.get(d);
+    if (sem) {
+      row.semrushVisits = sem.visits;
+      row.semrushKeywords = sem.keywords;
+    }
     return row;
   });
 
@@ -706,7 +714,7 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     website: intake.domain,
     source: "dataforseo",
     retrieved: run.retrieved,
-    sources: ["dataforseo"],
+    sources: run.semrush?.size ? ["dataforseo", "semrush"] : ["dataforseo"],
     competitors: run.competitors.map((c) => ({ name: c.name, website: c.domain, town: c.town })),
     demand,
     nearMeSearches: nearRows.length ? nearRows.reduce((a, v) => a + v, 0) : null,
