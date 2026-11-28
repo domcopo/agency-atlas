@@ -56,6 +56,8 @@ export const RUN_RULES = {
   nearbyTowns: 60,
   /** A lookup DataForSEO fails on its side (e.g. 40101) is tried up to 3 times, pausing 2 s then 5 s. */
   lookupTries: 3,
+  /** Money searches that may fail (of 3 or more) and still let the run pick competitors. */
+  moneySearchesMayMiss: 1,
   retryPauseMs: [2000, 5000],
   /** A run that started this long ago and never finished is treated as stopped. */
   staleMinutes: 10,
@@ -233,14 +235,17 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
 }
 
 /**
- * The first live Google search competitors are picked from that didn't come back (a money
- * search or the home-town Maps search), or null when all answered.
+ * The live Google search whose loss makes a fair competitor pick impossible, or null. The
+ * home-town Maps search (where local rivals come from) must always come back. Of the money
+ * searches, one may be missing when there are at least 3 (DataForSEO sometimes fails one
+ * search over and over with "Internal SE Server Error"); the run lists it as a gap.
  */
 export function whoRanksMissing(intake: { services: string[]; hqTown: string; niche: string }, answers: ReadonlyMap<string, unknown>): string | null {
+  if (!answers.has("maps:area")) return `${mapTermOf(intake)} (Google Maps)`;
   const terms = seoMoneyTerms(intake);
-  const i = terms.findIndex((_, n) => !answers.has(`serp:${n}`));
-  if (i !== -1) return terms[i]!;
-  return answers.has("maps:area") ? null : `${mapTermOf(intake)} (Google Maps)`;
+  const missing = terms.filter((_, n) => !answers.has(`serp:${n}`));
+  const allowed = terms.length >= 3 ? RUN_RULES.moneySearchesMayMiss : 0;
+  return missing.length > allowed ? missing[0]! : null;
 }
 
 /** The money searches checked live from the home town: each service + home town, then "near me". */

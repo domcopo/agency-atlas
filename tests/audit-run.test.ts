@@ -599,10 +599,30 @@ describe("a run never picks competitors from half of Google's answers", () => {
     expect(whoRanksMissing(intake, all())).toBeNull();
     const noSerp = all();
     noSerp.delete("serp:0");
+    // One of 4 money searches may be missing (see the next test); two may not.
+    expect(whoRanksMissing(intake, noSerp)).toBeNull();
+    noSerp.delete("serp:1");
     expect(whoRanksMissing(intake, noSerp)).toBe(seoMoneyTerms(intake)[0]);
     const noMaps = all();
     noMaps.delete("maps:area");
     expect(whoRanksMissing(intake, noMaps)).toBe(`${mapTermOf(intake)} (Google Maps)`);
+  });
+
+  it("with 3+ money searches, one may be missing (listed as a gap); two, or the Maps search, still stop the run", () => {
+    const wide = { services: ["we buy houses", "sell my house fast", "cash home buyers", "real estate investor"], hqTown: "Youngstown", niche: "we buy houses" };
+    const terms = seoMoneyTerms(wide);
+    expect(terms.length).toBeGreaterThanOrEqual(3);
+    const full = () => new Map<string, unknown>([...terms.map((_, i) => [`serp:${i}`, {}] as const), ["maps:area", {}]]);
+    const oneGone = full();
+    oneGone.delete("serp:3");
+    expect(whoRanksMissing(wide, oneGone)).toBeNull();
+    const twoGone = full();
+    twoGone.delete("serp:1");
+    twoGone.delete("serp:3");
+    expect(whoRanksMissing(wide, twoGone)).toBe(terms[1]);
+    oneGone.delete("maps:area");
+    expect(whoRanksMissing(wide, oneGone)).toBe(`${mapTermOf(wide)} (Google Maps)`);
+    expect(RUN_RULES.moneySearchesMayMiss).toBe(1);
   });
 
   it("the run stops (keeping the last pages) when one is missing and competitors weren't typed in; DataForSEO hiccups get 3 tries", () => {
