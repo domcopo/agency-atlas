@@ -143,6 +143,11 @@ export interface AuditData {
   nearbyMiles?: number;
   /** Seller-situation searches from the home town ("sell inherited house"); home buyers only. */
   situationSearches?: Fig;
+  /**
+   * Present when plain / "near me" / situation counts are US searches × the area's share of the
+   * US population (Census, counties within `miles`) rather than one town's Google figure.
+   */
+  areaShare?: { population: number; share: number; counties: number; miles: number };
   keywords: KeywordRow[];
   /** "national" = visit estimates are each site's US-wide total, so they are not drawn next to the local model. */
   visitsScope?: "local" | "national";

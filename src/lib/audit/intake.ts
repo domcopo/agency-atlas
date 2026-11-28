@@ -9,6 +9,7 @@
 import { AUDIT_DEFAULTS, type AuditConfig, type AuditPlan, type RoadmapPhase } from "./config";
 import type { AuditData, Fig, SiteMetrics } from "./data";
 import { stateName, US_STATES } from "./geo";
+import { HOME_BUYER_PRESET, isHomeBuyer } from "./home-buyer";
 import { cleanPlaces, placeLabel, placeState, splitPlace, unknownPlaceMessage, type PlaceBook } from "./places";
 
 export interface IntakeCompetitor {
@@ -32,7 +33,7 @@ export interface AuditIntake {
   avgJobUsd: number;
   /** true = the client gave this number; false = our assumption. */
   avgJobConfirmed: boolean;
-  /** Share of search visits that become jobs, 0.005–0.10. */
+  /** Share of search visits that become jobs, 0.002–0.10. */
   visitToJobRate: number;
   /**
    * Towns within this many miles of the home town count as the market (searches, rankings,
@@ -55,7 +56,7 @@ export const INTAKE_LIMITS = {
   competitors: 5,
   avgJobMin: 50,
   avgJobMax: 1_000_000,
-  rateMin: 0.005,
+  rateMin: 0.002,
   rateMax: 0.1,
   radiusMin: 10,
   radiusMax: 100,
@@ -290,7 +291,10 @@ export function buildAuditConfig(intake: AuditIntake, settings: AuditAgencySetti
     jobValueUsd: { value: intake.avgJobUsd, basis: intake.avgJobConfirmed ? ("client_supplied" as const) : ("assumption" as const) },
   }));
   const rec = settings.plans.find((p) => p.recommended) ?? settings.plans[0];
-  const leadRate = 0.1;
+  // Visits → leads: 4% for home buyers (the owner's playbook), else 10%. The close rate is
+  // whatever makes lead rate × close rate equal the rep's visit-to-job rate; if that would be
+  // over 50% (a high rate typed for a home buyer), the general 10% lead rate is used instead.
+  const leadRate = isHomeBuyer(intake.niche, intake.services) && intake.visitToJobRate / HOME_BUYER_PRESET.visitToLeadRate <= 0.5 ? HOME_BUYER_PRESET.visitToLeadRate : 0.1;
   return {
     kind: "seo",
     agency: { name: settings.agencyName || "Your agency", ...(settings.agencyWebsite ? { website: settings.agencyWebsite } : {}) },

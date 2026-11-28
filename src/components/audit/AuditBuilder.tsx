@@ -9,6 +9,7 @@ import { startTransition, useActionState, useState, type FormEvent } from "react
 import { saveAudit } from "@/app/actions";
 import type { AuditIntake } from "@/lib/audit/intake";
 import { INTAKE_DEFAULTS, INTAKE_LIMITS } from "@/lib/audit/intake";
+import { HOME_BUYER_PRESET } from "@/lib/audit/home-buyer";
 import { US_STATES, STATES } from "@/lib/audit/geo";
 import { AUDIT_PRESETS, AUDIT_SECTIONS, deckPages, type AuditSectionId } from "@/lib/audit/sections";
 import { NearbyChips, PlaceCheckList, PlaceDatalist, usePlaceHelp, useStatePlaces } from "@/components/audit/PlaceHelpers";
@@ -207,6 +208,9 @@ export function AuditBuilder({ id, leadId, leadName, intake, sections: initial, 
                   <input name="visitToJobRate" inputMode="decimal" defaultValue={((i.visitToJobRate ?? INTAKE_DEFAULTS.visitToJobRate) * 100).toString()} className={field} />
                 </label>
               </div>
+              <p className="text-[11px] text-faint">
+                Home buyers / investors (&quot;we buy houses&quot;): use about ${HOME_BUYER_PRESET.avgDealUsd.toLocaleString("en-US")} gross per deal and {HOME_BUYER_PRESET.visitToDealRate * 100}% of visits becoming deals ({HOME_BUYER_PRESET.visitToLeadRate * 100}% become leads, about 12% of leads close). Both show as &quot;assumption&quot; until the client confirms them.
+              </p>
               <label className={label}>
                 Market radius (miles)
                 <input name="radiusMiles" inputMode="numeric" defaultValue={(i.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).toString()} className={field} />

@@ -26,7 +26,7 @@ import { parseAuditConfig, type AuditConfig } from "@/lib/audit/config";
 import type { AuditBundle, AuditData, Fig } from "@/lib/audit/data";
 import { boundsOf, fitBounds, fitState, insidePolygon, padBounds, STATES } from "@/lib/audit/geo";
 import { shortLabels } from "@/lib/audit/format";
-import { packCityPresence, packPresence, revenueFromVisits } from "@/lib/audit/compute";
+import { addressableClicks, forecastRows, SETUP_HOURS, setupHours, packCityPresence, packPresence, revenueFromVisits } from "@/lib/audit/compute";
 import { getAuditPreview } from "@/lib/data-source";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -362,17 +362,25 @@ describe("audit page 1: modeled revenue per site and the client's goal", () => {
   });
 });
 
-describe("summary: organic keywords card", () => {
-  it("never compares the business with itself; when it has the most keywords it says it leads", () => {
-    const d = clone(sampleAuditData);
-    const own = d.sites.find((s) => s.domain === sampleAuditConfig.company.domain)!;
-    own.organicKeywords = { ...own.organicKeywords, value: 99_999 };
-    const html = render(bundle(sampleAuditConfig, d))[0]!;
-    expect(html).toContain("Organic keywords vs top competitor");
-    expect(html).toContain(`${sampleAuditConfig.company.name} leads; next is`);
-    expect(html).not.toContain(`${sampleAuditConfig.company.name} vs ${sampleAuditConfig.company.domain}`);
-    // The usual case is unchanged.
-    expect(render(bundle())[0]).toContain("Organic keywords vs leader");
+describe("summary: the four headline cards (owner's playbook order, 2026-11-28)", () => {
+  it("local searches → addressable organic clicks → search visits today → potential visits, each labeled", () => {
+    const c = clone(sampleAuditConfig);
+    c.competitorRevenue = { visitToJobRate: { value: 0.05, basis: "assumption" } };
+    c.goal = { months: 12 };
+    const html = render(bundle(c))[0]!;
+    const at = (t: string) => html.indexOf(t);
+    for (const t of ["Local searches / month", "Addressable organic clicks / month", "search visits today", "Potential search visits / month"]) expect(at(t), t).toBeGreaterThan(-1);
+    expect(at("Local searches / month")).toBeLessThan(at("Addressable organic clicks / month"));
+    expect(at("Addressable organic clicks / month")).toBeLessThan(at("search visits today"));
+    expect(at("search visits today")).toBeLessThan(at("Potential search visits / month"));
+    // Addressable clicks are a labeled model: 45% of the searches.
+    expect(html).toContain("45% of those searches end in a normal Google result");
+    expect(html).not.toMatch(/NaN|undefined|Infinity/);
+  });
+
+  it("addressable clicks are 45% of demand, and missing demand stays missing", () => {
+    expect(addressableClicks(1000)).toBe(450);
+    expect(addressableClicks(null)).toBeNull();
   });
 });
 
@@ -386,5 +394,48 @@ describe("leaderboard order", () => {
     expect(cells(top)).toEqual(["#1 you.example", "2 a.example", "3 b.example"]);
     const second = renderToStaticMarkup(createElement(Leaderboard, { rows: [row("a.example", 18), row("you.example", 12, true), row("b.example", 0)], showSemrush: false }));
     expect(cells(second)).toEqual(["1 a.example", "2 b.example", "#2 you.example"]);
+  });
+});
+
+describe("forecast table (months 3–12, three scenarios)", () => {
+  it("climbs from today to each scenario on the chart's curve, never below today, and counts deals at month 12", () => {
+    const rows = revenueScenarios(sampleAuditConfig, 1000)!;
+    const f = forecastRows(sampleAuditConfig, rows, 10)!;
+    expect(f.map((r) => r.name)).toEqual(rows.map((r) => r.name));
+    for (const [i, r] of f.entries()) {
+      expect(r.visits).toHaveLength(4);
+      expect(r.visits[3]).toBeCloseTo(rows[i]!.visits, 6); // month 12 = the scenario
+      expect([...r.visits].sort((a, b) => a - b)).toEqual(r.visits); // never drops
+      expect(r.jobsAt12).toBeCloseTo(rows[i]!.visits * sampleAuditConfig.funnel.leadRate.value * sampleAuditConfig.funnel.closeRate.value, 6);
+    }
+    // Already above a scenario: flat at today, not a fall.
+    expect(forecastRows(sampleAuditConfig, rows, 10_000)![0]!.visits).toEqual([10_000, 10_000, 10_000, 10_000]);
+    expect(forecastRows(sampleAuditConfig, null, 10)).toBeNull();
+    expect(forecastRows(sampleAuditConfig, rows, null)).toBeNull();
+  });
+});
+
+describe("one-time setup hours (page 8)", () => {
+  it("a fixed base, plus fixes per homepage problem and a page per area with no ranking page", () => {
+    const d = clone(sampleAuditData);
+    const own = d.sites.find((s) => s.domain === sampleAuditConfig.company.domain)!;
+    own.footprint = [sampleAuditConfig.markets[0]!.id];
+    d.inspection = { source: "dataforseo", retrieved: "2026-11-28", title: null, h1: null, issues: ["Images without alt text", "Slow first paint"], namesHomeTown: null };
+    const s = setupHours(sampleAuditConfig, d);
+    const missing = sampleAuditConfig.markets.length - 1;
+    const base = SETUP_HOURS.strategy + SETUP_HOURS.tracking + SETUP_HOURS.googleProfile + SETUP_HOURS.technicalBase;
+    expect(s.total).toBe(base + 2 * SETUP_HOURS.perHomepageProblem + missing * SETUP_HOURS.perMissingAreaPage);
+    expect(s.items.reduce((t, i) => t + i.hours, 0)).toBe(s.total);
+    // Pages in every area and no problems: the base only.
+    own.footprint = sampleAuditConfig.markets.map((m) => m.id);
+    d.inspection = undefined;
+    expect(setupHours(sampleAuditConfig, d).total).toBe(base);
+  });
+
+  it("page 8 shows the setup hours and each plan's 12-month total", () => {
+    const html = render(bundle())[7] ?? render(bundle()).at(-1)!;
+    expect(html).toContain("One-time setup ≈");
+    if (sampleAuditConfig.plans.length) expect(html).toContain("12-month total:");
+    expect(html).not.toMatch(/NaN|undefined|Infinity/);
   });
 });

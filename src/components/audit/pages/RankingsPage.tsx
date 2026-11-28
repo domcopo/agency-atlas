@@ -18,10 +18,13 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const rest = all.length > MAX_ROWS ? sorted.slice(MAX_ROWS - 1) : [];
   const restFound = rest.filter((r) => r.fig.value !== null);
   const restMissing = rest.length - restFound.length;
+  // Area counts (US searches × the area's population share) are labeled as approximations.
+  const area = data.areaShare;
+  const where = area ? `the ${area.miles}-mile area, approx.` : hqName;
   const bars = [
-    { label: "“Near me” searches (location decided by Google)", fig: data.nearMeSearches },
-    ...(data.homeTownSearches ? [{ label: `Plain searches from ${hqName} (no town named)`, fig: data.homeTownSearches }] : []),
-    ...(data.situationSearches ? [{ label: `Seller situations from ${hqName} (inherited, foreclosure, as-is…)`, fig: data.situationSearches }] : []),
+    { label: area ? `“Near me” searches across the ${area.miles}-mile area (approx.)` : "“Near me” searches (location decided by Google)", fig: data.nearMeSearches },
+    ...(data.homeTownSearches ? [{ label: area ? `Plain searches across ${where} (no town named)` : `Plain searches from ${hqName} (no town named)`, fig: data.homeTownSearches }] : []),
+    ...(data.situationSearches ? [{ label: `Seller situations, ${area ? where : `from ${hqName}`} (inherited, foreclosure, as-is…)`, fig: data.situationSearches }] : []),
     ...(data.nearbySearches ? [{ label: `Other towns within ${data.nearbyMiles ?? 30} miles of ${hqName}`, fig: data.nearbySearches }] : []),
     ...shown,
     ...(rest.length
@@ -45,7 +48,12 @@ export function RankingsPage({ bundle, pageNo, pageCount }: AuditPageProps) {
         <div className="audit-card" style={{ flex: 1 }}>
           <h3>Where the demand lives (searches / month)</h3>
           <DemandBars rows={bars} />
-          <p className="audit-note">Each market counted once. Markets with no figure show “not found”; they are left out of totals, never guessed.</p>
+          <p className="audit-note">
+            Each market counted once. Markets with no figure show “not found”; they are left out of totals, never guessed.
+            {area
+              ? ` Approx. = US searches × ${(area.share * 100).toFixed(2)}% (the ${area.population.toLocaleString("en-US")} people in ${area.counties} ${area.counties === 1 ? "county" : "counties"} within ${area.miles} miles, US Census 2024), used where it is above Google's figure for ${hqName} alone; a population-adjusted approximation.`
+              : ""}
+          </p>
         </div>
         <div className="audit-card" style={{ flex: 1.2 }}>
           <h3>Where you rank on the money terms (Google organic)</h3>

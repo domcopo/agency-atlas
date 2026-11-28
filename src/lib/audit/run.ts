@@ -17,6 +17,8 @@ import { auditMarkets, buildUniverse, DEPTH_RULES, groupOf, PACK_CTR, situationS
 export interface SeoArea {
   nearby?: string[];
   others?: readonly string[];
+  /** The area's share of the US population (places-list areaShare), for searches naming no place. */
+  share?: { population: number; share: number; counties: number; miles: number } | null;
 }
 
 function areaOf(intake: AuditIntake, area?: SeoArea): { own: Market[]; all: Market[]; others: ReadonlySet<string> } {
@@ -187,6 +189,9 @@ export function planSeoRun(intake: AuditIntake, sections: readonly AuditSectionI
     // them out showed a #1 map-pack business with 0 visits.
     const near = [...new Set([mapTerm, ...universe.filter((k) => ` ${k} `.includes(" near me ") || ["General", "Seller situations"].includes(groupOf(k, markets, intake.state)))])].slice(0, 1000);
     if (near.length) list.push({ id: "volume:near", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: near, location_name: cityLocation(intake.hqTown, intake.state), language_code: "en" } });
+    // The same searches US-wide: × the area's share of the US population they become an
+    // approximate count for the whole area (Google's home-town figure covers one town only).
+    if (near.length && area?.share) list.push({ id: "volume:us", step: "Searches per city", path: "/v3/keywords_data/google_ads/search_volume/live", task: { keywords: near, location_code: US, language_code: "en" } });
     if (on.has("keywords")) list.push({ id: "difficulty", step: "Keyword difficulty", path: "/v3/dataforseo_labs/google/bulk_keyword_difficulty/live", task: { keywords: universe.slice(0, 1000), location_code: US, language_code: "en" } });
     return list;
   };
@@ -327,6 +332,27 @@ export function readSerp(a: DfsAnswer | undefined): SerpRead | null {
     } else if (type.startsWith("local_services")) out.lsa = true;
   }
   return out;
+}
+
+/**
+ * Searches that name no place, for the whole area: Google's home-town count, or (when larger)
+ * the US count × the area's share of the US population. Rounded to the nearest 10 like Google's
+ * own figures. `estimated` = at least one count came from the population share.
+ */
+export function areaVolume(home: ReadonlyMap<string, VolumeRow>, us: ReadonlyMap<string, VolumeRow>, share: number | null): { rows: Map<string, VolumeRow>; estimated: boolean } {
+  const rows = new Map(home);
+  let estimated = false;
+  if (share === null || !(share > 0 && share <= 1)) return { rows, estimated };
+  for (const [k, u] of us) {
+    if (u.searches === null) continue;
+    const est = Math.round((u.searches * share) / 10) * 10;
+    const h = home.get(k);
+    if (est > (h?.searches ?? 0)) {
+      rows.set(k, { ...(h ?? u), keyword: k, searches: est, cpc: h?.cpc ?? u.cpc, twin: u.twin });
+      estimated = true;
+    }
+  }
+  return { rows, estimated };
 }
 
 export interface VolumeRow {
@@ -519,7 +545,9 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
   const universe = run.universe ?? moneyKeywords(intake.services, cities, intake.state).map((k) => k.keyword);
   // State counts: the universe, plus the searches competitors rank for (counted after rankings).
   const volume = new Map([...readVolume(run.answers.get("volume:ranked")), ...readVolume(run.answers.get("volume"))]);
-  const nearVolume = readVolume(run.answers.get("volume:near"));
+  const share = run.area?.share ?? null;
+  const area = areaVolume(readVolume(run.answers.get("volume:near")), readVolume(run.answers.get("volume:us")), share?.share ?? null);
+  const nearVolume = area.rows;
   const difficulty = readDifficulty(run.answers.get("difficulty"));
   const money = seoMoneyTerms(intake);
   const serps = money.map((_, i) => readSerp(run.answers.get(`serp:${i}`)));
@@ -687,6 +715,9 @@ export function buildSeoBlock(intake: AuditIntake, sections: readonly AuditSecti
     nearbySearches: nearbyRows.length ? nearbyRows.reduce((a, v) => a + v, 0) : null,
     nearbyMiles: intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles,
     situationSearches: situationRows.length ? situationRows.reduce((a, v) => a + v, 0) : null,
+    // Plain / "near me" counts are US searches × the area's population share where that is
+    // larger than Google's home-town figure (labeled "approx." on the pages).
+    ...(area.estimated && share ? { areaShare: { population: share.population, share: share.share, counties: share.counties, miles: share.miles } } : {}),
     // Visits are modeled from each site's LOCAL rankings × state search counts (D1).
     visitsScope: "local",
     keywords,

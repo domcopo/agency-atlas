@@ -1,7 +1,7 @@
 // Place names for audits (src/lib/audit/places.ts): one place per entry, counties kept,
 // trailing state dropped. Pure. Place names are real public town names; no business data.
 
-import { farTownInDomain } from "@/lib/audit/places-list";
+import { areaShare, farTownInDomain } from "@/lib/audit/places-list";
 import { describe, expect, it } from "vitest";
 import { parseIntake } from "@/lib/audit/intake";
 import { cleanPlaces, splitPlace } from "@/lib/audit/places";
@@ -149,5 +149,24 @@ describe("far-away towns in web addresses (competitor filter)", () => {
     expect(farTownInDomain("columbus.webuyhouses.example", "OH", "Westerville", 45)).toBeNull();
     // Unknown home town: never guessed.
     expect(farTownInDomain("homebuyersmetairie.example", "OH", "Nowhere Fictional", 45)).toBeNull();
+  });
+});
+
+describe("area population share (US Census 2024 county estimates)", () => {
+  it("adds up the counties within the radius and divides by the US total", () => {
+    const a = areaShare("OH", "Youngstown", 45);
+    expect(a).not.toBeNull();
+    expect(a!.counties).toBeGreaterThanOrEqual(3); // at least Mahoning, Trumbull, Columbiana counties
+    expect(a!.population).toBeGreaterThan(500_000);
+    expect(a!.population).toBeLessThan(5_000_000);
+    expect(a!.share).toBeCloseTo(a!.population / 340_110_988, 5);
+    expect(a!.miles).toBe(45);
+    // A smaller radius never counts more people.
+    expect(areaShare("OH", "Youngstown", 20)!.population).toBeLessThanOrEqual(a!.population);
+  });
+
+  it("a tiny radius still counts the nearest county; an unknown town gives nothing", () => {
+    expect(areaShare("OH", "Youngstown", 1)!.counties).toBe(1);
+    expect(areaShare("OH", "Nowhere Fictional", 45)).toBeNull();
   });
 });

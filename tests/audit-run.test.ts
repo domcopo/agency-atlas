@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parseAdsIntake, type AdsIntake } from "@/lib/audit/ads";
 import { buildAuditConfig, parseIntake, type AuditIntake } from "@/lib/audit/intake";
 import { parseAdsResults, parseSeoResults } from "@/lib/audit/results";
-import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse, whoRanksMissing } from "@/lib/audit/run";
+import { areaVolume, type VolumeRow, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, moneyKeywords, planAdsRun, planSeoRun, readMaps, readSerp, readVolume, RUN_RULES, samePlace, seoMoneyTerms, seoUniverse, whoRanksMissing } from "@/lib/audit/run";
 import { modelSite } from "@/lib/audit/depth";
 import { nearbyTowns } from "@/lib/audit/places-list";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -583,7 +583,10 @@ describe("2026-11-27: market radius per audit (45 miles by default)", () => {
   });
   it("the run uses the audit's radius and the results say which", () => {
     const src = readFileSync("src/app/actions.ts", "utf8");
-    expect(src).toMatch(/nearbyTowns\(intake\.state, intake\.hqTown, RUN_RULES\.nearbyTowns, intake\.radiusMiles \?\? INTAKE_DEFAULTS\.radiusMiles\)/);
+    expect(src).toMatch(/const radius = intake\.radiusMiles \?\? INTAKE_DEFAULTS\.radiusMiles;/);
+    expect(src).toMatch(/nearbyTowns\(intake\.state, intake\.hqTown, RUN_RULES\.nearbyTowns, radius\)/);
+    // The population share uses the same radius.
+    expect(src).toMatch(/areaShare\(intake\.state, intake\.hqTown, radius\)/);
     const block = buildSeoBlock({ ...seoIntake, radiusMiles: 60 }, ["summary"], { answers: new Map(), competitors: [], retrieved: TODAY, costUsd: 0, calls: 0, universe: [] });
     expect(block.nearbyMiles).toBe(60);
   });
@@ -649,5 +652,37 @@ describe("a run never picks competitors from half of Google's answers", () => {
     expect(src.indexOf("whoRanksMissing(intake, answers)")).toBeLessThan(src.indexOf("findCompetitors([...serps, ...packSerps]"));
     expect(RUN_RULES.lookupTries).toBe(3);
     expect(RUN_RULES.retryPauseMs.length).toBe(RUN_RULES.lookupTries - 1);
+  });
+});
+
+describe("searches that name no place, counted for the whole area", () => {
+  const row = (keyword: string, searches: number | null, extra: Partial<VolumeRow> = {}): [string, VolumeRow] => [keyword, { keyword, searches, cpc: 50, low: null, high: null, competition: null, twin: null, ...extra }];
+
+  it("uses US searches × the population share when that is above the home town's own count", () => {
+    const home = new Map([row("we buy houses", 30), row("sell my house fast", 40)]);
+    const us = new Map([row("we buy houses", 74_000, { cpc: 90, twin: "t1" }), row("sell my house fast", 5_000), row("cash for houses", 9_000)]);
+    const { rows, estimated } = areaVolume(home, us, 0.005);
+    expect(estimated).toBe(true);
+    expect(rows.get("we buy houses")).toMatchObject({ searches: 370, cpc: 50, twin: "t1" }); // 74,000 × 0.5%, home CPC kept
+    expect(rows.get("sell my house fast")?.searches).toBe(40); // 25 < Google's own 40: Google's figure stays
+    expect(rows.get("cash for houses")?.searches).toBe(50); // 45 → nearest 10
+  });
+
+  it("no share (or a bad one) leaves Google's figures alone", () => {
+    const home = new Map([row("we buy houses", 30)]);
+    const us = new Map([row("we buy houses", 74_000)]);
+    for (const share of [null, 0, -1, 2]) {
+      const { rows, estimated } = areaVolume(home, us, share);
+      expect(estimated).toBe(false);
+      expect(rows.get("we buy houses")?.searches).toBe(30);
+    }
+  });
+
+  it("the US lookup is planned only when the area share is known", () => {
+    const intake = { ...seoIntake };
+    const without = planSeoRun(intake, ["summary", "keywords"], { nearby: [] }).second(["we buy houses", "we buy houses near me"]);
+    const withShare = planSeoRun(intake, ["summary", "keywords"], { nearby: [], share: { population: 1_000_000, share: 0.003, counties: 4, miles: 45 } }).second(["we buy houses", "we buy houses near me"]);
+    expect(without.some((l) => l.id === "volume:us")).toBe(false);
+    expect(withShare.find((l) => l.id === "volume:us")?.task).toMatchObject({ location_code: 2840 });
   });
 });

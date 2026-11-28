@@ -1,9 +1,9 @@
 // Page 1: headline numbers, search-visit leaderboard, and the headline.
 
-import { adsEquivalent, avgMapsRank, goalScenario, packCityPresence, packPresence, clientSite, leaderboard, localDemand, revenueFromVisits, revenueScenarios, totalVisits, weightedCpc } from "@/lib/audit/compute";
+import { addressableClicks, adsEquivalent, avgMapsRank, ORGANIC_CLICK_SHARE, goalScenario, packCityPresence, packPresence, clientSite, leaderboard, localDemand, revenueFromVisits, revenueScenarios, totalVisits, weightedCpc } from "@/lib/audit/compute";
 import type { AuditPageProps } from "../Slide";
 import { fmtDate, fmtNum, fmtPct, fmtUsd } from "@/lib/audit/format";
-import { BasisTag, FigValue, ModelTag } from "../Bits";
+import { BasisTag, ModelTag } from "../Bits";
 import { GoalPanel, type GoalItem } from "../GoalPanel";
 import { KpiCards } from "../KpiCards";
 import { Leaderboard } from "../Leaderboard";
@@ -15,11 +15,6 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const scenarios = revenueScenarios(config, demand);
   const base = scenarios?.find((r) => r.baseline) ?? null;
   const you = clientSite(config, data);
-  // Compared with the strongest competitor, never with the business itself (when the business
-  // has the most keywords, the card says it leads).
-  const leader = data.sites.filter((s) => s.domain !== config.company.domain).sort((a, b) => (b.organicKeywords.value ?? -1) - (a.organicKeywords.value ?? -1))[0];
-  const leaderName = config.competitors.find((c) => c.domain === leader?.domain)?.name ?? leader?.domain ?? "";
-  const youLead = you?.organicKeywords.value != null && (leader?.organicKeywords.value == null || you.organicKeywords.value > leader.organicKeywords.value);
   const cpc = weightedCpc(data.keywords);
   const ads = adsEquivalent(base?.visits ?? null, cpc);
   const rank = avgMapsRank(data.grids);
@@ -51,27 +46,32 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
     >
       <KpiCards
         items={[
-          data.grids.some((gr) => gr.kind === "pack")
-            ? { value: `${pack.inPack} of ${pack.checked}`, label: "Local 3-pack appearances", detail: `${data.grids.filter((gr) => gr.kind === "pack").length} term${data.grids.filter((gr) => gr.kind === "pack").length === 1 ? "" : "s"} searched from each city served`, color: "#12c48b" }
-            : { value: fmtNum(rank, 2), label: "Avg Google Maps rank", detail: `${data.grids.length} geo-grid terms, ${data.grids[0]?.size ?? 0}×${data.grids[0]?.size ?? 0} points`, color: "#12c48b" },
-          { value: fmtNum(demand), label: "Local searches / month", detail: data.nearbySearches ? `Near-me, home-town and every town within ${data.nearbyMiles ?? 30} miles, each search counted once` : data.homeTownSearches ? "Near-me + plain home-town searches + every market's own, added once" : "Near-me + every market's own searches, added once" },
+          { value: fmtNum(demand), label: "Local searches / month", detail: data.areaShare ? `Every town within ${data.areaShare.miles} miles + searches naming no town (population share, approx.), each counted once` : data.nearbySearches ? `Near-me, home-town and every town within ${data.nearbyMiles ?? 30} miles, each search counted once` : data.homeTownSearches ? "Near-me + plain home-town searches + every market's own, added once" : "Near-me + every market's own searches, added once" },
           {
-            value: (
-              <>
-                <FigValue fig={you?.organicKeywords} /> vs <FigValue fig={leader?.organicKeywords} />
-              </>
-            ),
-            label: youLead ? "Organic keywords vs top competitor" : "Organic keywords vs leader",
-            detail: youLead ? `${config.company.name} leads; next is ${leaderName || "no competitor found"}` : `${config.company.name} vs ${leaderName}`,
-            color: "#e8426a",
-          },
-          {
-            value: base ? `${fmtUsd(base.revenueMo)}/mo` : fmtNum(null),
-            label: "Modeled revenue opportunity",
+            value: fmtNum(addressableClicks(demand)),
+            label: "Addressable organic clicks / month",
             detail: (
               <>
                 <ModelTag />
-                {config.baselineScenario} scenario; inputs on page 7
+                {Math.round(ORGANIC_CLICK_SHARE * 100)}% of those searches end in a normal Google result (ads, map pack and AI answers take the rest)
+              </>
+            ),
+            color: "#12c48b",
+          },
+          {
+            value: fmtNum(nowVisits),
+            label: `${short}'s search visits today`,
+            detail: nowPlace > 0 ? `#${nowPlace} of ${board.length} on the leaderboard below · estimate` : "Estimate from its Google rankings",
+            color: "#e8426a",
+          },
+          {
+            value: goalVisits === null ? fmtNum(null) : `≈${fmtNum(goalVisits)}`,
+            label: `Potential search visits / month (${goal?.months ?? 12} months)`,
+            detail: (
+              <>
+                <ModelTag />
+                {goalVisits !== null && nowVisits !== null && nowVisits > 0 ? `+${fmtNum(Math.round(((goalVisits - nowVisits) / nowVisits) * 100))}% · ` : ""}
+                {(goalScenario(scenarios, nowVisits)?.name ?? config.baselineScenario)} scenario{base ? ` · ${fmtUsd(base.revenueMo)}/mo modeled revenue` : ""}
               </>
             ),
             color: "#00c9b7",
@@ -113,6 +113,15 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
             <li>
               Annual modeled opportunity: <b>{base ? fmtUsd(base.revenueYr) : fmtNum(null)}</b> <ModelTag />
             </li>
+            {data.grids.some((gr) => gr.kind === "pack") ? (
+              <li>
+                Local 3-pack: <b>{pack.inPack} of {pack.checked}</b> appearances ({data.grids.filter((gr) => gr.kind === "pack").length} term{data.grids.filter((gr) => gr.kind === "pack").length === 1 ? "" : "s"} searched from each city served)
+              </li>
+            ) : rank !== null ? (
+              <li>
+                Average Google Maps rank: <b>{fmtNum(rank, 2)}</b>
+              </li>
+            ) : null}
           </ul>
           {goal && goalItems.length > 0 && <GoalPanel title={`Where ${short} could be in ${goal.months} months`} items={goalItems} terms={goal.firstPageTerms} columns={2} />}
         </div>

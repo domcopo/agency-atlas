@@ -446,6 +446,15 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
   };
 
   const nearMeSearches = fig(c, r.nearMeSearches, "Near-me searches", [0, 10_000_000]);
+  // The population share behind area counts: whole numbers in range, or left out.
+  const areaShareOf = (v: unknown): { areaShare?: AuditData["areaShare"] } => {
+    const a = obj(v);
+    if (!a) return {};
+    const ok = (n: unknown, lo: number, hi: number) => typeof n === "number" && Number.isFinite(n) && n >= lo && n <= hi;
+    return ok(a.population, 1, 400_000_000) && ok(a.share, 0.000001, 1) && ok(a.counties, 1, 500) && ok(a.miles, 1, 200)
+      ? { areaShare: { population: Math.round(a.population as number), share: a.share as number, counties: Math.round(a.counties as number), miles: Math.round(a.miles as number) } }
+      : {};
+  };
   const homeTownSearches = r.homeTownSearches === undefined ? undefined : fig(c, r.homeTownSearches, "Home-town searches", [0, 10_000_000]);
   const nearbySearches = r.nearbySearches === undefined ? undefined : fig(c, r.nearbySearches, "Nearby-town searches", [0, 10_000_000]);
   const situationSearches = r.situationSearches === undefined ? undefined : fig(c, r.situationSearches, "Seller-situation searches", [0, 10_000_000]);
@@ -476,6 +485,7 @@ export function parseSeoResults(raw: unknown, ctx: SeoResultsContext): SeoResult
     ...(nearbySearches ? { nearbySearches } : {}),
     ...(typeof r.nearbyMiles === "number" && Number.isInteger(r.nearbyMiles) && r.nearbyMiles >= 1 && r.nearbyMiles <= 200 ? { nearbyMiles: r.nearbyMiles } : {}),
     ...(situationSearches ? { situationSearches } : {}),
+    ...areaShareOf(r.areaShare),
     keywords,
     visitsScope: r.visitsScope === "national" ? "national" : "local",
     organicDepth: 100,

@@ -32,6 +32,17 @@ export function localDemand(data: AuditData): number | null {
   return sumFound([data.nearMeSearches, ...extra, ...data.demand.map((d) => d.searches)]);
 }
 
+/**
+ * Share of local searches that end in a click on a normal (organic) result: ads, the map pack
+ * and AI answers take the rest. The owner's playbook uses 45–55%; the low end is used here.
+ */
+export const ORGANIC_CLICK_SHARE = 0.45;
+
+/** Organic clicks available each month in this market (a model), or null without demand. */
+export function addressableClicks(demand: number | null): number | null {
+  return demand === null ? null : Math.round(demand * ORGANIC_CLICK_SHARE);
+}
+
 /** Cost per click weighted by search volume (keywords missing either figure are skipped). */
 export function weightedCpc(keywords: KeywordRow[]): number | null {
   let vol = 0;
@@ -233,6 +244,65 @@ export function growthCurve(start: number, target: number, months = 12): number[
   const s0 = s(0);
   const s1 = s(months);
   return Array.from({ length: months + 1 }, (_, t) => start + (target - start) * ((s(t) - s0) / (s1 - s0)));
+}
+
+/** Months shown in the forecast table. */
+export const FORECAST_MONTHS = [3, 6, 9, 12] as const;
+
+export interface ForecastRow {
+  name: string;
+  baseline: boolean;
+  /** Modeled visits at each of FORECAST_MONTHS (the same S-curve as the chart). */
+  visits: number[];
+  /** Deals/jobs a month at month 12, through the same funnel. */
+  jobsAt12: number;
+}
+
+/**
+ * Each scenario's modeled visits at months 3, 6, 9 and 12, on the growth curve from today's
+ * visits. A scenario below today's visits stays flat (never a drop). null without both inputs.
+ */
+export function forecastRows(config: AuditConfig, rows: ScenarioRow[] | null, now: number | null): ForecastRow[] | null {
+  if (!rows || now === null) return null;
+  return rows.map((r) => {
+    const target = Math.max(now, r.visits);
+    const curve = growthCurve(now, target);
+    return { name: r.name, baseline: r.baseline, visits: FORECAST_MONTHS.map((m) => curve[m] ?? target), jobsAt12: target * config.funnel.leadRate.value * config.funnel.closeRate.value };
+  });
+}
+
+/** One-time setup work, in hours (tune here). */
+export const SETUP_HOURS = {
+  strategy: 8, // keyword and market map
+  tracking: 6, // Search Console, analytics events, call tracking
+  googleProfile: 8, // categories, service area, review requests
+  technicalBase: 4,
+  perHomepageProblem: 3,
+  perMissingAreaPage: 4,
+} as const;
+
+export interface SetupItem {
+  task: string;
+  hours: number;
+}
+
+/**
+ * The one-time setup hours, tied to what this audit found: a fixed base, technical fixes per
+ * homepage problem, and one new page for each served area where the business has no ranking
+ * page. Total for 12 months on a plan = setup + 12 × the plan's monthly hours.
+ */
+export function setupHours(config: AuditConfig, data: AuditData): { items: SetupItem[]; total: number } {
+  const you = clientSite(config, data);
+  const problems = data.inspection?.issues.length ?? 0;
+  const missing = you ? config.markets.filter((m) => !you.footprint.includes(m.id)).length : 0;
+  const items: SetupItem[] = [
+    { task: "Strategy, keyword and market map", hours: SETUP_HOURS.strategy },
+    { task: "Search Console, analytics and call tracking", hours: SETUP_HOURS.tracking },
+    { task: "Google Business Profile: categories, service area, reviews", hours: SETUP_HOURS.googleProfile },
+    { task: problems ? `Technical fixes (${problems} homepage problem${problems === 1 ? "" : "s"} found)` : "Technical check and fixes", hours: SETUP_HOURS.technicalBase + SETUP_HOURS.perHomepageProblem * problems },
+    ...(missing ? [{ task: `New pages for ${missing} area${missing === 1 ? "" : "s"} with no ranking page`, hours: SETUP_HOURS.perMissingAreaPage * missing }] : []),
+  ];
+  return { items, total: items.reduce((t, i) => t + i.hours, 0) };
 }
 
 /** Rounds money for display: nearest $100 at $1,000+, else whole dollars. */

@@ -131,6 +131,20 @@ describe("settings built from intake", () => {
     }
   });
 
+  it("home buyers get the owner's 4% visit-to-lead rate; the funnel still equals the rep's rate", () => {
+    const hb = (rate: string) => buildAuditConfig(intake({ niche: "We buy houses (fictional)", services: "Sell my house fast", visitToJobRate: rate, avgJobUsd: "20000" }), settings, "2026-11-28");
+    const c = hb("0.5");
+    expect(c.funnel.leadRate.value).toBe(0.04);
+    expect(c.funnel.closeRate.value).toBeCloseTo(0.125, 4);
+    expect(c.funnel.leadRate.value * c.funnel.closeRate.value).toBeCloseTo(0.005, 6);
+    // A high rate typed for a home buyer would need an over-50% close rate: the general split is used.
+    expect(hb("3").funnel.leadRate.value).toBe(0.1);
+    // 0.5% is allowed now (the old floor was 0.5%, the new one 0.2%).
+    expect(parseIntake(form({ visitToJobRate: "0.3" })).ok).toBe(true);
+    // Not a home buyer: the general 10% lead rate.
+    expect(buildAuditConfig(intake(), settings, "2026-11-28").funnel.leadRate.value).toBe(0.1);
+  });
+
   it("keep money as assumptions, prices from settings only, and the funnel equal to the rep's rate", () => {
     const c = buildAuditConfig(intake(), settings, "2026-11-24");
     expect(c.services.every((s) => s.jobValueUsd.basis === "assumption" && s.jobValueUsd.value === 10000)).toBe(true);

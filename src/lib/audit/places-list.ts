@@ -9,6 +9,7 @@ import { US_STATES } from "./geo";
 import { milesBetween, NEARBY_MILES, placeBook, placeKey, placeLabel, placeState, splitPlace, joinStateTokens, type NearbyTown, type PlaceBook, type PlaceCheck } from "./places";
 export type { NearbyTown, PlaceCheck } from "./places";
 import coordsData from "./us-place-coords.json";
+import popData from "./us-county-pop.json";
 import data from "./us-places.json";
 
 type StatePlaces = { c: string[]; k: string[] };
@@ -154,4 +155,50 @@ export function farTownInDomain(domain: string, state: string, home: string, rad
     if (!found || key.length > found.length) found = key;
   }
   return found;
+}
+
+const POP = popData as unknown as Record<string, Record<string, number>>;
+
+export interface AreaShare {
+  /** People living in the counties whose centre is within the radius (Census, July 2024). */
+  population: number;
+  /** That population ÷ the US population (0–1). */
+  share: number;
+  counties: number;
+  miles: number;
+}
+
+/**
+ * The audit area's share of the US population, for turning US-wide searches that name no place
+ * ("we buy houses", "… near me") into an approximate local count: the counties whose centre is
+ * within `radius` miles of the home town (the home town's nearest county at least). Census
+ * Vintage 2024 estimates (scripts/build-us-county-pop.py). null when the home town or the
+ * county data is missing (then only Google's own home-town figures are used).
+ */
+export function areaShare(state: string, home: string, radius: number): AreaShare | null {
+  const at = placePosition(state, home);
+  const total = POP.US?.total;
+  if (!at || !total) return null;
+  let population = 0;
+  let counties = 0;
+  let nearest: { pop: number; miles: number } | null = null;
+  for (const [st, byCounty] of Object.entries(POP)) {
+    if (st === "US") continue;
+    for (const [name, pop] of Object.entries(byCounty)) {
+      const pos = COORDS[st]?.[name];
+      if (!pos || Math.abs(pos[0] - at[0]) > radius / 69 + 1) continue;
+      const miles = milesBetween(at, pos);
+      if (miles <= radius) {
+        population += pop;
+        counties++;
+      }
+      if (!nearest || miles < nearest.miles) nearest = { pop, miles };
+    }
+  }
+  if (!counties && nearest) {
+    population = nearest.pop;
+    counties = 1;
+  }
+  if (!population) return null;
+  return { population, share: Math.round((population / total) * 1e6) / 1e6, counties, miles: radius };
 }

@@ -91,7 +91,7 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_DEFAULTS, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, farTownInDomain, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { areaShare, checkPlaces, farTownInDomain, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -3701,7 +3701,8 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const intake = audit.intake!;
       // Towns within ~30 miles (people search "boardman", not "mahoning county") and the state's
       // other place names (so "… columbus ohio" isn't counted for a Youngstown audit).
-      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, RUN_RULES.nearbyTowns, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles).map((t) => t.label), others: statePlaces(intake.state) };
+      const radius = intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles;
+      const area = { nearby: nearbyTowns(intake.state, intake.hqTown, RUN_RULES.nearbyTowns, radius).map((t) => t.label), others: statePlaces(intake.state), share: areaShare(intake.state, intake.hqTown, radius) };
       const plan = planSeoRun(intake, audit.sections, area);
       budgetUsd = plan.estimateUsd;
       // LeadSnap heat map: started as soon as the business's Google listing is known (it takes

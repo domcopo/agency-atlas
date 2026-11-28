@@ -1,6 +1,6 @@
 // Page 7: modeled revenue opportunity with every assumption printed, plus growth chart.
 
-import { blendedJobValue, goalScenario, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
+import { blendedJobValue, FORECAST_MONTHS, forecastRows, goalScenario, growthCurve, localDemand, prizeFor, revenueScenarios, clientSite, totalVisits } from "@/lib/audit/compute";
 import type { AuditPageProps } from "../Slide";
 import { fmtNum, fmtPct, fmtUsd, shortLabels } from "@/lib/audit/format";
 import { BasisTag, ModelTag } from "../Bits";
@@ -28,6 +28,7 @@ export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
     .filter((r): r is { label: string; value: number } => r.value !== null)
     .sort((a, b) => b.value - a.value)
     .slice(0, 3);
+  const forecast = forecastRows(config, rows, now);
   const { leadRate, closeRate } = config.funnel;
   const rec = config.plans.find((p) => p.recommended);
   return (
@@ -59,6 +60,36 @@ export function RevenuePage({ bundle, pageNo, pageCount }: AuditPageProps) {
             12-month modeled visits{rec ? ` — ${rec.name} plan (${rec.hoursPerMonth} hrs/mo)` : ""}
           </h3>
           {curve ? <GrowthChart curve={curve} refs={refs} /> : <p className="audit-nf">{now !== null && rows ? "Today's visits are already above every scenario, so there's no curve to draw." : "Not found: today's visits or local demand is missing, so the curve can't be drawn."}</p>}
+          {forecast && (
+            <table className="audit-table" style={{ marginTop: 6 }}>
+              <thead>
+                <tr>
+                  <th>Visits/mo</th>
+                  <th className="num">Now</th>
+                  {FORECAST_MONTHS.map((m) => (
+                    <th key={m} className="num">
+                      M{m}
+                    </th>
+                  ))}
+                  <th className="num">Deals or jobs/mo at M12</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forecast.map((f) => (
+                  <tr key={f.name} className={f.baseline ? "you" : undefined}>
+                    <td>{f.name}</td>
+                    <td className="num">{fmtNum(now)}</td>
+                    {f.visits.map((v, i) => (
+                      <td key={FORECAST_MONTHS[i]} className="num">
+                        {fmtNum(Math.round(v))}
+                      </td>
+                    ))}
+                    <td className="num">{f.jobsAt12.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <p className="audit-note">
             <ModelTag />
             From today&apos;s ≈{fmtNum(now)} search visits/mo to the {(target?.name ?? config.baselineScenario).toLowerCase()} scenario. {nationalVisits ? "Competitor lines are not drawn: their visit estimates are US-wide, not local." : "Dashed lines = competitors' current estimated visits."} {data.narrative.pageNotes.revenue ?? ""}

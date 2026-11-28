@@ -10,6 +10,7 @@
 
 import { stateName, US_STATES } from "./geo";
 import { contactDetailIn, normalizeDomain } from "./intake";
+import { isHomeBuyer } from "./home-buyer";
 import { placeState } from "./places";
 
 /** A DataForSEO answer (same shape as the source module's; kept local so only run.ts imports that module). */
@@ -296,7 +297,6 @@ export function buildUniverse(seeds: string[], markets: Market[], state: string,
  * their situation ("sell inherited house", "avoid foreclosure"). The agency's own audits count
  * these as demand; they name no town, so they are counted from the home town.
  */
-const HOME_BUYER = /\b(we buy (houses|homes)|buys? (houses|homes)|sell my (house|home)|cash (home|house)s? buyers?|(home|house) buyers?|sell (my )?(house|home) fast)\b/;
 export const SELLER_SITUATIONS = [
   "sell inherited house",
   "sell house as is",
@@ -315,8 +315,9 @@ const SITUATION = /\b(inherit\w*|foreclos\w*|divorce|probate|as is|tenants?|need
 
 /** Situation searches worth adding for this business (none unless it buys houses). */
 export function situationSearches(niche: string, services: string[]): string[] {
-  return [niche, ...services].some((x) => HOME_BUYER.test(x.toLowerCase())) ? [...SELLER_SITUATIONS] : [];
+  return isHomeBuyer(niche, services) ? [...SELLER_SITUATIONS] : [];
 }
+
 
 /** The group a search is shown under: its town, "Near me", the state, "Seller situations" or "General". */
 export function groupOf(keyword: string, markets: Market[], state: string): string {
