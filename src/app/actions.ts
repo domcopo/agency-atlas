@@ -3721,7 +3721,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       // pick would fall to weaker, often out-of-area sites (a Youngstown audit got a Milwaukee one).
       // Keep the last good pages instead.
       const missingWho = intake.competitors.length ? null : whoRanksMissing(intake, answers);
-      if (missingWho) return await finish("failed", `Google's results for “${missingWho}” didn't come back from DataForSEO, so competitors couldn't be picked fairly. Nothing was saved, so the last results stay. Try again in a few minutes.`);
+      if (missingWho) return await finish("failed", `Google's results for “${missingWho}” didn't come back from DataForSEO${problems.length ? ` (${problems.join(" ")})` : ""}, so competitors couldn't be picked fairly. Nothing was saved, so the last results stay. Try again in a few minutes.`);
       startHeat(answers.get("maps:area"));
       const universe = seoUniverse(intake, answers, plan.seeds.length, area);
       await runLookups(plan.second(universe));
