@@ -104,6 +104,9 @@ describe("reading answers", () => {
     expect(maps.map((m) => [m.domain, m.rank, m.reviews])).toEqual([["frontrange.example", 1, 88], ["milehighhomes.example", 2, null], [null, 3, null]]);
     const s = readSerp(serp([{ type: "organic", rank_group: 1, domain: "homelight.com" }, { type: "organic", rank_group: 2, domain: "peakoffers.example", website_name: "Peak Offers" }]));
     expect(findCompetitors([s], "milehighhomes.example", 5, maps)).toEqual([{ domain: "frontrange.example", name: "Front Range Buyers" }, { domain: "peakoffers.example", name: "Peak Offers" }]);
+    // A plain-results site named after a far-away town is dropped; a local listing never is.
+    const far = (d: string) => d.startsWith("peak") || d.startsWith("front");
+    expect(findCompetitors([s], "milehighhomes.example", 5, maps, far)).toEqual([{ domain: "frontrange.example", name: "Front Range Buyers" }]);
   });
 
   it("bad or odd answers become null, never a guess", () => {

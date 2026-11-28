@@ -113,3 +113,43 @@ export function checkPlaces(state: string, home: string, typed: string[]): { hom
   return { home: homeName, checks, nearby };
 }
 
+
+// Town names that are also everyday words in business names ("Steel Valley Homes"): never
+// treated as a town in a web address.
+const NOT_A_TOWN_IN_ADDRESSES = new Set(["valley", "hometown", "homestead", "homeland", "liberty", "freedom", "harmony", "fairview", "summit", "pleasant", "victory", "success", "commerce", "property", "capital", "premier", "eureka", "paradise", "friendship", "progress", "lakeside", "riverside", "hillside", "parkside", "westside", "eastside", "southside", "northside", "midway", "central", "national", "united", "american", "superior", "reliance", "security", "advance", "triumph", "accord", "concord", "economy", "fortune", "golden", "monroe", "lincoln", "franklin", "washington", "jefferson", "madison", "jackson", "clinton", "hamilton", "marion", "warren"]);
+
+let placeIndex: Map<string, [number, number][]> | null = null;
+
+/** Every US place name (6+ letters, counties and "Township" dropped) → its map positions. */
+function placesByKey(): Map<string, [number, number][]> {
+  if (placeIndex) return placeIndex;
+  placeIndex = new Map();
+  for (const places of Object.values(COORDS))
+    for (const [name, pos] of Object.entries(places)) {
+      if (/ County$/.test(name)) continue;
+      const key = name.replace(/ Township$/, "").toLowerCase().replace(/[^a-z]/g, "");
+      if (key.length < 6 || NOT_A_TOWN_IN_ADDRESSES.has(key)) continue;
+      placeIndex.set(key, [...(placeIndex.get(key) ?? []), pos]);
+    }
+  return placeIndex;
+}
+
+/**
+ * The far-away town a web address is named after, or null: "homebuyersmetairie.com" →
+ * "metairie" for a Youngstown audit (every Metairie is beyond the audit's radius), while
+ * "youngstownhomebuyer.com" or "warrencashbuyers.com" → null. Only used for sites seen in plain
+ * results; a business with a Maps listing or 3-pack spot nearby is never dropped by its name.
+ */
+export function farTownInDomain(domain: string, state: string, home: string, radiusMiles: number): string | null {
+  const at = placePosition(state, home);
+  if (!at) return null;
+  const text = domain.toLowerCase().split(".").slice(0, -1).join("").replace(/[^a-z]/g, "");
+  let found: string | null = null;
+  for (const [key, spots] of placesByKey()) {
+    if (!text.includes(key)) continue;
+    // A name with a spot inside the area is local ("warren" OH), whatever else shares it.
+    if (spots.some((p) => milesBetween(at, p) <= radiusMiles)) return null;
+    if (!found || key.length > found.length) found = key;
+  }
+  return found;
+}

@@ -465,7 +465,7 @@ const shortName = (n: string | null | undefined) => (n ? n.split(/\s[|–—-]\s
  * then the map pack (3) and page-1 results (1) of the live searches. Directories and national
  * marketplaces are skipped.
  */
-export function findCompetitors(serps: (SerpRead | null)[], business: string, limit: number = RUN_RULES.competitors, maps: MapPlace[] = []): { domain: string; name: string | null }[] {
+export function findCompetitors(serps: (SerpRead | null)[], business: string, limit: number = RUN_RULES.competitors, maps: MapPlace[] = [], namedFarAway: (domain: string) => boolean = () => false): { domain: string; name: string | null }[] {
   const score = new Map<string, { n: number; name: string | null }>();
   for (const m of maps) {
     if (!m.domain || m.domain === business || isDirectory(m.domain)) continue;
@@ -481,6 +481,9 @@ export function findCompetitors(serps: (SerpRead | null)[], business: string, li
   // and a directory as "competitors" over local rental counters).
   const local = new Set<string>([...maps.map((m) => m.domain ?? ""), ...serps.flatMap((s) => (s ? s.pack.map((p) => p.domain ?? "") : []))]);
   return [...score.entries()]
+    // A site seen only in plain results whose address names a far-away town ("…metairie.com",
+    // "columbus.…" for a Youngstown audit) serves somewhere else: never a competitor here.
+    .filter(([d]) => local.has(d) || !namedFarAway(d))
     .sort((a, b) => Number(local.has(b[0])) - Number(local.has(a[0])) || b[1].n - a[1].n || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([domain, v]) => ({ domain, name: shortName(v.name) }));

@@ -91,7 +91,7 @@ import { buildRoundScope, nyToday, parseWatchResults, roundEstimate, volumesDue,
 import { buildAuditConfig, INTAKE_DEFAULTS, INTAKE_LIMITS, parseIntake, parsePlans, splitList } from "@/lib/audit/intake";
 import { parseSections } from "@/lib/audit/sections";
 import { parseAdsIntake, parseAdsPlans, parseAdsSections } from "@/lib/audit/ads";
-import { checkPlaces, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
+import { checkPlaces, farTownInDomain, nearbyTowns, placeBookFor, placePosition, statePlaces, type NearbyTown, type PlaceCheck } from "@/lib/audit/places-list";
 import { extractResultsBlock, parseAdsResults, parseSeoResults, type ResultsSummary } from "@/lib/audit/results";
 import { adsMoneyTerms, buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, planAdsRun, planSeoRun, readBidders, readMaps, readPlace, readSerp, RUN_RULES, seoMoneyTerms, seoUniverse, whoRanksMissing, type Lookup } from "@/lib/audit/run";
 import { DfsError, dfsLookup, isDataForSeoConfigured, type DfsAnswer } from "@/lib/audit/sources/dataforseo";
@@ -3730,7 +3730,7 @@ async function runAuditInBackground(runId: string, audit: SavedAudit, stepLabels
       const packSerps = plan.first.filter((l) => l.id.startsWith("pack:")).map((l) => readSerp(answers.get(l.id)));
       const competitors = intake.competitors.length
         ? intake.competitors.map((c) => ({ domain: c.domain, name: c.name, town: c.town ?? intake.hqTown }))
-        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area"))).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
+        : findCompetitors([...serps, ...packSerps], intake.domain, RUN_RULES.competitors, readMaps(answers.get("maps:area")), (d) => farTownInDomain(d, intake.state, intake.hqTown, intake.radiusMiles ?? INTAKE_DEFAULTS.radiusMiles) !== null).map((c) => ({ domain: c.domain, name: c.name ?? c.domain, town: intake.hqTown }));
       const sites = [{ domain: intake.domain, name: intake.company }, ...competitors.map((c) => ({ domain: c.domain, name: c.name }))];
       const brandLookup = plan.brand(sites.map((x) => x.name));
       await runLookups([...sites.flatMap((x, n) => plan.perSite(x.domain, x.name, n === 0)), ...(brandLookup ? [brandLookup] : [])]);
