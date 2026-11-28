@@ -5,7 +5,7 @@ import { Check } from "lucide-react";
 import { startOnboarding } from "@/app/actions";
 import { NextMoveForm } from "@/components/forms/NextMoveForm";
 import { cn, formatDate } from "@/lib/format";
-import { draftMessage, GROW_STAGE, JOURNEY_STAGES, JOURNEY_TOUCHES, touchByStep, type JourneyState } from "@/lib/journey";
+import { DEFAULT_STEPS, draftMessage, GROW_STAGE, JOURNEY_STAGES, touchByStep, type JourneyState, type JourneySteps } from "@/lib/journey";
 
 export function JourneyCard({
   journey,
@@ -16,6 +16,7 @@ export function JourneyCard({
   canUseAi = false,
   noTexts = false,
   missing = [],
+  steps = DEFAULT_STEPS,
 }: {
   journey: JourneyState;
   clientDbId: string;
@@ -27,8 +28,10 @@ export function JourneyCard({
   noTexts?: boolean;
   /** Week-1 intake items still missing (shown in the first two stages). */
   missing?: string[];
+  /** The owner's edited steps (0040); the wording in code before that. */
+  steps?: JourneySteps;
 }) {
-  const next = journey.next ? touchByStep(journey.next.step) : undefined;
+  const next = journey.next ? touchByStep(journey.next.step, steps) : undefined;
   const neverStarted = !journey.startedOn;
   return (
     <section className="glass rounded-3xl p-4" aria-labelledby="journey-h">
@@ -61,13 +64,13 @@ export function JourneyCard({
 
       {!neverStarted && (
         <div className="mt-3 flex gap-[2px]" aria-label={`${journey.handled} of 27 touches done or skipped`}>
-          {JOURNEY_TOUCHES.map((t, i) => (
+          {steps.touches.map((t, i) => (
             <span
               key={t.step}
               title={`${t.step}. ${t.title}`}
               className={cn(
                 "h-2 flex-1 rounded-sm",
-                journey.ticks[i] === "done" ? "bg-lime/70" : journey.ticks[i] === "skipped" ? "bg-white/25" : journey.ticks[i] === "next" ? "bg-violet" : "bg-white/8",
+                journey.ticks[i] === "done" ? "bg-lime/70" : journey.ticks[i] === "skipped" ? "bg-white/25" : journey.ticks[i] === "placed" ? "bg-white/15" : journey.ticks[i] === "next" ? "bg-violet" : "bg-white/8",
               )}
             />
           ))}

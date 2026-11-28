@@ -14,7 +14,7 @@ import { ScoreRing } from "@/components/labels/charts";
 import { Pill, Provenance, StatusPill, healthStyle } from "@/components/labels/labels";
 import { Column, Columns } from "@/components/shell/Columns";
 import { PageHeader, SectionTitle } from "@/components/shell/PageHeader";
-import { getClientCareInfo, getJourneys, getStatusLog } from "@/lib/data-source";
+import { getClientCareInfo, getJourneys, getJourneySteps, getStatusLog } from "@/lib/data-source";
 import { setIntakeItem } from "@/app/actions";
 import { CareContactForm, NeedsOwnerForm } from "@/components/forms/ClientCareExtras";
 import { INTAKE_ITEMS, missingIntake } from "@/lib/journey";
@@ -80,7 +80,7 @@ export default async function ClientPage({ params }: Props) {
   const care = await getCarePlans();
   const myTiers = (c.plans ?? []).map((p) => care.plans.find((t) => t.id === p.planId)).filter((t) => t !== undefined);
   // Journey, status log and memory (0028). journeys.ready is false before 0028 runs.
-  const [journeys, statusLog, careInfo] = await Promise.all([getJourneys(), getStatusLog(c.dbId), getClientCareInfo()]);
+  const [journeys, statusLog, careInfo, { steps }] = await Promise.all([getJourneys(), getStatusLog(c.dbId), getClientCareInfo(), getJourneySteps()]);
   // Contact preferences + intake (0032): careInfo.ready is false before 0032 runs.
   const info = c.dbId ? careInfo.byClient.get(c.dbId) : undefined;
   const received = info?.intake ?? {};
@@ -150,7 +150,7 @@ export default async function ClientPage({ params }: Props) {
 
       {journey && c.dbId && (
         <div className="mb-3">
-          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canCareEdit} canUseAi={canUseAi} noTexts={Boolean(info?.noTexts)} missing={careInfo.ready ? missingIntake(received) : []} />
+          <JourneyCard journey={journey} clientDbId={c.dbId} slug={c.id} business={c.name} canEdit={canCareEdit} canUseAi={canUseAi} noTexts={Boolean(info?.noTexts)} missing={careInfo.ready ? missingIntake(received) : []} steps={steps} />
         </div>
       )}
 

@@ -62,7 +62,7 @@ import {
   type ClientContactDates,
 } from "@/lib/ops";
 import { canPreview, PREVIEW_COOKIE, previewTarget } from "@/lib/preview";
-import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, journeyState, type DayLog, type JourneyState, type TouchChannel, type TouchLog } from "@/lib/journey";
+import { asOutcome as asTouchOutcome, asTouchChannel, dayProgress, DEFAULT_DAILY_POINTS, DEFAULT_STEPS, journeyState, placementFor, stepsFromConfig, type DayLog, type JourneyState, type JourneyStepRow, type JourneySteps, type TouchChannel, type TouchLog } from "@/lib/journey";
 import type { BoardRow } from "@/lib/leaderboard";
 import { needsAttentionCount, type HistoryEntry } from "@/lib/work-orders";
 import { SUGGESTION_RULES, suggestionKey } from "@/lib/work-hub";
@@ -288,6 +288,7 @@ type ClientRow = {
   memory_goal?: string | null;
   memory_tone?: string | null;
   memory_next_ask?: string | null;
+  journey_placed_step?: number | null;
   monthly_usd?: number | string | null;
 };
 
@@ -313,7 +314,9 @@ function toCarePlan(r: Record<string, unknown>): CarePlan {
  * monthly_usd is still readable); before 0006 there is no owner column.
  */
 async function readClientRows(db: DbClient): Promise<{ data: ClientRow[] | null; careReady: boolean }> {
-  // 0028 adds client memory; before it, read without.
+  // 0040 adds the owner's journey placement; 0028 client memory; before them, read without.
+  const placed = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on, memory_goal, memory_tone, memory_next_ask, journey_placed_step`);
+  if (!placed.error) return { data: (placed.data ?? []) as ClientRow[], careReady: true };
   const journey = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on, memory_goal, memory_tone, memory_next_ask`);
   if (!journey.error) return { data: (journey.data ?? []) as ClientRow[], careReady: true };
   const care = await db.from("clients").select(`${CLIENT_COLS}, owner_staff_id, vip, backup_staff_id, care_started_on`);
@@ -355,10 +358,20 @@ export const getCareTouches = cache(async (): Promise<{ ready: boolean; byClient
  * Where each current client is on the journey (0028), by slug. Rhythm comes from the
  * client's SEO tier (else their first tier, else monthly + mid-month check-in).
  */
-export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map<string, JourneyState> }> => {
-  const [clients, touches, care] = await Promise.all([getRoster(), getCareTouches(), getCarePlans()]);
+export const getJourneys = cache(async (): Promise<{ ready: boolean; sample: boolean; bySlug: Map<string, JourneyState> }> => {
+  const [clients, touches, care, { steps }] = await Promise.all([getRoster(), getCareTouches(), getCarePlans(), getJourneySteps()]);
   const bySlug = new Map<string, JourneyState>();
-  if (!touches.ready) return { ready: false, bySlug };
+  if (showsSamples()) {
+    // Demo only (no database): sample clients placed by their start date, so the Journey
+    // Line can be previewed. Never shown next to real data.
+    for (const c of clients) {
+      if (c.status !== "active") continue;
+      const p = placementFor(c.startDate, today(), steps);
+      bySlug.set(c.id, journeyState({ startedOn: p.kind === "place" ? p.startedOn : null, placedStep: p.kind === "place" ? p.placedStep : null, touches: [], lastContact: c.lastContact ?? null, today: today(), steps }));
+    }
+    return { ready: true, sample: true, bySlug };
+  }
+  if (!touches.ready) return { ready: false, sample: false, bySlug };
   const planById = new Map(care.plans.map((p) => [p.id, p]));
   for (const c of clients) {
     if (c.status !== "active" || !c.dbId) continue;
@@ -366,10 +379,23 @@ export const getJourneys = cache(async (): Promise<{ ready: boolean; bySlug: Map
     const plan = ref ? planById.get(ref.planId) : undefined;
     bySlug.set(
       c.id,
-      journeyState({ startedOn: c.careStartedOn ?? null, touches: touches.byClient.get(c.dbId) ?? [], plan: plan ?? null, lastContact: c.lastContact ?? null, today: today() }),
+      journeyState({ startedOn: c.careStartedOn ?? null, placedStep: c.journeyPlacedStep ?? null, touches: touches.byClient.get(c.dbId) ?? [], plan: plan ?? null, lastContact: c.lastContact ?? null, today: today(), steps }),
     );
   }
-  return { ready: true, bySlug };
+  return { ready: true, sample: false, bySlug };
+});
+
+/**
+ * The 27 touches + Grow rhythm (0040): the owner/managers' edits over the wording in code.
+ * ready=false before 0040 (or for roles that can't read them): the code wording is used.
+ */
+export const getJourneySteps = cache(async (): Promise<{ ready: boolean; steps: JourneySteps; editedAt: string | null }> => {
+  if (!usesDatabase()) return { ready: false, steps: DEFAULT_STEPS, editedAt: null };
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("journey_steps").select("step, day, title, how, channel, with_seo, say, ask, template, deliverable, updated_at").order("step").limit(40);
+  if (error || !data?.length) return { ready: false, steps: DEFAULT_STEPS, editedAt: null };
+  const editedAt = (data as { updated_at: string }[]).map((r) => r.updated_at).sort().pop() ?? null;
+  return { ready: true, steps: stepsFromConfig(data as JourneyStepRow[]), editedAt };
 });
 
 /**
@@ -611,6 +637,7 @@ async function loadDatabaseRoster(): Promise<Roster> {
       backupId: r.backup_staff_id ?? undefined,
       backupName: r.backup_staff_id ? staffName.get(r.backup_staff_id) : undefined,
       careStartedOn: r.care_started_on ?? undefined,
+      journeyPlacedStep: r.journey_placed_step ?? undefined,
       plans: (plansByClient.get(r.id) ?? []).sort((a, b) => a.service.localeCompare(b.service)),
       memory: { goal: r.memory_goal ?? null, tone: r.memory_tone ?? null, nextAsk: r.memory_next_ask ?? null },
     })),

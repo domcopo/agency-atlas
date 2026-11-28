@@ -54,6 +54,7 @@ import {
   getWatch,
   getWatchAuditImport,
   WATCH_SETUP,
+  getJourneySteps,
 } from "@/lib/data-source";
 import { loadPrivateRoster, loadPrivateTeam } from "@/lib/private-data";
 import {
@@ -81,7 +82,7 @@ import { asTrashKind, deleteConfirmed, DELETE_CONFIRM } from "@/lib/trash";
 import { SUGGESTION_RULES } from "@/lib/work-hub";
 import { asTouchKind, checkTouchNote, nyDay, refreshAllowed, refreshDue, SALES_RULES } from "@/lib/sales";
 import { canCare, isLead } from "@/lib/roles";
-import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
+import { asIntakeKey, asStatusReason, asTouchChannel, CHECK_IN_KIND, JOURNEY_STAGES, parseJourneyStep, placementFor, RESTART_PER_DAY, restartSchedule, STATUS_REASONS, touchByStep } from "@/lib/journey";
 import { asOutcome, asVisitKind, runEstimate, SCOUT_KINDS, SCOUT_RULES, scoreBusiness, scoutLeft } from "@/lib/scout";
 import { parseScoutResults, SCOUT_RESULTS_MAX_BYTES } from "@/lib/scout-intake";
 import { autoSyncDue, CARE_RULES, parseCarePlan, parseMonthly, similarClients, uniqueSlug } from "@/lib/care";
@@ -1489,7 +1490,7 @@ export async function logTouch(_prev: JourneyFormState, form: FormData): Promise
   if (!me || !canCare(me.role)) return { error: "Only the client care team can log touches." };
   const clientId = text(form, "clientId", 40);
   if (!isUuid(clientId)) return { error: "Unknown client." };
-  const touch = touchByStep(Number(text(form, "step", 4)));
+  const touch = touchByStep(Number(text(form, "step", 4)), (await getJourneySteps()).steps);
   if (!touch) return { error: "Unknown touch." };
   const skip = text(form, "op", 6) === "skip";
   const howKey = text(form, "how", 16) as keyof typeof TOUCH_HOW;
@@ -1616,6 +1617,82 @@ export async function saveCareTarget(form: FormData) {
   revalidatePath("/", "layout");
 }
 
+// ---------------------------------------------------------------------------
+// Journey steps editor + place by start date (0040, docs/CLIENTS_JOURNEY_LINE_PLAN.md)
+// ---------------------------------------------------------------------------
+
+/** Like text(), but keeps line breaks (drafts are several lines). */
+function multiline(form: FormData, key: string, max: number): string {
+  const v = form.get(key);
+  return typeof v === "string" ? v.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").replace(/\r\n?/g, "\n").trim().slice(0, max) : "";
+}
+
+/** Owner or manager: edit one journey step's words, day, channel or deliverable. */
+export async function saveJourneyStep(_prev: JourneyFormState, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || !isLead(me.role)) return { error: "Only the owner or a manager can edit the journey steps." };
+  const current = await getJourneySteps();
+  if (!current.ready) return { error: "Editing the steps needs one setup step first (0040 SQL). Ask the owner." };
+  const parsed = parseJourneyStep(
+    {
+      step: text(form, "step", 4),
+      day: text(form, "day", 4),
+      title: text(form, "title", 80),
+      how: text(form, "how", 80),
+      channel: text(form, "channel", 10),
+      withSeo: text(form, "withSeo", 3) === "on",
+      say: multiline(form, "say", 500),
+      ask: multiline(form, "ask", 400),
+      template: multiline(form, "template", 1200),
+      deliverable: text(form, "deliverable", 30),
+    },
+    current.steps,
+  );
+  if (!parsed.ok) return { error: parsed.error };
+  const secret = findSecrets(`${parsed.row.say}\n${parsed.row.ask ?? ""}\n${parsed.row.template ?? ""}`);
+  if (secret) return { error: secret };
+  const { step, ...fields } = parsed.row;
+  const db = await createDatabaseClient();
+  const { data, error } = await db.from("journey_steps").update(fields).eq("step", step).select("step");
+  if (error) {
+    console.warn(`Journey step not saved: ${error.code}`);
+    return { error: error.code === "23514" ? "That doesn't fit: check the day stays between its neighbours, and leave out emails and phone numbers." : "Couldn't save the step." };
+  }
+  if (!data?.length) return { error: "Only the owner or a manager can edit the journey steps." };
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/**
+ * Owner only, one time: put active clients with no journey yet on the touch that fits their
+ * start date (day 0-90); past day 90 they stay in Grow. Same rules as the preview on
+ * /clients/restart (placementFor), worked out again here, never taken from the form.
+ */
+export async function placeClientsByStart() {
+  await notWhilePreviewing();
+  const me = await getCurrentMember();
+  if (!me || me.role !== "owner") return;
+  const [{ ready, steps }, roster] = await Promise.all([getJourneySteps(), getRoster()]);
+  if (!ready) redirect("/clients/restart?placed=needs0040");
+  const day = localToday();
+  const db = await createDatabaseClient();
+  let placed = 0;
+  for (const c of roster.filter((r) => r.status === "active" && r.dbId && !r.careStartedOn).sort(byImportance)) {
+    const p = placementFor(c.startDate, day, steps);
+    if (p.kind !== "place") continue;
+    const { data, error } = await db.from("clients").update({ care_started_on: p.startedOn, journey_placed_step: p.placedStep }).eq("id", c.dbId!).is("care_started_on", null).select("id");
+    if (error || !data?.length) {
+      if (error) console.warn(`Placement refused: ${error.code}`);
+      continue;
+    }
+    placed += 1;
+    await logActivity(db, { client_id: c.dbId!, kind: "owner_changed", summary: `Journey placed by start date: touch ${p.step} of 27` });
+  }
+  revalidatePath("/", "layout");
+  redirect(`/clients/restart?placed=${placed}`);
+}
+
 type CareAiState = { error?: string; moves?: { slug: string; name: string; why: string; leadWith: string }[]; draft?: string; cost?: string } | undefined;
 
 /**
@@ -1686,7 +1763,7 @@ export async function draftTouchMessage(_prev: CareAiState, form: FormData): Pro
   const pre = await aiPreflight();
   if ("error" in pre) return pre;
   const slug = text(form, "slug", 90);
-  const touch = touchByStep(Number(text(form, "step", 4)));
+  const touch = touchByStep(Number(text(form, "step", 4)), (await getJourneySteps()).steps);
   if (!touch) return { error: "Unknown touch." };
   const [roster, team, careInfo] = await Promise.all([getRoster(), getTeam(), getClientCareInfo()]);
   const client = roster.find((c) => c.id === slug);
