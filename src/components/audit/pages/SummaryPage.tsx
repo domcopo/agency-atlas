@@ -15,8 +15,11 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
   const scenarios = revenueScenarios(config, demand);
   const base = scenarios?.find((r) => r.baseline) ?? null;
   const you = clientSite(config, data);
-  const leader = [...data.sites].sort((a, b) => (b.organicKeywords.value ?? -1) - (a.organicKeywords.value ?? -1))[0];
+  // Compared with the strongest competitor, never with the business itself (when the business
+  // has the most keywords, the card says it leads).
+  const leader = data.sites.filter((s) => s.domain !== config.company.domain).sort((a, b) => (b.organicKeywords.value ?? -1) - (a.organicKeywords.value ?? -1))[0];
   const leaderName = config.competitors.find((c) => c.domain === leader?.domain)?.name ?? leader?.domain ?? "";
+  const youLead = you?.organicKeywords.value != null && (leader?.organicKeywords.value == null || you.organicKeywords.value > leader.organicKeywords.value);
   const cpc = weightedCpc(data.keywords);
   const ads = adsEquivalent(base?.visits ?? null, cpc);
   const rank = avgMapsRank(data.grids);
@@ -58,8 +61,8 @@ export function SummaryPage({ bundle, pageNo, pageCount }: AuditPageProps) {
                 <FigValue fig={you?.organicKeywords} /> vs <FigValue fig={leader?.organicKeywords} />
               </>
             ),
-            label: "Organic keywords vs leader",
-            detail: `${config.company.name} vs ${leaderName}`,
+            label: youLead ? "Organic keywords vs top competitor" : "Organic keywords vs leader",
+            detail: youLead ? `${config.company.name} leads; next is ${leaderName || "no competitor found"}` : `${config.company.name} vs ${leaderName}`,
             color: "#e8426a",
           },
           {

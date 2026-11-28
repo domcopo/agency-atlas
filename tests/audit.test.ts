@@ -361,3 +361,17 @@ describe("audit page 1: modeled revenue per site and the client's goal", () => {
     expect(render(bundle())[0]).not.toContain("Modeled revenue/mo");
   });
 });
+
+describe("summary: organic keywords card", () => {
+  it("never compares the business with itself; when it has the most keywords it says it leads", () => {
+    const d = clone(sampleAuditData);
+    const own = d.sites.find((s) => s.domain === sampleAuditConfig.company.domain)!;
+    own.organicKeywords = { ...own.organicKeywords, value: 99_999 };
+    const html = render(bundle(sampleAuditConfig, d))[0]!;
+    expect(html).toContain("Organic keywords vs top competitor");
+    expect(html).toContain(`${sampleAuditConfig.company.name} leads; next is`);
+    expect(html).not.toContain(`${sampleAuditConfig.company.name} vs ${sampleAuditConfig.company.domain}`);
+    // The usual case is unchanged.
+    expect(render(bundle())[0]).toContain("Organic keywords vs leader");
+  });
+});

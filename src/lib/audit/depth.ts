@@ -94,12 +94,29 @@ export interface Area {
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Words that turn a town's name into ANOTHER place when they come right before it
+// ("winston salem" is Winston-Salem NC, not Salem OH; "north canton" isn't Canton).
+const PLACE_PREFIXES = new Set(["winston", "new", "north", "south", "east", "west", "old", "port", "fort", "mount", "mt", "lake", "san", "santa", "st", "saint", "upper", "lower", "little", "great", "glen"]);
+
+/**
+ * Does the search name this town (whole words), and not a bigger place whose name ends with it?
+ * A market whose own name already starts with the word ("north canton" as a market) still matches.
+ */
+export function namesTown(keyword: string, term: string): boolean {
+  const k = ` ${keyword.toLowerCase().replace(/\s+/g, " ").trim()} `;
+  const t = ` ${term} `;
+  for (let i = k.indexOf(t); i !== -1; i = k.indexOf(t, i + 1)) {
+    const before = k.slice(0, i).trim().split(" ").pop() ?? "";
+    if (!PLACE_PREFIXES.has(before)) return true;
+  }
+  return false;
+}
+
 /** The market a search names (longest name first, whole words), or null. */
 export function marketOf(keyword: string, markets: Market[]): Market | null {
-  const k = ` ${keyword.toLowerCase()} `;
   let best: Market | null = null;
   for (const m of markets) {
-    if (k.includes(` ${m.term} `) && (!best || m.term.length > best.term.length)) best = m;
+    if (namesTown(keyword, m.term) && (!best || m.term.length > best.term.length)) best = m;
   }
   return best;
 }
@@ -147,7 +164,7 @@ export function namesOtherState(keyword: string, state: string, markets: Market[
 export function isLocal(keyword: string, markets: Market[], state: string, others?: ReadonlySet<string>): boolean {
   const k = ` ${keyword.toLowerCase()} `;
   if (namesOtherState(keyword, state, markets)) return false;
-  if (markets.some((m) => k.includes(` ${m.term} `)) || k.includes(" near me ")) return true;
+  if (markets.some((m) => namesTown(keyword, m.term)) || k.includes(" near me ")) return true;
   // The state's name alone counts only when no other town of the state is named.
   return k.includes(` ${stateName(state).toLowerCase()} `) && !namesOtherPlace(keyword, markets, others);
 }

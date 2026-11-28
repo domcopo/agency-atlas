@@ -16,6 +16,9 @@ You are given finished numbers only. Rules:
 - If revenue_model is given, the revenue page already shows revenue from it: describe it as a model; never say deal values or revenue figures are missing.
 - A local 3-pack position of 0 means the pack was shown and other businesses held its 3 spots; null means not checked. Never say no business is in the pack.`;
 
+// The slides give each note about 300 characters; longer answers are cut at a sentence (fit).
+const NOTE = "One or two short sentences, under 250 characters in all.";
+
 export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
@@ -27,11 +30,11 @@ export const AUDIT_WORDS_SCHEMA: Record<string, unknown> = {
       additionalProperties: false,
       required: ["rankings", "footprint", "competitors", "keywords", "revenue"],
       properties: {
-        rankings: { type: "string" },
-        footprint: { type: "string" },
-        competitors: { type: "string" },
-        keywords: { type: "string" },
-        revenue: { type: "string" },
+        rankings: { type: "string", description: NOTE },
+        footprint: { type: "string", description: NOTE },
+        competitors: { type: "string", description: NOTE },
+        keywords: { type: "string", description: NOTE },
+        revenue: { type: "string", description: NOTE },
       },
     },
     // No maxItems: structured outputs refuse array-length rules (a 400). The counts are asked for
@@ -128,6 +131,20 @@ export function wordsInput(block: Obj, company: string, niche: string, model?: R
   };
 }
 
+/**
+ * Text cut to fit a space without ending mid-sentence: the last full sentence that fits (even a short one: a whole sentence reads better than a cut one), or
+ * (one long sentence) the last whole word with "…". Names are put back before this, so a
+ * long name never pushes a note past its space.
+ */
+export function fit(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const end = Math.max(...[". ", "! ", "? "].map((e) => cut.lastIndexOf(e)));
+  if (end > 0) return cut.slice(0, end + 1);
+  const word = cut.slice(0, max - 1).replace(/\s+\S*$/, "").replace(/[\s,;:–—-]+$/, "");
+  return `${word}…`;
+}
+
 /** Claude's answer → the words fields of the results block, with names put back. */
 export function applyWords(block: Obj, answer: unknown, codes: [string, string][]): Obj {
   const a = obj(answer);
@@ -139,7 +156,7 @@ export function applyWords(block: Obj, answer: unknown, codes: [string, string][
     let s = t.replace(/COMPETITORS?\s+(\d+)((?:\s*(?:,\s*(?:and\s+|&\s*)?|and\s+|&\s*)\d+\b)+)/g, (_, first: string, rest: string) => `COMPETITOR ${first}${rest.replace(/(\d+)/g, "COMPETITOR $1")}`);
     // Longest codes first, so "COMPETITOR 10" isn't half-replaced by "COMPETITOR 1".
     for (const [c, n] of [...codes].sort((x, y) => y[0].length - x[0].length)) s = s.split(c).join(n);
-    return s.slice(0, max);
+    return fit(s.trim(), max);
   };
   const notes = obj(a.pageNotes);
   return {

@@ -16,6 +16,18 @@ describe("markets", () => {
     expect(marketOf("cash buyers jefferson county", markets)?.label).toBe("Jefferson County");
   });
 
+  it("a bigger place whose name ends in a town's name isn't that town (Winston-Salem isn't Salem)", () => {
+    const oh = auditMarkets("Youngstown", ["Salem", "Canton", "North Canton"], "OH");
+    expect(marketOf("we buy houses winston salem", oh)).toBeNull();
+    expect(isLocal("we buy houses winston salem", oh, "OH")).toBe(false);
+    expect(marketOf("we buy houses new salem", oh)).toBeNull();
+    expect(marketOf("we buy houses salem", oh)?.label).toBe("Salem");
+    expect(marketOf("salem cash home buyers", oh)?.label).toBe("Salem");
+    // A market that is itself the longer name still matches.
+    expect(marketOf("sell house fast north canton", oh)?.label).toBe("North Canton");
+    expect(marketOf("sell house fast canton", oh)?.label).toBe("Canton");
+  });
+
   it("local = a town of this audit, the state name, or near me", () => {
     expect(isLocal("sell house fast lakewood", markets, "CO")).toBe(true);
     expect(isLocal("we buy houses colorado", markets, "CO")).toBe(true);

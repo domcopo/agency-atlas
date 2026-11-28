@@ -11,7 +11,7 @@ import { buildAdsBlock, buildSeoBlock, DFS_PRICE, findCompetitors, mapTermOf, mo
 import { modelSite } from "@/lib/audit/depth";
 import { nearbyTowns } from "@/lib/audit/places-list";
 import type { DfsAnswer } from "@/lib/audit/sources/dataforseo";
-import { applyWords, AUDIT_WORDS_SCHEMA, wordsInput } from "@/lib/audit/words";
+import { applyWords, AUDIT_WORDS_SCHEMA, fit, wordsInput } from "@/lib/audit/words";
 
 const TODAY = "2026-11-25";
 const seoIntake = (() => {
@@ -567,5 +567,25 @@ describe("2026-11-27: market radius per audit (45 miles by default)", () => {
     expect(src).toMatch(/nearbyTowns\(intake\.state, intake\.hqTown, RUN_RULES\.nearbyTowns, intake\.radiusMiles \?\? INTAKE_DEFAULTS\.radiusMiles\)/);
     const block = buildSeoBlock({ ...seoIntake, radiusMiles: 60 }, ["summary"], { answers: new Map(), competitors: [], retrieved: TODAY, costUsd: 0, calls: 0, universe: [] });
     expect(block.nearbyMiles).toBe(60);
+  });
+});
+
+describe("audit words fit their space", () => {
+  it("long notes end at a full sentence, never mid-word", () => {
+    const two = "COMPETITOR 1 holds the top spot in every town. " + "BUSINESS ranks on page two for the main search and has no page for the county".repeat(4);
+    const out = fit(two, 300);
+    expect(out).toBe("COMPETITOR 1 holds the top spot in every town.");
+    const one = "word ".repeat(100).trim();
+    const cut = fit(one, 50);
+    expect(cut.length).toBeLessThanOrEqual(50);
+    expect(cut.endsWith("word…")).toBe(true);
+    expect(fit("Short.", 300)).toBe("Short.");
+  });
+
+  it("applyWords cuts after names are put back", () => {
+    const long = `${"COMPETITOR 1 leads. ".repeat(20)}`;
+    const filled = applyWords({}, { headline: "", pageNotes: { rankings: long }, fixes: [], scorecard: [] }, [["COMPETITOR 1", "Rival Roofing (fictional)"]]) as { pageNotes: Record<string, string> };
+    expect(filled.pageNotes.rankings!.length).toBeLessThanOrEqual(300);
+    expect(filled.pageNotes.rankings!.endsWith("leads.")).toBe(true);
   });
 });
